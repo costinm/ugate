@@ -63,7 +63,7 @@ func NewGate(d ContextDialer) *UGate {
 }
 
 func (ug *UGate) Add(cfg *ListenerConf) (io.Closer, net.Addr, error) {
-	l, err := NewForwarder(ug, cfg)
+	l, err := NewListener(ug, cfg)
 	if err != nil {
 		return nil, nil, err
 	}

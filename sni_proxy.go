@@ -44,7 +44,7 @@ const (
 	extensionServerName uint16 = 0
 )
 
-func (gw *UGate) serveConnSni(acc *AcceptedConn) error {
+func (gw *UGate) serveConnSni(acc *BufferedConn) error {
 	buf := acc.buf
 	n, err := acc.Read(buf[0:5])
 	if err != nil {

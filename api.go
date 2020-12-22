@@ -16,6 +16,7 @@ type CloseWriter interface {
 
 // ---------- Structs
 
+// Stats and info about the request.
 type Stats struct {
 	//
 	httptrace.ClientTrace
@@ -53,7 +54,7 @@ type ListenerConf struct {
 	Hostname string `json:"hostname,omitempty"`
 
 	// Port can have multiple protocols - will use auto-detection.
-	// TLS (SNI matching), HTTP, HTTPS, SOCKS, etc
+	// sni (SNI matching), HTTP, HTTPS, socks5, iptables, iptables_in, etc
 	// Fallback if no detection: TCP
 	Protocol string
 
@@ -61,13 +62,11 @@ type ListenerConf struct {
 	// localhost, 0.0.0.0, ::, etc.
 	BindIP string
 
-
 	// Local address (ex :8080). This is the requested address - if busy :0 will be used instead, and Port
 	// will be the actual port
 	// TODO: UDS
 	// TODO: indicate TLS SNI binding.
 	Local string
-
 
 	Name string
 
@@ -75,12 +74,23 @@ type ListenerConf struct {
 	// IP:port format, where IP can be a mesh VIP
 	Remote string `json:"Remote,omitempty"`
 
-	// TODO: ssh bind host/port as labels ?
-	Endpoint ContextDialer `json:-`
+	// Per listener dialer. If nil the global one is used, which
+	// defaults to net.Dialer.
+	Dialer ContextDialer `json:-`
+
+	// Custom listener - not guaranteed to return TCPConn
+	Listener net.Listener `json:-`
+	Handler  ConHandler
 }
 
-//
+// TODO
+// Mirror the json structure of K8S Gateway Listener, instead of
+// depending on the full repo
 type K8SListener struct {
+
+}
+
+type IstioGateway struct {
 
 }
 
@@ -132,9 +142,13 @@ type AcceptForwarder interface {
 }
 
 type ConnInterceptor interface {
-	OnConn(reader *AcceptedConn) bool
+	OnConn(reader *BufferedConn) bool
 
-	OnMeta(reader *AcceptedConn) bool
+	OnMeta(reader *BufferedConn) bool
 
-	OnConnClose(reader *AcceptedConn, err error) bool
+	OnConnClose(reader *BufferedConn, err error) bool
+}
+
+type ConHandler interface {
+	Handle(conn *BufferedConn) error
 }

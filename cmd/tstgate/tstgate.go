@@ -1,25 +1,11 @@
 package main
 
 import (
-	"context"
-	"io"
 	"net"
 	"net/http"
 
 	"github.com/costinm/ugate"
 )
-
-
-type BasicDialer struct {
-
-}
-
-func (t BasicDialer) DialProxy(ctx context.Context, addr net.Addr, directClientAddr net.Addr, ctype string, meta ...string) (net.Conn, func(client net.Conn) error, error) {
-	return nil, nil, nil
-}
-
-func (t BasicDialer) AcceptForward(in io.ReadCloser, out io.Writer,	remoteIP net.IP, remotePort int) {
-}
 
 
 func main() {
@@ -31,15 +17,23 @@ func main() {
 		Remote: "localhost:5201",
 	})
 
-	//
+	// Normally should be 443 for gateways
 	ug.Add(&ugate.ListenerConf{
-		Port: 3002,
+		Port: 15003,
 		Protocol: "sni",
 	})
 	ug.Add(&ugate.ListenerConf{
-		Port: 3003,
-		Local: "127.0.0.1:3003",
+		Local: "127.0.0.1:15002",
 		Protocol: "socks5",
+	})
+	// Not on localhost - redirect changes the port
+	ug.Add(&ugate.ListenerConf{
+		Port: 15001,
+		Protocol: "iptables",
+	})
+	ug.Add(&ugate.ListenerConf{
+		Port: 15006,
+		Protocol: "iptables-in",
 	})
 	// In-process dialer (ssh, etc)
 	//ug.Add(&ugate.ListenerConf{

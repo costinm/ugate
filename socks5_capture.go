@@ -69,7 +69,7 @@ const (
 */
 
 // ServeConn is used to serve a single UdpNat. Blocking.
-func (gw *UGate) serveSOCKSConn(acceptedCon *AcceptedConn) error {
+func (gw *UGate) serveSOCKSConn(acceptedCon *BufferedConn) error {
 	head := acceptedCon.buf
 
 	n, err := acceptedCon.Read(head)

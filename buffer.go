@@ -1,20 +1,7 @@
 package ugate
 
-// From: github.com/soheilhy/cmux
-
-// Copyright 2016 The CMux Authors. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-// implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Inspired from: github.com/soheilhy/cmux
+// Most of the code replaced.
 
 import (
 	"errors"
@@ -41,14 +28,13 @@ var (
 	}}
 )
 
-
 var bufferedConPool = sync.Pool{New: func() interface{} {
 	// Should hold a TLS handshake message
-	return &AcceptedConn{buf: make([]byte, bufSize)}
+	return &BufferedConn{buf: make([]byte, bufSize)}
 }}
 
-func GetConn(in net.Conn) *AcceptedConn {
-	br := bufferedConPool.Get().(*AcceptedConn)
+func GetConn(in net.Conn) *BufferedConn {
+	br := bufferedConPool.Get().(*BufferedConn)
 	br.Conn = in
 	br.ResetStats()
 	return br
@@ -56,7 +42,7 @@ func GetConn(in net.Conn) *AcceptedConn {
 
 // Wraps accepted connections, keeps a buffer and detected metadata.
 //
-// AcceptedConn is an optimized implementation of io.Reader that behaves like
+// BufferedConn is an optimized implementation of io.Reader that behaves like
 // ```
 // io.MultiReader(bytes.NewReader(buffer.Bytes()), io.TeeReader(source, buffer))
 // ```
@@ -65,8 +51,9 @@ func GetConn(in net.Conn) *AcceptedConn {
 // Also similar with bufio.Reader, but with recycling and access to buffer,
 // metadata, stats and for net.Conn.
 // TODO: use net.Buffers ? The net connection likely implements it.
-type AcceptedConn struct {
-	// Typically a *net.TCPConn, implements ReaderFrom
+type BufferedConn struct {
+	// Typically a *net.TCPConn, implements ReaderFrom.
+	// May also be a TLSConn, etc.
 	net.Conn
 
 	// if true, anything read will be added to buffer.
@@ -88,7 +75,6 @@ type AcceptedConn struct {
 	// If an error happened while sniffing
 	lastErr    error
 
-
 	// Target address, from config or protocol (Socks, SNI, etc)
 	// host:port or any other form accepted by DialContext
 	Target string
@@ -100,7 +86,7 @@ type AcceptedConn struct {
 	Stats Stats
 }
 
-func (b *AcceptedConn) Write(p []byte) (int, error) {
+func (b *BufferedConn) Write(p []byte) (int, error) {
 	n, err := b.Conn.Write(p)
 	if err != nil {
 		b.Stats.WriteErr = err
@@ -111,21 +97,21 @@ func (b *AcceptedConn) Write(p []byte) (int, error) {
 	b.Stats.LastWrite = time.Now()
 	return n, err
 }
-func (b *AcceptedConn) empty() bool {
+func (b *BufferedConn) empty() bool {
 	return b.off >= b.len
 }
 
-func (b *AcceptedConn) Len() int {
+func (b *BufferedConn) Len() int {
 	//
 	return b.len - b.off
 }
 
 // Return the unread portion of the buffer
-func (b *AcceptedConn) Bytes() []byte {
+func (b *BufferedConn) Bytes() []byte {
 	return b.buf[b.off:b.len]
 }
 
-func (b *AcceptedConn) ReadByte() (byte, error) {
+func (b *BufferedConn) ReadByte() (byte, error) {
 	if b.empty() {
 		err := b.Fill()
 		if err != nil {
@@ -139,7 +125,7 @@ func (b *AcceptedConn) ReadByte() (byte, error) {
 
 // Fill the buffer by doing one Read() from the underlying reader.
 // Calls to Read() will use the buffer.
-func (b *AcceptedConn) Fill() (error) {
+func (b *BufferedConn) Fill() (error) {
 	if b.empty() && !b.sniffing {
 		b.off = 0
 		b.len = 0
@@ -152,7 +138,7 @@ func (b *AcceptedConn) Fill() (error) {
 	return nil
 }
 
-func (b *AcceptedConn) Read(p []byte) (int, error) {
+func (b *BufferedConn) Read(p []byte) (int, error) {
 	if b.len > b.off {
 		// If we have already read something from the buffer before, we return the
 		// same data and the last error if any. We need to immediately return,
@@ -192,30 +178,30 @@ func (b *AcceptedConn) Read(p []byte) (int, error) {
 // Reset will set the bufferRead to off, so Read() will start from there (ignoring
 // bytes from header).
 // Sniffing mode is disabled.
-func (b *AcceptedConn) Reset(off int) {
+func (b *BufferedConn) Reset(off int) {
 	b.sniffing = false
 	b.off = off
 }
 
-func (b *AcceptedConn) Clean() {
+func (b *BufferedConn) Clean() {
 	b.sniffing = false
 	b.off = 0
 	b.len = 0
 }
 
-func (b *AcceptedConn) Sniff() {
+func (b *BufferedConn) Sniff() {
 	b.sniffing = true
 	b.off = 0
 	b.len = 0
 }
 
-func (b *AcceptedConn) ResetStats() {
+func (b *BufferedConn) ResetStats() {
 	b.Stats.Reset()
 }
 
 // Proxy the accepted connection to a dialed connection.
 // Blocking, will wait for both sides to FIN or RST.
-func (b *AcceptedConn) Proxy(cl net.Conn) error {
+func (b *BufferedConn) Proxy(cl net.Conn) error {
 	errCh := make(chan error, 2)
 
 	go b.ProxyFromClient(cl, errCh)
@@ -224,7 +210,7 @@ func (b *AcceptedConn) Proxy(cl net.Conn) error {
 }
 
 // WriteTo implements the interface, using the read buffer.
-func (b *AcceptedConn) WriteTo(w io.Writer) (n int64, err error) {
+func (b *BufferedConn) WriteTo(w io.Writer) (n int64, err error) {
 	// Finish up the buffer first
 	if !b.empty() {
 		bn, err := w.Write(b.buf[b.off:b.len])
@@ -243,7 +229,10 @@ func (b *AcceptedConn) WriteTo(w io.Writer) (n int64, err error) {
 		if _, ok := b.Conn.(*net.TCPConn); ok {
 			if wt, ok := w.(io.ReaderFrom); ok {
 				VarzReadFrom.Add(1)
-				return wt.ReadFrom(b.Conn)
+				n, err = wt.ReadFrom(b.Conn)
+				b.Stats.ReadPackets++
+				b.Stats.ReadBytes += int(n)
+				return
 			}
 		}
 	}
@@ -276,7 +265,7 @@ func (b *AcceptedConn) WriteTo(w io.Writer) (n int64, err error) {
 
 // Used for Proxy to send data to the dialed connection and coordinante
 // the finish. This is foreground.
-func (b *AcceptedConn) ProxyToClient(cin io.Writer, errch chan error) error {
+func (b *BufferedConn) ProxyToClient(cin io.Writer, errch chan error) error {
 	b.WriteTo(cin) // errors are preserved in stats, 4 kinds possible
 
 	// WriteTo doesn't close the writer !
@@ -299,7 +288,7 @@ func (b *AcceptedConn) ProxyToClient(cin io.Writer, errch chan error) error {
 
 // Reads data from cin (the client/dialed con) until EOF or error
 // TCP Connections typically implement this, using io.Copy().
-func (b *AcceptedConn) ReadFrom(cin io.Reader) (n int64, err error) {
+func (b *BufferedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 	// Typical case - accepted connections are TCPConn and implement
 	// this efficiently
 	// However ReadFrom fallbacks to Copy without recycling the buffer
@@ -308,7 +297,8 @@ func (b *AcceptedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 		if _, ok := b.Conn.(*net.TCPConn); ok {
 			if wt, ok := b.Conn.(io.ReaderFrom); ok {
 				VarzReadFromC.Add(1)
-				return wt.ReadFrom(cin)
+				n, err = wt.ReadFrom(cin)
+				return
 			}
 		}
 	}
@@ -317,7 +307,10 @@ func (b *AcceptedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 		if _, ok := b.Conn.(*net.TCPConn); ok {
 			if wt, ok := b.Conn.(io.ReaderFrom); ok {
 				VarzReadFromC.Add(1)
-				return wt.ReadFrom(cin)
+				n, err = wt.ReadFrom(cin)
+				b.Stats.WritePackets++
+				b.Stats.WriteBytes += int(n)
+				return
 			}
 		}
 	}
@@ -348,7 +341,10 @@ func (b *AcceptedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 			VarzMaxRead.Set(int64(nr))
 		}
 
-		_, err := b.Conn.Write(buf[0:nr])
+		nw, err := b.Conn.Write(buf[0:nr])
+		n += int64(nw)
+		b.Stats.WriteBytes += nw
+		b.Stats.WritePackets++
 		if err != nil {
 			return n, err
 		}
@@ -358,7 +354,7 @@ func (b *AcceptedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 }
 
 // ProxyFromClient writes to the net.Conn. Should be in a go routine.
-func (b *AcceptedConn) ProxyFromClient(cin io.Reader, errch chan error)  {
+func (b *BufferedConn) ProxyFromClient(cin io.Reader, errch chan error)  {
 	_, err := b.ReadFrom(cin)
 
 	// At this point either cin returned FIN or RST
