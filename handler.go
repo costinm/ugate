@@ -3,13 +3,16 @@ package ugate
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"net"
 	"net/http/httptrace"
+	"runtime/debug"
 	"time"
 )
 
-func (ll *portListener) onDone(rc *BufferedConn) {
+// Deferred to connection close.
+func (pl *PortListener) onDone(rc *RawConn) {
 	if rc.Stats.ReadErr != nil {
 		VarzSErrRead.Add(1)
 	}
@@ -22,10 +25,28 @@ func (ll *portListener) onDone(rc *BufferedConn) {
 	if rc.Stats.ProxyWriteErr != nil {
 		VarzCErrWrite.Add(1)
 	}
-	log.Printf("A: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
+
+	if r := recover(); r != nil {
+
+		debug.PrintStack()
+
+		// find out exactly what the error was and set err
+		var err error
+
+		switch x := r.(type) {
+		case string:
+			err = errors.New(x)
+		case error:
+			err = x
+		default:
+			err = errors.New("Unknown panic")
+		}
+		log.Println("AC: Recovered in f", r, err)
+	}
+	log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
 		rc.Stats.StreamId,
 		rc.Stats.Type, rc.RemoteAddr(),
-		rc.Target,
+		rc.Meta().Target,
 		rc.Stats.ReadPackets, rc.Stats.ReadBytes,
 		rc.Stats.WritePackets, rc.Stats.WriteBytes,
 		time.Since(rc.Stats.LastWrite),
@@ -35,9 +56,37 @@ func (ll *portListener) onDone(rc *BufferedConn) {
 	rc.Close()
 
 	bufferedConPool.Put(rc)
+
+
 }
 
-func (ll *portListener) handleAcceptedConn(rc net.Conn) error {
+// WIP: special handling for egress, i.e. locally originated streams.
+// Identification:
+// - dedicated listener ports for iptables, socks5 or tun
+// - listeners with address 127.0.0.1
+// - connections with src/dst address in 127.0.0.0/8
+//
+// The last 2 are 'whitebox' mode, using the port and address to select
+// the routes.
+//
+// After determining the target from meta or config the request is proxied.
+func (pl *PortListener) handleEgress(acceptedCon net.Conn) error {
+
+	return nil
+}
+
+// WIP: handling for accepted connections for this node.
+func (pl *PortListener) handleLocal(acceptedCon net.Conn) error {
+
+	return nil
+}
+
+// A stream can be:
+// - out / egress: originated from this host
+// - in:  destination is this host.
+// - ingress: terminate TLS, forward to a different host
+// - relay: proxy based on SNI/metadata without change
+func (pl *PortListener) handleAcceptedConn(acceptedCon net.Conn) error {
 	// c is the local or 'client' connection in this case.
 	// 'remote' is the configured destination.
 
@@ -51,32 +100,44 @@ func (ll *portListener) handleAcceptedConn(rc net.Conn) error {
 	// Client first protocols can't support multiplexing, must have single config
 
 	// TODO: poll the readers
-	br := GetConn(rc)
-	defer ll.onDone(br)
+	bconn := GetConn(acceptedCon)
+	defer pl.onDone(bconn)
+	bconn.Stats.Accepted = true
+
+	var mConn MetaConn
+	mConn = bconn
 
 	// Attempt to determine the ListenerConf and target
 	// Ingress mode, forward to an IP
-	cfg := ll.cfg
+	cfg := pl.cfg
 
+	switch cfg.Protocol {
+	case ProtoSocks:
+
+	}
+
+	bconn.Stats.Type = cfg.Protocol
 	if cfg.Remote != "" {
-		br.Target = cfg.Remote
+		bconn.Meta().Target = cfg.Remote
 	} else if cfg.Dialer != nil {
-	} else if cfg.Protocol == "socks5" {
-		ll.GW.serveSOCKSConn(br)
-	} else if cfg.Protocol == "sni" {
-		ll.GW.serveConnSni(br)
+	} else if cfg.Protocol == ProtoSocks {
+		pl.GW.sniffSOCKSConn(bconn)
+	} else if cfg.Protocol == ProtoTLS {
+		pl.GW.sniffSNI(bconn)
 	} else if cfg.Protocol == "iptables" ||
 			cfg.Protocol == "iptables-in" {
-		if _, ok := br.Conn.(*net.TCPConn); ok {
-			ll.GW.iptablesServeConn(br, cfg.Protocol)
+		if _, ok := bconn.raw.(*net.TCPConn); ok {
+			pl.GW.sniffIptables(bconn, cfg.Protocol)
 		} else {
 			return nil
 		}
-	} else {
+	} else if cfg.Protocol == "tcp" {
+		// Nothing to do, plain text
+	} else { // "mux"
 		// Not explicitly configured. Detect TLS, HTTP, HTTP/2
 		// TODO: HA-PROXY
 		// socks is generally used on localhost.
-		err := ll.sniff(br)
+		err := pl.sniff(bconn)
 		if err != nil {
 			return err
 		}
@@ -85,38 +146,30 @@ func (ll *portListener) handleAcceptedConn(rc net.Conn) error {
 	// sets clientEventContextKey - if ctx is used for a round trip, will
 	// set all data.
 	// Will also make sure DNSStart, Connect, etc are set (if we want to)
-	ctx := httptrace.WithClientTrace(context.Background(), &br.Stats.ClientTrace)
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = httptrace.WithClientTrace(ctx, &bconn.Stats.ClientTrace)
+	ctx = context.WithValue(ctx, "ugate.conn", bconn)
+	bconn.Stats.Context = ctx
+	bconn.Stats.ContextCancel = cancel
 
-	if cfg.Handler != nil {
-		if br.postDial != nil {
-			// SOCKS and others need to send something back - we don't
-			// have a real connection, faking it.
-			br.postDial(br, nil)
-		}
-		return cfg.Handler.Handle(br)
-	}
-
-	var nc net.Conn
-	var err error
-	// SSH or in-process connectors
-	if cfg.Dialer != nil {
-		nc, err = cfg.Dialer.DialContext(ctx, "tcp", br.Target)
+	if bconn.Stats.Type == "tls" && cfg.TLSConfig != nil {
+		tc, err := NewTLSConnIn(ctx, bconn, cfg.TLSConfig)
 		if err != nil {
 			return err
 		}
-	} else {
-		nc, err = ll.GW.Dialer.DialContext(ctx, "tcp", br.Target)
+		mConn = tc
 	}
 
-	if br.postDial != nil {
-		br.postDial(nc, err)
-	}
-	if err != nil {
-		log.Println("Failed to connect ", cfg.Remote, err)
-		return err
+	if cfg.Handler != nil {
+		// SOCKS and others need to send something back - we don't
+		// have a real connection, faking it.
+		if bconn.postDial != nil {
+			bconn.postDial(bconn, nil)
+		}
+		return cfg.Handler.Handle(mConn)
 	}
 
-	err = br.Proxy(nc)
+	err := pl.dialOut(ctx, mConn, cfg)
 
 	// The dialed connection has stats, so does the accept connection.
 
@@ -125,46 +178,45 @@ func (ll *portListener) handleAcceptedConn(rc net.Conn) error {
 
 // Auto-detect protocol on the wire, so routing info can be
 // extracted:
-// - TLS
+// - TLS ( 22, 3)
 // - HTTP
-// - WS
+// - WS ( CONNECT )
+// - SOCKS (5)
 // - H2
 // - TODO: HAproxy
-func (ll *portListener) sniff(br *BufferedConn) error {
+func (pl *PortListener) sniff(br *RawConn) error {
 	br.Sniff()
 	var proto string
 
-	off := 0
 	for {
-		n, err := br.Read(br.buf[off:])
+		err := br.Fill()
 		if err != nil {
 			return err
 		}
-		off += n
+		off := br.end
 		if off >= 2 {
 			b0 := br.buf[0]
 			b1 := br.buf[1]
 			if b0 == 5 {
-				proto = "socks5"
+				proto = ProtoSocks
 				break;
 			}
 			// TLS or SNI - based on the hostname we may terminate locally !
 			if b0 == 22 && b1 == 3 {
 				// 22 03 01..03
-				proto = "sni"
+				proto = ProtoTLS
 				break
 			}
-			// TODO: CONNECT, WS else try HTTP/1.1 or HTTP/2 or gRPC
 		}
 		if off >= 7 {
 			if bytes.Equal(br.buf[0:7], []byte("CONNECT")) {
-				proto = "ws"
+				proto = ProtoConnect
 				break
 			}
 		}
 		if off >= len(h2ClientPreface) {
 			if bytes.Equal(br.buf[0:len(h2ClientPreface)], h2ClientPreface) {
-				proto = "h2"
+				proto = ProtoH2
 				break
 			}
 		}
@@ -174,11 +226,12 @@ func (ll *portListener) sniff(br *BufferedConn) error {
 	br.Reset(0)
 
 	switch proto {
-	case "socks5":
-		ll.GW.serveSOCKSConn(br)
-	case "sni":
-		ll.GW.serveConnSni(br)
+	case ProtoSocks:
+		pl.GW.sniffSOCKSConn(br)
+	case ProtoTLS:
+		pl.GW.sniffSNI(br)
 	}
+	br.Stats.Type = proto
 
 	return nil
 }

@@ -1,0 +1,155 @@
+kind: Gateway
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: fortio-local
+  namespace: test
+spec:
+  gatewayClassName: istio
+  listeners:
+    - protocol: HTTP
+      port: 15201
+      routes:
+        kind: HTTPRoute
+        namespaces:
+          # Same: only routes in same namespace with the Gateway
+          # Selector: match namespaces where to lookup for routes
+          from: "All"
+        selector:
+          matchLabels:
+            # The example adds a '-gw' to the label value.
+            # Seems cleaner to use the name
+            gateway: fortio-local
+---
+kind: HTTPRoute
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: fortio-local
+  labels:
+    gateway: fortio-local
+spec:
+  gateways:
+    # FromList: GatewayRefs
+    # SameNamespace
+    allow: All
+  rules:
+    - forwardTo:
+        - serviceName: localhost
+          port: 8080
+---
+kind: Gateway
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: fortio-tls
+  namespace: test
+spec:
+  gatewayClassName: istio
+  listeners:
+    # TODO: try TLS, HTTP, HTTPS
+    - protocol: HTTPS
+      # Should be used for TLS, HTTP - port will be shared.
+      # hostname + port are the key used for routing.
+      # For SNI routing the port can't be included, it is assumed to be the port of the listener.
+      hostname: fortio.test.svc.cluster.local
+      port: 15202
+      tls:
+        mode: terminate
+        options:
+          foo: bar
+        routeOverride:
+          certificate: Allow
+        certificateRef:
+          group: core
+          kind: Secret
+          name: fortio-secret
+      routes:
+        kind: HTTPRoute
+        namespaces:
+          from: "All"
+        selector:
+          matchLabels:
+            gateway: fortio-local
+---
+kind: Gateway
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: fortio-sni
+  namespace: test
+spec:
+  gatewayClassName: istio
+  listeners:
+    - protocol: TLS
+      # Should be used for TLS, HTTP - port will be shared.
+      # hostname + port are the key used for routing.
+      # For SNI routing the port can't be included, it is assumed to be the port of the listener.
+      hostname: fortio.test.svc.cluster.local
+      port: 15443
+      tls:
+        mode: passthrough
+      routes:
+        kind: HTTPRoute
+        namespaces:
+          from: "All"
+        selector:
+          matchLabels:
+            gateway: fortio-local
+---
+# TCP - using iperf3
+kind: Gateway
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: iperf3-local
+  namespace: test
+spec:
+  gatewayClassName: istio
+  addresses:
+    - type: NamedAddress
+      value: auto-assign
+  listeners:
+    - protocol: HTTP
+      port: 15101
+      routes:
+        kind: HTTPRoute
+        namespaces:
+          from: "All"
+        selector:
+          matchLabels:
+            # The example adds a '-gw' to the label value.
+            # Seems cleaner to use the name
+            gateway: iperf3-local
+---
+kind: HTTPRoute
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: iperf3-local
+  labels:
+    gateway: iperf3-local
+spec:
+  rules:
+    - forwardTo:
+        - serviceName: localhost
+          port: 5201
+---
+kind: Gateway
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: iperf3-tls
+  namespace: test
+spec:
+  gatewayClassName: istio
+  addresses:
+    - type: IPAddress
+      value: 127.0.0.1
+  listeners:
+    - protocol: HTTP
+      hostname: iperf3.test.svc.cluster.local
+      port: 15101
+      routes:
+        kind: HTTPRoute
+        namespaces:
+          from: "All"
+        selector:
+          matchLabels:
+            # The example adds a '-gw' to the label value.
+            # Seems cleaner to use the name
+            gateway: iperf3-local
+---

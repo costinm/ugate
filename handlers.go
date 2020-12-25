@@ -7,7 +7,7 @@ import "io"
 type EchoHandler struct {
 }
 
-func (*EchoHandler) Handle(ac *BufferedConn) error {
+func (*EchoHandler) Handle(ac *RawConn) error {
 	io.Copy(ac, ac)
 	ac.Close()
 	return nil

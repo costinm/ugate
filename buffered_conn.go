@@ -30,19 +30,19 @@ var (
 
 var bufferedConPool = sync.Pool{New: func() interface{} {
 	// Should hold a TLS handshake message
-	return &BufferedConn{buf: make([]byte, bufSize)}
+	return &RawConn{buf: make([]byte, bufSize)}
 }}
 
-func GetConn(in net.Conn) *BufferedConn {
-	br := bufferedConPool.Get().(*BufferedConn)
-	br.Conn = in
+func GetConn(in net.Conn) *RawConn {
+	br := bufferedConPool.Get().(*RawConn)
+	br.raw = in
 	br.ResetStats()
 	return br
 }
 
 // Wraps accepted connections, keeps a buffer and detected metadata.
 //
-// BufferedConn is an optimized implementation of io.Reader that behaves like
+// RawConn is an optimized implementation of io.Reader that behaves like
 // ```
 // io.MultiReader(bytes.NewReader(buffer.Bytes()), io.TeeReader(source, buffer))
 // ```
@@ -51,33 +51,29 @@ func GetConn(in net.Conn) *BufferedConn {
 // Also similar with bufio.Reader, but with recycling and access to buffer,
 // metadata, stats and for net.Conn.
 // TODO: use net.Buffers ? The net connection likely implements it.
-type BufferedConn struct {
+type RawConn struct {
 	// Typically a *net.TCPConn, implements ReaderFrom.
 	// May also be a TLSConn, etc.
-	net.Conn
+	raw net.Conn
 
 	// if true, anything read will be added to buffer.
-	// if false, Read() will consume the buffer from off to len, then use
+	// if false, Read() will consume the buffer from off to end, then use
 	// direct Read.
-	sniffing   bool
+	sniffing bool
 
-	// b has len and capacity, set at creation to the size of the buffer,
-	// len(buf) == cap(buf) == 8k
-	// using len and off as pointers to data
+	// b has end and capacity, set at creation to the size of the buffer,
+	// end(buf) == cap(buf) == 8k
+	// using end and off as pointers to data
 	buf []byte
 
 	// read so far from buffer. Unread data in off:last
 	off int
 
 	// number of bytes in buffer.
-	len int
+	end int
 
 	// If an error happened while sniffing
-	lastErr    error
-
-	// Target address, from config or protocol (Socks, SNI, etc)
-	// host:port or any other form accepted by DialContext
-	Target string
+	lastErr error
 
 	// Optional function to call after dial. Used to send metadata
 	// back to the protocol ( for example SOCKS)
@@ -86,8 +82,50 @@ type BufferedConn struct {
 	Stats Stats
 }
 
-func (b *BufferedConn) Write(p []byte) (int, error) {
-	n, err := b.Conn.Write(p)
+func (b *RawConn) PostDial(nc net.Conn, err error) {
+	if b.postDial != nil {
+		b.postDial(nc, err)
+	}
+}
+
+func (b *RawConn) Meta() *Stats {
+	return &b.Stats
+}
+
+func (b *RawConn) LocalAddr() net.Addr {
+	return b.raw.LocalAddr()
+}
+
+func (b *RawConn) RemoteAddr() net.Addr {
+	return b.raw.RemoteAddr()
+}
+
+func (b *RawConn) SetDeadline(t time.Time) error {
+	return b.rwConn().SetDeadline(t)
+}
+
+func (b *RawConn) SetReadDeadline(t time.Time) error {
+	return b.rwConn().SetReadDeadline(t)
+}
+
+func (b *RawConn) SetWriteDeadline(t time.Time) error {
+	return b.rwConn().SetWriteDeadline(t)
+}
+
+func (b *RawConn) Close() error {
+	// Remove it from the tracker
+	if b.Stats.ContextCancel != nil {
+		b.Stats.ContextCancel()
+	}
+	return b.raw.Close()
+}
+
+func (b *RawConn) rwConn() net.Conn {
+	return b.raw
+}
+
+func (b *RawConn) Write(p []byte) (int, error) {
+	n, err := b.rwConn().Write(p)
 	if err != nil {
 		b.Stats.WriteErr = err
 		return n, err
@@ -97,21 +135,21 @@ func (b *BufferedConn) Write(p []byte) (int, error) {
 	b.Stats.LastWrite = time.Now()
 	return n, err
 }
-func (b *BufferedConn) empty() bool {
-	return b.off >= b.len
+func (b *RawConn) empty() bool {
+	return b.off >= b.end
 }
 
-func (b *BufferedConn) Len() int {
+func (b *RawConn) Len() int {
 	//
-	return b.len - b.off
+	return b.end - b.off
 }
 
 // Return the unread portion of the buffer
-func (b *BufferedConn) Bytes() []byte {
-	return b.buf[b.off:b.len]
+func (b *RawConn) Bytes() []byte {
+	return b.buf[b.off:b.end]
 }
 
-func (b *BufferedConn) ReadByte() (byte, error) {
+func (b *RawConn) ReadByte() (byte, error) {
 	if b.empty() {
 		err := b.Fill()
 		if err != nil {
@@ -125,31 +163,35 @@ func (b *BufferedConn) ReadByte() (byte, error) {
 
 // Fill the buffer by doing one Read() from the underlying reader.
 // Calls to Read() will use the buffer.
-func (b *BufferedConn) Fill() (error) {
+func (b *RawConn) Fill() (error) {
 	if b.empty() && !b.sniffing {
 		b.off = 0
-		b.len = 0
+		b.end = 0
 	}
-	n, err := b.Conn.Read(b.buf[b.len:])
-	b.len += n
+	n, err := b.rwConn().Read(b.buf[b.end:])
+	b.end += n
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (b *BufferedConn) Read(p []byte) (int, error) {
-	if b.len > b.off {
+func (b *RawConn) Buffer() []byte {
+	return b.buf[b.off:b.end]
+}
+
+func (b *RawConn) Read(p []byte) (int, error) {
+	if b.end > b.off {
 		// If we have already read something from the buffer before, we return the
 		// same data and the last error if any. We need to immediately return,
 		// otherwise we may block for ever, if we try to be smart and call
 		// source.Read() seeking a little bit of more data.
-		bn := copy(p, b.buf[b.off:b.len])
+		bn := copy(p, b.buf[b.off:b.end])
 		b.off += bn
-		if !b.sniffing && b.len <= b.off {
+		if !b.sniffing && b.end <= b.off {
 			// buffer has been consummed, not in sniff mode
 			b.off = 0
-			b.len = 0
+			b.end = 0
 		}
 		return bn, b.lastErr
 	}
@@ -157,14 +199,14 @@ func (b *BufferedConn) Read(p []byte) (int, error) {
 
 	// If there is nothing more to return in the sniffed buffer, read from the
 	// source.
-	sn, sErr := b.Conn.Read(p)
+	sn, sErr := b.rwConn().Read(p)
 	if sn > 0 && b.sniffing {
 		b.lastErr = sErr
-		if len(b.buf) < b.len+ sn {
+		if len(b.buf) < b.end+ sn {
 			return sn, errors.New("Short buffer")
 		}
-		copy(b.buf[b.len:], p[:sn])
-		b.len += sn
+		copy(b.buf[b.end:], p[:sn])
+		b.end += sn
 	}
 	b.Stats.ReadPackets++
 	b.Stats.ReadBytes+= sn
@@ -178,42 +220,51 @@ func (b *BufferedConn) Read(p []byte) (int, error) {
 // Reset will set the bufferRead to off, so Read() will start from there (ignoring
 // bytes from header).
 // Sniffing mode is disabled.
-func (b *BufferedConn) Reset(off int) {
+func (b *RawConn) Reset(off int) {
 	b.sniffing = false
 	b.off = off
 }
 
-func (b *BufferedConn) Clean() {
+func (b *RawConn) Clean() {
 	b.sniffing = false
 	b.off = 0
-	b.len = 0
+	b.end = 0
 }
 
-func (b *BufferedConn) Sniff() {
+func (b *RawConn) Sniff() {
 	b.sniffing = true
 	b.off = 0
-	b.len = 0
+	b.end = 0
 }
 
-func (b *BufferedConn) ResetStats() {
+func (b *RawConn) ResetStats() {
 	b.Stats.Reset()
 }
 
 // Proxy the accepted connection to a dialed connection.
 // Blocking, will wait for both sides to FIN or RST.
-func (b *BufferedConn) Proxy(cl net.Conn) error {
+func (b *RawConn) Proxy(cl net.Conn) error {
 	errCh := make(chan error, 2)
-
 	go b.ProxyFromClient(cl, errCh)
-
 	return b.ProxyToClient(cl, errCh)
 }
 
+// Tcp connections implement ReadFrom, not WriteTo
+// ReadFrom is only spliced in few cases
+func CanSplice(in io.Reader, out io.Writer) bool {
+	if _, ok := in.(*net.TCPConn); ok {
+		if _, ok := out.(*net.TCPConn); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // WriteTo implements the interface, using the read buffer.
-func (b *BufferedConn) WriteTo(w io.Writer) (n int64, err error) {
+func (b *RawConn) WriteTo(w io.Writer) (n int64, err error) {
 	// Finish up the buffer first
 	if !b.empty() {
-		bn, err := w.Write(b.buf[b.off:b.len])
+		bn, err := w.Write(b.buf[b.off:b.end])
 		if err != nil {
 			//"Write must return non-nil if it doesn't write the full buffer"
 			b.Stats.ProxyWriteErr = err
@@ -223,22 +274,19 @@ func (b *BufferedConn) WriteTo(w io.Writer) (n int64, err error) {
 		n += int64(bn)
 	}
 
-	// Tcp connections don't typically implement WriterTo -
 	// but the dialed connection might, so we can splice
-	if _, ok := w.(*net.TCPConn); ok {
-		if _, ok := b.Conn.(*net.TCPConn); ok {
-			if wt, ok := w.(io.ReaderFrom); ok {
-				VarzReadFrom.Add(1)
-				n, err = wt.ReadFrom(b.Conn)
-				b.Stats.ReadPackets++
-				b.Stats.ReadBytes += int(n)
-				return
-			}
+	if CanSplice(b.rwConn(), w) {
+		if wt, ok := w.(io.ReaderFrom); ok {
+			VarzReadFrom.Add(1)
+			n, err = wt.ReadFrom(b.rwConn())
+			b.Stats.ReadPackets++
+			b.Stats.ReadBytes += int(n)
+			return
 		}
 	}
 
 	for {
-		sn, sErr := b.Conn.Read(b.buf)
+		sn, sErr := b.rwConn().Read(b.buf)
 		b.Stats.ReadPackets++
 		b.Stats.ReadBytes += sn
 
@@ -265,7 +313,7 @@ func (b *BufferedConn) WriteTo(w io.Writer) (n int64, err error) {
 
 // Used for Proxy to send data to the dialed connection and coordinante
 // the finish. This is foreground.
-func (b *BufferedConn) ProxyToClient(cin io.Writer, errch chan error) error {
+func (b *RawConn) ProxyToClient(cin io.Writer, errch chan error) error {
 	b.WriteTo(cin) // errors are preserved in stats, 4 kinds possible
 
 	// WriteTo doesn't close the writer !
@@ -277,7 +325,7 @@ func (b *BufferedConn) ProxyToClient(cin io.Writer, errch chan error) error {
 
 	// The read part may have returned EOF, or the write may have failed.
 	// In the first case close will send FIN, else will send RST
-	b.Conn.Close()
+	b.rwConn().Close()
 
 	if c, ok := cin.(io.Closer); ok {
 		c.Close()
@@ -288,14 +336,14 @@ func (b *BufferedConn) ProxyToClient(cin io.Writer, errch chan error) error {
 
 // Reads data from cin (the client/dialed con) until EOF or error
 // TCP Connections typically implement this, using io.Copy().
-func (b *BufferedConn) ReadFrom(cin io.Reader) (n int64, err error) {
+func (b *RawConn) ReadFrom(cin io.Reader) (n int64, err error) {
 	// Typical case - accepted connections are TCPConn and implement
 	// this efficiently
 	// However ReadFrom fallbacks to Copy without recycling the buffer
 	//
 	if _, ok := cin.(*os.File); ok {
-		if _, ok := b.Conn.(*net.TCPConn); ok {
-			if wt, ok := b.Conn.(io.ReaderFrom); ok {
+		if _, ok := b.rwConn().(*net.TCPConn); ok {
+			if wt, ok := b.rwConn().(io.ReaderFrom); ok {
 				VarzReadFromC.Add(1)
 				n, err = wt.ReadFrom(cin)
 				return
@@ -303,25 +351,24 @@ func (b *BufferedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 		}
 	}
 
-	if _, ok := cin.(*net.TCPConn); ok {
-		if _, ok := b.Conn.(*net.TCPConn); ok {
-			if wt, ok := b.Conn.(io.ReaderFrom); ok {
-				VarzReadFromC.Add(1)
-				n, err = wt.ReadFrom(cin)
-				b.Stats.WritePackets++
-				b.Stats.WriteBytes += int(n)
-				return
-			}
+	if CanSplice(cin, b.rwConn()) {
+		if wt, ok := b.rwConn().(io.ReaderFrom); ok {
+			VarzReadFromC.Add(1)
+			n, err = wt.ReadFrom(cin)
+			b.Stats.WritePackets++
+			b.Stats.WriteBytes += int(n)
+			return
 		}
 	}
-	if _, ok := cin.(*net.UnixConn); ok {
-		if wt, ok := b.Conn.(io.ReaderFrom); ok {
-			return wt.ReadFrom(cin)
-		}
-	}
-	if wt, ok := cin.(io.WriterTo); ok {
-		return wt.WriteTo(b.Conn)
-	}
+
+	//if _, ok := cin.(*net.UnixConn); ok {
+	//	if wt, ok := b.rwConn().(io.ReaderFrom); ok {
+	//		return wt.ReadFrom(cin)
+	//	}
+	//}
+	//if wt, ok := cin.(io.WriterTo); ok {
+	//	return wt.WriteTo(b.rwConn())
+	//}
 
 	buf1 := bufferPoolCopy.Get().([]byte)
 	defer bufferPoolCopy.Put(buf1)
@@ -341,7 +388,7 @@ func (b *BufferedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 			VarzMaxRead.Set(int64(nr))
 		}
 
-		nw, err := b.Conn.Write(buf[0:nr])
+		nw, err := b.rwConn().Write(buf[0:nr])
 		n += int64(nw)
 		b.Stats.WriteBytes += nw
 		b.Stats.WritePackets++
@@ -354,12 +401,12 @@ func (b *BufferedConn) ReadFrom(cin io.Reader) (n int64, err error) {
 }
 
 // ProxyFromClient writes to the net.Conn. Should be in a go routine.
-func (b *BufferedConn) ProxyFromClient(cin io.Reader, errch chan error)  {
+func (b *RawConn) ProxyFromClient(cin io.Reader, errch chan error)  {
 	_, err := b.ReadFrom(cin)
 
 	// At this point either cin returned FIN or RST
 
-	if cw, ok := b.Conn.(CloseWriter); ok {
+	if cw, ok := b.rwConn().(CloseWriter); ok {
 		cw.CloseWrite()
 	}
 	errch <- err

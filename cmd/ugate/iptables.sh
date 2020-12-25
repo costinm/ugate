@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Simplified istio iptables, for single port
 # Use a different GID to run the iperf3 or tests.
@@ -26,6 +26,8 @@ INBOUND_CAPTURE_PORT=${INBOUND_CAPTURE_PORT:-15006}
 
 # If INCLUDE is set, only those ports are captured, else
 # all ports except EXCLUDE are captured
+
+set -x
 
 if [ -z "${PROXY_GID}" ]; then
   PROXY_GID=$(id -g "${PROXY_GROUP:-istio-proxy}")
@@ -76,14 +78,14 @@ function ipt_out() {
 
   if [ -n "${OUTBOUND_PORTS_INCLUDE}" ]; then
       if ! [[ ${OUTBOUND_PORTS_INCLUDE} == "-" ]]; then
-        IFS=, read -a fields <<<"${OUTBOUND_PORTS_INCLUDE}"
+        cat ${OUTBOUND_PORTS_INCLUDE} | IFS=, read -a fields
         for port in "${fields[@]}"; do
           iptables -t nat -A ISTIO_OUTPUT -p tcp --dport "${port}" -j ISTIO_REDIRECT
         done
       fi
   else
     if [ -n "${OUTBOUND_PORTS_EXCLUDE}" ]; then
-      IFS=, read -a fields <<<"${OUTBOUND_PORTS_EXCLUDE}"
+      cat ${OUTBOUND_PORTS_EXCLUDE} | IFS=, read -a fields
       for port in "${fields[@]}"; do
         iptables -t nat -A ISTIO_OUTPUT -p tcp --dport "${port}" -j RETURN
       done
@@ -104,7 +106,7 @@ function ipt_in() {
   # Istio uses * to indicate all capture
   if [ -n "${INBOUND_PORTS_INCLUDE}" ]; then
     if ! [[ ${INBOUND_PORTS_INCLUDE} == "-" ]]; then
-      IFS=, read -a fields <<<"${INBOUND_PORTS_INCLUDE}"
+      cat ${INBOUND_PORTS_INCLUDE} | IFS=, read -a fields
       for port in "${fields[@]}"; do
         iptables -t nat -A ISTIO_INBOUND -p tcp --dport "${port}" -j ISTIO_IN_REDIRECT
       done
@@ -112,7 +114,7 @@ function ipt_in() {
   else
     iptables -t nat -A ISTIO_INBOUND -p tcp --dport 22 -j RETURN
     if [ -n "${INBOUND_PORTS_EXCLUDE}" ]; then
-      IFS=, read -a fields <<<"${INBOUND_PORTS_EXCLUDE}"
+      cat ${INBOUND_PORTS_EXCLUDE} | IFS=, read -a fields
       for port in "${fields[@]}"; do
         iptables -t nat -A ISTIO_INBOUND -p tcp --dport "${port}" -j RETURN
       done

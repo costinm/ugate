@@ -8,6 +8,9 @@ import (
 	"strconv"
 )
 
+// Egress capture. See also iptables, TUN, CONNECT proxy
+// Should be on a dedicated port.
+
 // curl --socks5 127.0.0.1:15004 ....
 // export HTTP_PROXY=socks5://127.0.0.1:15004
 
@@ -68,8 +71,9 @@ const (
       DST.PORT desired destination port in network octet order
 */
 
-// ServeConn is used to serve a single UdpNat. Blocking.
-func (gw *UGate) serveSOCKSConn(acceptedCon *BufferedConn) error {
+// Extract the target from the SOCKS header, consume it, and register a post-dial
+// hook.
+func (gw *UGate) sniffSOCKSConn(acceptedCon *RawConn) error {
 	head := acceptedCon.buf
 
 	n, err := acceptedCon.Read(head)
@@ -186,8 +190,9 @@ func (gw *UGate) serveSOCKSConn(acceptedCon *BufferedConn) error {
 		ctype = "socks5IP"
 	}
 
-	acceptedCon.Target = addr
+	acceptedCon.Meta().Target = addr
 	acceptedCon.Stats.Type = ctype
+
 	acceptedCon.postDial = func(conn net.Conn, err error) {
 		if err != nil {
 			// TODO: write error code
@@ -212,12 +217,4 @@ func (gw *UGate) serveSOCKSConn(acceptedCon *BufferedConn) error {
 	acceptedCon.Clean()
 
 	return nil
-}
-
-type stringAddr string
-func(s stringAddr) Network() string {
-	return "dns"
-}
-func(s stringAddr) String() string {
-	return string(s)
 }

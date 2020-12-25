@@ -27,8 +27,12 @@ matching but specialized to the supported protocols.
 By avoiding wrappers and abstractions we can detect if both input and output are TcpConn and 
 use the 'splice' call, where the transfer between in and out is done in kernel space.
 
-For exampple, local Iperf3 without splice: 11Gbps, with splice: 21Gbps, 
-raw (no proxy) 28.
+For example, current numbers on my server, using iperf3, in Gbps:
+- direct/local (-c 5201): 29
+- capture+proxy without splice: 11Gbps 
+- capture+proxy - splice: 21Gbps, 
+- capture + tlsOut + tlsIn + proxy (similar with Istio full path): 
+- capture + plainOut + plainIn + proxy (similar with Istio plain text): 
 
 This is useful for 'TURN'-style proxy, CONNECT and SNI, where the stream is already encrypted e2e
 and the gateway is not adding an encryption layer. It doesn't help for 

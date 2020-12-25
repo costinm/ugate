@@ -1,0 +1,81 @@
+# A Gateway bound to a specific workload in a namespace, acting as a sidecar.
+#
+# Same mechanism can be used to target specific gateway deployments in istio-gateways
+#
+# The Pod running the sidecar will have the label "app: fortio"
+#
+kind: Gateway
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: fortio
+  namespace: fortio
+  labels:
+    app: fortio
+spec:
+  # Istio controller to use, including revision
+  gatewayClassName: istio
+  # This binds the gateway to a specific addresss, which is owned by a Service and
+  # served by workloads selected by the Service.
+  addresses:
+    # Can't be IPAddress - we don't know the dynamic service VIP
+    type: NamedAddress
+    # Option 1: Select the workloads with "gateway: fortio" label
+    # Option 2: Select the service with name 'fortio', which in turn selects workloads
+    # Option 3: Select the deployment or ServiceEntry or Workload by name or special label
+    # In all cases, the 'address' binds the gateway to a set of workloads.
+    #
+    # Todo: more explicit mechanism.
+    value: fortio
+  listeners:
+    - protocol: HTTP
+      # Special Istio port for egress capture - this is where we listen
+      # The sidecar uses original DST for a service or pod IP.
+      port: 15001
+      # Destination. We only configure specific workloads with this rule
+      hostname: fortio.test.svc.cluster.local
+      routes:
+        kind: HTTPRoute
+        namespaces:
+          # Same: only routes in same namespace with the Gateway
+          # Selector: match namespaces where to lookup for routes
+          from: "Same"
+        selector:
+          matchLabels:
+            # Strictly bound to routes tied to the workload.
+            app: fortio
+    - protocol: TCP
+      # Special Istio port for egress capture - this is where we listen
+      # The sidecar uses original DST for a service or pod IP.
+      port: 15001
+      # Destination. We only configure specific workloads with this rule
+      hostname: iperf3.test.svc.cluster.local
+      routes:
+        kind: TCPRoute
+        namespaces:
+          # Same: only routes in same namespace with the Gateway
+          # Selector: match namespaces where to lookup for routes
+          from: "Same"
+        selector:
+          matchLabels:
+            # Strictly bound to routes tied to the workload.
+            app: fortio
+---
+kind: HTTPRoute
+apiVersion: networking.x-k8s.io/v1alpha1
+metadata:
+  name: fortio
+  namespace: fortio
+  labels:
+    app: fortio
+spec:
+  gateways:
+    # This route is bound to the app:fortio gateway
+    allow: FromList
+    gatewayRefs:
+      - name: fortio
+        namespace: fortio
+  rules:
+    - forwardTo:
+        - serviceName: localhost
+          port: 8080
+---

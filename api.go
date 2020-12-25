@@ -2,6 +2,8 @@ package ugate
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"net/http/httptrace"
@@ -14,21 +16,50 @@ type CloseWriter interface {
 	CloseWrite() error
 }
 
-// ---------- Structs
+const ProtoTLS = "tls"
+const ProtoH2 = "h2"
+const ProtoHTTP = "http" // 1.1
+const ProtoHAProxy = "haproxy"
+
+// Egress capture - for dedicated listeners
+const ProtoSocks = "socks5"
+const ProtoIPTables = "iptables"
+const ProtoIPTablesIn = "iptables-in"
+const ProtoConnect = "connect"
+
+// Connection with metadata and proxy support
+type MetaConn interface {
+	net.Conn
+	Meta() *Stats
+
+	// Will be called after the handler has dialed.
+	// For internally handled connections, will also be called with a local
+	// conn. Used to return status for socks5, connect, etc.
+	PostDial(net.Conn, error)
+	Proxy(net.Conn) error
+}
+
+type BufferedConn interface {
+	net.Conn
+	Buffer() []byte
+	Fill()
+	Proxy(net.Conn) error
+}
 
 // Stats and info about the request.
+// Includes metadata.
 type Stats struct {
 	//
 	httptrace.ClientTrace
 
-	Open time.Time
-	LastRead time.Time
+	Open      time.Time
+	LastRead  time.Time
 	LastWrite time.Time
 
-	ReadBytes int
+	ReadBytes   int
 	ReadPackets int
 
-	WriteBytes int
+	WriteBytes   int
 	WritePackets int
 
 	StreamId int32
@@ -36,31 +67,42 @@ type Stats struct {
 	// Type of the connection - empty is plain TCP, socks5, socks5IP, sni, ...
 	Type string
 
+	// Destination of the connection, extracted from metadata or config.
+	// Typically a DNS or IP address, can be a URL or path too.
+	Target string
+
 	// Errors associated with this stream, read from or write to.
-	ReadErr error
-	WriteErr error
-	ProxyReadErr error
+	ReadErr       error
+	WriteErr      error
+	ProxyReadErr  error
 	ProxyWriteErr error
+
+	// If false, it's a dialed stream.
+	Accepted bool
+
+	Extra       map[interface{}]interface{}
+	RemoteChain []*x509.Certificate
+
+	// Context is associated with the connection at creation time.
+	Context       context.Context
+	ContextCancel context.CancelFunc
 }
 
-// ListenerConf represents the configuration for an acceptor.
-// Based on Istio/K8S Gateway models.
+// ListenerConf represents the configuration for an acceptor on a port or addr:port
 //
+// For each port, metadata is optionally extracted - in particular a 'hostname', which
+// is the destination IP or name:
+// - socks5 dest
+// - iptables original dst ( may be combined with DNS interception )
+// - NAT dst address
+// - SNI for TLS
+// - :host header for HTTP
+//
+// Based on Istio/K8S Gateway models.
 type ListenerConf struct {
-	// Real port the listener is listening on, or 0 if the listener is not bound to a port (virtual, using mesh).
+	// Real port the listener is listening on.
+	// If Local is specified, it is used instead of port.
 	Port int `json:"port,omitempty"`
-
-	// Hostname selected by metadata (SNI, SOCKS, HTTP, etc)
-	Hostname string `json:"hostname,omitempty"`
-
-	// Port can have multiple protocols - will use auto-detection.
-	// sni (SNI matching), HTTP, HTTPS, socks5, iptables, iptables_in, etc
-	// Fallback if no detection: TCP
-	Protocol string
-
-	// If empty, all families.
-	// localhost, 0.0.0.0, ::, etc.
-	BindIP string
 
 	// Local address (ex :8080). This is the requested address - if busy :0 will be used instead, and Port
 	// will be the actual port
@@ -68,7 +110,18 @@ type ListenerConf struct {
 	// TODO: indicate TLS SNI binding.
 	Local string
 
-	Name string
+	// Extracted from all Gateways, based on same Port and address
+	// WIP, not implemented
+	Listeners map[string]*Listener
+	// WIP, not implemented. All routes selected by the matcher in the listener for the hostname
+	// * used for wildcard listener.
+	TCPRoutes map[string]*TCPRoute
+
+	// Port can have multiple protocols - will use auto-detection.
+	// sni (SNI matching), HTTP, HTTPS, socks5, iptables, iptables_in, etc
+	// Fallback if no detection: TCP
+	Protocol string
+
 
 	// Remote where to forward the proxied connections
 	// IP:port format, where IP can be a mesh VIP
@@ -79,19 +132,15 @@ type ListenerConf struct {
 	Dialer ContextDialer `json:-`
 
 	// Custom listener - not guaranteed to return TCPConn
-	Listener net.Listener `json:-`
-	Handler  ConHandler
-}
+	Listener  net.Listener `json:-`
+	// Must block until the connection is fully handled !
+	Handler   ConHandler
+	// Default config for the port.
+	// SNI may override
+	TLSConfig *tls.Config
 
-// TODO
-// Mirror the json structure of K8S Gateway Listener, instead of
-// depending on the full repo
-type K8SListener struct {
-
-}
-
-type IstioGateway struct {
-
+	// Default outgoing TLS config for all requests on this port.
+	RemoteTLS *tls.Config
 }
 
 // Mapping to Istio:
@@ -142,13 +191,13 @@ type AcceptForwarder interface {
 }
 
 type ConnInterceptor interface {
-	OnConn(reader *BufferedConn) bool
+	OnConn(reader MetaConn) bool
 
-	OnMeta(reader *BufferedConn) bool
+	OnMeta(reader MetaConn) bool
 
-	OnConnClose(reader *BufferedConn, err error) bool
+	OnConnClose(reader MetaConn, err error) bool
 }
 
 type ConHandler interface {
-	Handle(conn *BufferedConn) error
+	Handle(conn MetaConn) error
 }

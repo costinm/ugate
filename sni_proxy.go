@@ -44,7 +44,7 @@ const (
 	extensionServerName uint16 = 0
 )
 
-func (gw *UGate) serveConnSni(acc *BufferedConn) error {
+func (gw *UGate) sniffSNI(acc *RawConn) error {
 	buf := acc.buf
 	n, err := acc.Read(buf[0:5])
 	if err != nil {
@@ -193,7 +193,7 @@ func (gw *UGate) serveConnSni(acc *BufferedConn) error {
 	// TODO: unmangle server name - port, mesh node
 
 	destAddr := m.serverName + ":443"
-	acc.Target = destAddr
+	acc.Meta().Target = destAddr
 	acc.Stats.Type = "sni"
 
 	// Leave all bytes in the buffer, will be sent

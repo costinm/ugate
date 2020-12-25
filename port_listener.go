@@ -1,6 +1,7 @@
 package ugate
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -84,8 +85,8 @@ var (
 
 // Creates a raw (port) TCP listener. Accepts connections
 // on a local port, forwards to a remote destination.
-func NewListener(gw *UGate, cfg *ListenerConf) (*portListener,error) {
-	ll := &portListener{
+func NewListener(gw *UGate, cfg *ListenerConf) (*PortListener,error) {
+	ll := &PortListener{
 		cfg: cfg,
 		GW: gw,
 	}
@@ -138,18 +139,16 @@ func NewListener(gw *UGate, cfg *ListenerConf) (*portListener,error) {
 	ll.cfg.Port = portN
 	ll.Listener = cfg.Listener
 
-	ll.GW.Listeners[portN] = ll
-
 	go ll.serve()
 	return ll, nil
 }
 
-// A portListener is similar with an Envoy portListener.
+// A PortListener is similar with an Envoy PortListener.
 // It can be created by a Gateway or Sidecar resource in istio, as well as from in Service and for out capture
 //
 // For mesh, it is also auto-created for each device/endpoint/node for accepting messages and in connections.
 //
-type portListener struct {
+type PortListener struct {
 	port int32
 
 	cfg *ListenerConf
@@ -167,32 +166,31 @@ type portListener struct {
 
 // FindConf handles routing of the incoming connection to the right Listener object.
 //
-func (pl *portListener) FindConf(nc net.Conn, prefix []byte) *ListenerConf {
+func (pl *PortListener) FindConf(nc net.Conn, prefix []byte) *ListenerConf {
 	return nil
 }
 
 
-func (ll *portListener) Close() error {
-	ll.Listener.Close()
-	delete(ll.GW.Listeners, ll.cfg.Port)
+func (pl *PortListener) Close() error {
+	pl.Listener.Close()
 	return nil
 }
 
-func (ll portListener) Accept() (net.Conn, error) {
-	return ll.Listener.Accept()
+func (pl PortListener) Accept() (net.Conn, error) {
+	return pl.Listener.Accept()
 }
 
-func (ll portListener) Addr() (net.Addr) {
-	return ll.Listener.Addr()
+func (pl PortListener) Addr() (net.Addr) {
+	return pl.Listener.Addr()
 }
 
 // For -R, runs on the remote ssh server to accept connections and forward back to client, which in turn
 // will forward to a port/app.
 // Blocking.
-func (ll portListener) serve() {
-	log.Println("Gateway: open on ", ll.cfg.Local, ll.cfg.Remote, ll.cfg.Protocol)
+func (pl PortListener) serve() {
+	log.Println("Gateway: open on ", pl.cfg.Local, pl.cfg.Remote, pl.cfg.Protocol)
 	for {
-		remoteConn, err := ll.Listener.Accept()
+		remoteConn, err := pl.Listener.Accept()
 		VarzAccepted.Add(1)
 		if ne, ok := err.(net.Error); ok {
 			VarzAcceptErr.Add(1)
@@ -202,10 +200,50 @@ func (ll portListener) serve() {
 			}
 		}
 		if err != nil {
+			log.Println("Accept error, closing listener ", pl.cfg, err)
 			return
 		}
-		go ll.handleAcceptedConn(remoteConn)
+		go pl.handleAcceptedConn(remoteConn)
 	}
+}
+
+// Dial the target and proxy to it.
+func (pl *PortListener) dialOut(ctx context.Context, bconn MetaConn, cfg *ListenerConf) error {
+	var nc net.Conn
+	var err error
+	// SSH or in-process connectors
+	if cfg.Dialer != nil {
+		nc, err = cfg.Dialer.DialContext(ctx, "tcp", bconn.Meta().Target)
+	} else {
+		nc, err = pl.GW.Dialer.DialContext(ctx, "tcp", bconn.Meta().Target)
+	}
+	//if err != nil {
+	//	return err
+	//}
+
+	bconn.PostDial(nc, err)
+	if err != nil {
+		log.Println("Failed to connect ", cfg.Remote, err)
+		return err
+	}
+
+	if cfg.RemoteTLS != nil {
+		//var clientCon *RawConn
+		//if clCon, ok := nc.(*RawConn); ok {
+		//	clientCon = clCon
+		//} else {
+		//	clientCon = GetConn(nc)
+		//	clientCon.Stats.Accepted = false
+		//}
+		lconn, err := NewTLSConnOut(ctx, nc, cfg.RemoteTLS, "")
+		if err != nil {
+			return err
+		}
+		nc = lconn
+	}
+
+	return bconn.Proxy(nc)
+
 }
 
 

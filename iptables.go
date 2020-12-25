@@ -25,8 +25,8 @@ import (
 // https://github.com/ryanchapman/go-any-proxy/blob/master/any_proxy.go,
 // and other examples.
 // Based on REDIRECT.
-func (ug *UGate) iptablesServeConn(conn *BufferedConn, proto string) error {
-	addr, port, conn1, err := getOriginalDst(conn.Conn.(*net.TCPConn))
+func (ug *UGate) sniffIptables(conn *RawConn, proto string) error {
+	addr, port, conn1, err := getOriginalDst(conn.raw.(*net.TCPConn))
 	if err != nil {
 		conn.Close()
 		return err
@@ -35,10 +35,10 @@ func (ug *UGate) iptablesServeConn(conn *BufferedConn, proto string) error {
 	iaddr := net.IP(addr)
 
 	ta := net.TCPAddr{IP: iaddr, Port: int(port)}
-	conn.Target = ta.String()
+	conn.Meta().Target = ta.String()
 	conn.Stats.Type = proto
 	// Needs to be replaced, original has been changed
-	conn.Conn = conn1
+	conn.raw = conn1
 	//log.Println("IPT ", proto, ta, conn.RemoteAddr())
 
 	return nil

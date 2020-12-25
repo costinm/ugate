@@ -7,8 +7,8 @@ import (
 	"syscall"
 )
 
-func (ug *UGate) processUnixConn(bc *BufferedConn) error {
-	uc, ok := bc.Conn.(*net.UnixConn)
+func (ug *UGate) processUnixConn(bc *RawConn) error {
+	uc, ok := bc.raw.(*net.UnixConn)
 	if !ok {
 		return errors.New("Unexpected con")
 	}
