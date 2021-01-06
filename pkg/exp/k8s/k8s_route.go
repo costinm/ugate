@@ -1,4 +1,4 @@
-package ugate
+package k8s
 
 // TCPRoute is the Schema for the TCPRoute resource.
 type TCPRoute struct {
@@ -143,7 +143,7 @@ type TCPRouteMatch struct {
 type TCPRouteList struct {
 	TypeMeta `json:",inline"`
 	ListMeta `json:"metadata,omitempty"`
-	Items           []TCPRoute `json:"items"`
+	Items    []TCPRoute `json:"items"`
 }
 
 // RouteForwardTo defines how a Route should forward a request.

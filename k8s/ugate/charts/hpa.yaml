@@ -1,0 +1,33 @@
+apiVersion: autoscaling/v2beta1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: wps
+  namespace: wps
+  labels:
+    release: wps
+spec:
+  maxReplicas: 1
+  minReplicas: 1
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: wps
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        targetAverageUtilization: 80
+---
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: wps
+  namespace: wps
+  labels:
+    release: wps
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: wps
+      release: wps

@@ -1,10 +1,10 @@
 package ugate
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -87,14 +87,14 @@ var (
 // on a local port, forwards to a remote destination.
 func NewListener(gw *UGate, cfg *ListenerConf) (*PortListener,error) {
 	ll := &PortListener{
-		cfg: cfg,
-		GW: gw,
+		cfg:  cfg,
+		Gate: gw,
 	}
 
-	if cfg.Local == "" {
-		cfg.Local = fmt.Sprintf("0.0.0.0:%d", cfg.Port)
+	if cfg.Host == "" {
+		cfg.Host = fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	} else {
-		_, port, err := net.SplitHostPort(cfg.Local)
+		_, port, err := net.SplitHostPort(cfg.Host)
 		if err != nil {
 			return nil, err
 		}
@@ -105,11 +105,11 @@ func NewListener(gw *UGate, cfg *ListenerConf) (*PortListener,error) {
 	}
 
 	if cfg.Listener == nil {
-		if strings.HasPrefix(cfg.Local, "/") ||
-				strings.HasPrefix(cfg.Local, "@"){
+		if strings.HasPrefix(cfg.Host, "/") ||
+				strings.HasPrefix(cfg.Host, "@"){
 			us, err := net.ListenUnix("unix",
 				&net.UnixAddr{
-					Name: cfg.Local,
+					Name: cfg.Host,
 					Net: "unix",
 				})
 			if err != nil {
@@ -118,11 +118,11 @@ func NewListener(gw *UGate, cfg *ListenerConf) (*PortListener,error) {
 			cfg.Listener = us
 		} else {
 			// Not supported: RFC: address "" means all families, 0.0.0.0 IP4, :: IP6, localhost IP4/6, etc
-			listener, err := net.Listen("tcp", ll.cfg.Local)
+			listener, err := net.Listen("tcp", ll.cfg.Host)
 			if err != nil {
-				host, _, _ := net.SplitHostPort(ll.cfg.Local)
-				ll.cfg.Local = host + ":0"
-				listener, err = net.Listen("tcp", ll.cfg.Local)
+				host, _, _ := net.SplitHostPort(ll.cfg.Host)
+				ll.cfg.Host = host + ":0"
+				listener, err = net.Listen("tcp", ll.cfg.Host)
 				if err != nil {
 					log.Println("failed-to-listen", err)
 					return nil, err
@@ -161,7 +161,7 @@ type PortListener struct {
 	// Real listener for the port
 	Listener net.Listener
 
-	GW *UGate
+	Gate *UGate
 }
 
 // FindConf handles routing of the incoming connection to the right Listener object.
@@ -187,8 +187,8 @@ func (pl PortListener) Addr() (net.Addr) {
 // For -R, runs on the remote ssh server to accept connections and forward back to client, which in turn
 // will forward to a port/app.
 // Blocking.
-func (pl PortListener) serve() {
-	log.Println("Gateway: open on ", pl.cfg.Local, pl.cfg.Remote, pl.cfg.Protocol)
+func (pl *PortListener) serve() {
+	log.Println("Gateway: open on ", pl.cfg.Host, pl.cfg.Remote, pl.cfg.Protocol)
 	for {
 		remoteConn, err := pl.Listener.Accept()
 		VarzAccepted.Add(1)
@@ -203,29 +203,64 @@ func (pl PortListener) serve() {
 			log.Println("Accept error, closing listener ", pl.cfg, err)
 			return
 		}
-		go pl.handleAcceptedConn(remoteConn)
+		go pl.Gate.handleAcceptedConn(pl, remoteConn)
 	}
 }
 
 // Dial the target and proxy to it.
-func (pl *PortListener) dialOut(ctx context.Context, bconn MetaConn, cfg *ListenerConf) error {
+func (ug *UGate) dialOut(bconn MetaConn, cfg *ListenerConf) error {
+	// sets clientEventContextKey - if ctx is used for a round trip, will
+	// set all data.
+	// Will also make sure DNSStart, Connect, etc are set (if we want to)
+	//ctx, cancel := context.WithCancel(bconn.Meta().Request.Context())
+	//ctx := httptrace.WithClientTrace(bconn.Meta().Request.Context(),
+	//	&bconn.Meta().ClientTrace)
+	str := bconn.Meta()
+	ctx := str.Request.Context()
+	r := str.Request
+	//ctx = context.WithValue(ctx, "ugate.conn", bconn)
 	var nc net.Conn
 	var err error
+
+	// Dial out via an existing 'reverse h2' connection
+	rt := ug.h2Handler.H2R[str.Request.Host]
+	if rt != nil {
+		// We have an active reverse H2 - use it
+		// TODO: move to ProxyHTTP
+		r1, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+		CopyHeaders(r1.Header, r.Header)
+		r1.URL.Scheme = "https"
+		// RT client - forward the request.
+		res, err := rt.RoundTrip(r1)
+		if err != nil {
+			log.Println("Failed to do H2R", err)
+			return err
+		}
+		CopyHeaders(str.ResponseHeader, res.Header)
+		str.WriteHeader(res.StatusCode)
+		str.Flush()
+		str.CopyBuffered(str, res.Body, true)
+		return nil
+	}
+
 	// SSH or in-process connectors
 	if cfg.Dialer != nil {
-		nc, err = cfg.Dialer.DialContext(ctx, "tcp", bconn.Meta().Target)
+		nc, err = cfg.Dialer.DialContext(ctx, "tcp", bconn.Meta().Request.Host)
 	} else {
-		nc, err = pl.GW.Dialer.DialContext(ctx, "tcp", bconn.Meta().Target)
+		nc, err = ug.Dialer.DialContext(ctx, "tcp", bconn.Meta().Request.Host)
 	}
-	//if err != nil {
-	//	return err
-	//}
 
-	bconn.PostDial(nc, err)
+	if pc, ok := bconn.(ProxyConn); ok {
+		pc.PostDial(nc, err)
+	}
+
 	if err != nil {
-		log.Println("Failed to connect ", cfg.Remote, err)
+		log.Println("Failed to connect ", bconn.Meta().Request.Host, err)
 		return err
 	}
+	defer nc.Close()
+
+	/////////////log.Println("Connected RA=", nc.RemoteAddr(), nc.LocalAddr())
 
 	if cfg.RemoteTLS != nil {
 		//var clientCon *RawConn
@@ -233,17 +268,16 @@ func (pl *PortListener) dialOut(ctx context.Context, bconn MetaConn, cfg *Listen
 		//	clientCon = clCon
 		//} else {
 		//	clientCon = GetConn(nc)
-		//	clientCon.Stats.Accepted = false
+		//	clientCon.Meta.Accepted = false
 		//}
-		lconn, err := NewTLSConnOut(ctx, nc, cfg.RemoteTLS, "")
+		lconn, err := NewTLSConnOut(ctx, nc, cfg.RemoteTLS, "", nil)
 		if err != nil {
 			return err
 		}
 		nc = lconn
 	}
 
-	return bconn.Proxy(nc)
-
+	return bconn.(ProxyConn).ProxyTo(nc)
 }
 
 

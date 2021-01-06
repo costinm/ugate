@@ -73,7 +73,7 @@ const (
 
 // Extract the target from the SOCKS header, consume it, and register a post-dial
 // hook.
-func (gw *UGate) sniffSOCKSConn(acceptedCon *RawConn) error {
+func (ug *UGate) sniffSOCKSConn(acceptedCon *RawConn) error {
 	head := acceptedCon.buf
 
 	n, err := acceptedCon.Read(head)
@@ -190,8 +190,8 @@ func (gw *UGate) sniffSOCKSConn(acceptedCon *RawConn) error {
 		ctype = "socks5IP"
 	}
 
-	acceptedCon.Meta().Target = addr
-	acceptedCon.Stats.Type = ctype
+	acceptedCon.Meta().Request.Host = addr
+	acceptedCon.Stream.Type = ctype
 
 	acceptedCon.postDial = func(conn net.Conn, err error) {
 		if err != nil {

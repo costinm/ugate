@@ -58,19 +58,17 @@ function ipt_out() {
   # redirects to Envoy.
   iptables -t nat -N ISTIO_REDIRECT
   iptables -t nat -A ISTIO_REDIRECT -p tcp -j REDIRECT --to-port "${OUTBOUND_CAPTURE_PORT}"
+
   # Create a new chain for selectively redirecting outbound packets to Envoy.
   iptables -t nat -N ISTIO_OUTPUT
-
   # Jump to the ISTIO_OUTPUT chain from OUTPUT chain for all tcp traffic.
   iptables -t nat -A OUTPUT -p tcp -j ISTIO_OUTPUT
 
   # 127.0.0.6 is bind connect from inbound passthrough cluster
   iptables -t nat -A ISTIO_OUTPUT -o lo -s 127.0.0.6/32 -j RETURN
-  for gid in ${PROXY_GID}; do
-    # Avoid infinite loops. Don't redirect Envoy traffic directly back to
-    # Envoy for non-loopback traffic.
-    iptables -t nat -A ISTIO_OUTPUT -m owner --gid-owner "${gid}" -j RETURN
-  done
+  # Avoid infinite loops. Don't redirect Envoy traffic directly back to
+  # Envoy for non-loopback traffic.
+  iptables -t nat -A ISTIO_OUTPUT -m owner --gid-owner "${PROXY_GID}" -j RETURN
   # Skip redirection for Envoy-aware applications and
   # container-to-container traffic both of which explicitly use
   # localhost.

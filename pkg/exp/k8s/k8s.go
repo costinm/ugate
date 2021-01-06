@@ -1,4 +1,4 @@
-package ugate
+package k8s
 
 import (
 	"encoding/json"

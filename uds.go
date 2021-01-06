@@ -8,7 +8,7 @@ import (
 )
 
 func (ug *UGate) processUnixConn(bc *RawConn) error {
-	uc, ok := bc.raw.(*net.UnixConn)
+	uc, ok := bc.ServerOut.(*net.UnixConn)
 	if !ok {
 		return errors.New("Unexpected con")
 	}

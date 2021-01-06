@@ -1,8 +1,9 @@
 package main
 
 import (
-	"crypto/tls"
-	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -12,67 +13,72 @@ import (
 )
 
 
+// Minimal TCP over H2 Gateway, defaulting to Istio ports and capture behavior.
+// There is no envoy - all traffic is upgraded to optional mTLS + H2 and sent to
+// a gateway that does additional routing.
+//
+// This attempts to emulate the 'BTS' design, moving Envoy out of the pod, possibly
+// to a shared pool.
+//
+// - iptables capture
+// - option to use mTLS - if the network is secure ( ipsec or equivalent ) no encryption
+// - detect TLS and pass it through
+// - inbound: extract metadata
+// - convert from H2/H1, based on local port config.
+//
+// Extras:
+// - SOCKS and PROXY
+//
 func main() {
-	// By default, pass through using net.Dialer
-	ug := ugate.NewGate(&net.Dialer{})
+	config := ugate.NewConf(".")
 
-	ug.DefaultPorts(15000)
+	auth := ugate.NewAuth(config, "", "h.webinf.info")
+
+	cfg := &ugate.GateCfg{
+		BasePort: 15000,
+	}
+
+	data, err := ioutil.ReadFile("h2gate.json")
+	if err != nil {
+		json.Unmarshal(data, cfg)
+	}
+
+	// By default, pass through using net.Dialer
+	ug := ugate.NewGate(&net.Dialer{}, auth)
+
+	ug.DefaultPorts(cfg.BasePort)
 
 	// direct TCP connect to local iperf3 and fortio (or HTTP on default port)
 	ug.Add(&ugate.ListenerConf{
-		Port: 15101,
+		Port: cfg.BasePort + 101,
 		Remote: "localhost:5201",
 	})
 	ug.Add(&ugate.ListenerConf{
-		Port: 15108,
+		Port: cfg.BasePort + 108,
 		Remote: "localhost:8080",
 	})
-	key := ugate.GenerateKeyPair()
-	cert, _ := ugate.KeyToCertificate(key)
 
 	ug.Add(&ugate.ListenerConf{
-		Port: 15102,
+		Port: cfg.BasePort + 102,
 		Protocol: "tls",
-		TLSConfig: &tls.Config {
-				MinVersion:               tls.VersionTLS13,
-				//PreferServerCipherSuites: ugate.preferServerCipherSuites(),
-				InsecureSkipVerify:       true, // This is not insecure here. We will verify the cert chain ourselves.
-				ClientAuth:               tls.RequestClientCert, // not require - we'll fallback to JWT
-				Certificates:             []tls.Certificate{*cert},
-				VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
-					panic("tls config not specialized for peer")
-				},
-				NextProtos:             []string{"h2","spdy","wss"},
-				//SessionTicketsDisabled: true,
-		},
+		TLSConfig: ug.TLSConfig,
 		//Remote: "localhost:4444",
 		Remote: "localhost:5201",
 	})
 	ug.Add(&ugate.ListenerConf{
-		Port: 15103,
+		Port: cfg.BasePort + 103,
 		Protocol: "tcp",
 		Remote: "localhost:15102", // The TLS server
-		RemoteTLS: &tls.Config{
-			MinVersion:               tls.VersionTLS13,
-			//PreferServerCipherSuites: ugate.preferServerCipherSuites(),
-			InsecureSkipVerify:       true, // This is not insecure here. We will verify the cert chain ourselves.
-			ClientAuth:               tls.RequestClientCert, // not require - we'll fallback to JWT
-			Certificates:             []tls.Certificate{*cert},
-			VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
-				panic("tls config not specialized for peer")
-			},
-			NextProtos:             []string{"h2","spdy","wss"},
-			//SessionTicketsDisabled: true,
-		},
+		RemoteTLS: ug.TLSConfig,
 	})
 	ug.Add(&ugate.ListenerConf{
-		Port: 15104,
+		Port: cfg.BasePort + 104,
 		Protocol: "tcp",
 		Remote: "localhost:15101",
 	})
 
-	log.Println("Started debug on 15020, UID/GID", os.Getuid(), os.Getegid())
-	err := http.ListenAndServe(":15020", nil)
+	log.Println("Started UID/GID", os.Getuid(), os.Getegid())
+	err = http.ListenAndServe(fmt.Sprintf(":%d", cfg.BasePort + 2), nil)
 	if err != nil {
 		log.Fatal(err)
 	}

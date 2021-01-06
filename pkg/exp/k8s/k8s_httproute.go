@@ -1,4 +1,4 @@
-package ugate
+package k8s
 
 // HTTPRoute is the Schema for the HTTPRoute resource.
 type HTTPRoute struct {
@@ -15,7 +15,7 @@ type HTTPRoute struct {
 type HTTPRouteList struct {
 	TypeMeta `json:",inline"`
 	ListMeta `json:"metadata,omitempty"`
-	Items           []HTTPRoute `json:"items"`
+	Items    []HTTPRoute `json:"items"`
 }
 
 // HTTPRouteSpec defines the desired state of HTTPRoute

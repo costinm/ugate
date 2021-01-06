@@ -44,7 +44,7 @@ const (
 	extensionServerName uint16 = 0
 )
 
-func (gw *UGate) sniffSNI(acc *RawConn) error {
+func (ug *UGate) sniffSNI(acc *RawConn) error {
 	buf := acc.buf
 	n, err := acc.Read(buf[0:5])
 	if err != nil {
@@ -193,8 +193,8 @@ func (gw *UGate) sniffSNI(acc *RawConn) error {
 	// TODO: unmangle server name - port, mesh node
 
 	destAddr := m.serverName + ":443"
-	acc.Meta().Target = destAddr
-	acc.Stats.Type = "sni"
+	acc.Meta().Request.Host = destAddr
+	acc.Stream.Type = ProtoTLS
 
 	// Leave all bytes in the buffer, will be sent
 	acc.Reset(0)

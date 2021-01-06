@@ -53,5 +53,8 @@ the first bytes. This can work with socks/iptables outbound.
 - TURN/STUN compat
 - K8s compat  (konectivity)
 - TLS and metadata hooks
-- 
+- H2 implementation can just forward the frames, without decoding or re-encoding. 
+    - per stream flow control will be end-to-end.
+- Relay-over-SNI: register N plain text conns, send signed header, SNI will proxy connections
+without multiplex or push. 
 

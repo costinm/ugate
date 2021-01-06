@@ -2,42 +2,53 @@ package ugate
 
 import (
 	"context"
-	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"io"
 	"net"
 	"sync"
-	"time"
 )
 
 // TLSConn extens tls.Conn with extra metadata.
 // Adds the Proxy() method, implements ReadFrom and WriteTo using recycled buffers.
 type TLSConn struct {
-	// wrapps the original conn for Local/RemoteAddress and deadlines
-	// Implements CloseWrite, ConnectionState,
-	*tls.Conn
-	RemotePub     crypto.PublicKey
-
 	// Raw TCP connection, for remote address and stats
 	// TODO: for H2-over-TLS-over-WS, it will be a WS conn
-	Raw *Stats
+	*Stream
+
+	// wrapps the original conn for Local/RemoteAddress and deadlines
+	// Implements CloseWrite, ConnectionState,
+	tls *tls.Conn
 }
 
-func NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string) (*TLSConn, error) {
-
+func NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*TLSConn, error) {
 	lc := &TLSConn{
 	}
 	if mc, ok := nc.(MetaConn); ok {
-		lc.Raw = mc.Meta()
+		lc.Stream = mc.Meta()
+		if rnc, ok := lc.ServerOut.(net.Conn); ok {
+			nc = rnc
+		}
 	} else {
-		lc.Raw = &Stats{}
+		lc.Stream = NewStream()
 	}
+
 	config, keyCh := ConfigForPeer(cfg, peerID)
-	cs, cc, err := lc.handshake(ctx, tls.Client(nc, config), keyCh)
-	lc.Raw.RemoteChain = cc
-	lc.Conn = cs
+	if alpn != nil {
+		config.NextProtos = alpn
+	}
+	lc.tls = tls.Client(nc, config)
+	cs, _, err := lc.handshake(ctx, keyCh)
+	if err != nil {
+		return nil, err
+	}
+	lc.Stream.ServerIn = lc.tls
+	lc.Stream.ServerOut = lc.tls
+
+	//lc.tls.ConnectionState().DidResume
+	tcs := lc.tls.ConnectionState()
+	lc.Stream.Request.TLS = &tcs
+	lc.tls = cs
 
 	return lc, err
 }
@@ -48,120 +59,36 @@ func NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID str
 // an inner TLS connection or JWT in metadata.
 func NewTLSConnIn(ctx context.Context, nc net.Conn, cfg *tls.Config) (*TLSConn, error) {
 	config, keyCh := ConfigForPeer(cfg, "")
+	config.NextProtos = []string{"h2r",  "h2"}
 	tc := &TLSConn{}
+	//if mc, ok := nc.(MetaConn); ok {
+	//	tc.Stream = mc.Meta()
+	//	if rnc, ok := tc.ServerOut.(net.Conn); ok {
+	//		nc = rnc
+	//	}
+	//} else {
+	// TODO: preserve the original info ?
+	tc.Stream = NewStream()
 	if mc, ok := nc.(MetaConn); ok {
-		tc.Raw = mc.Meta()
-	} else {
-		tc.Raw = &Stats{}
+		m := mc.Meta()
+		// Sniffed, etc
+		tc.Listener = m.Listener
+		tc.Request = m.Request
 	}
-	cs, cc, err := tc.handshake(ctx, tls.Server(nc, config), keyCh)
-	tc.Conn= cs
-	tc.Raw.RemoteChain = cc
+
+	//}
+	tc.tls = tls.Server(nc, config)
+	cs, _, err := tc.handshake(ctx, keyCh)
+	tc.tls= cs
+	if err != nil {
+		return nil, err
+	}
+	tcs := tc.tls.ConnectionState()
+	tc.Stream.Request.TLS = &tcs
+	tc.Stream.ServerIn = tc.tls
+	tc.Stream.ServerOut = tc.tls
+
 	return tc, err
-}
-
-func (t *TLSConn) Meta() *Stats {
-	return t.Raw
-}
-
-func (b *TLSConn) PostDial(nc net.Conn, err error) {
-}
-
-// The proxy can't be spliced - use regular write.
-func (b *TLSConn) Proxy(nc net.Conn) error {
-	errCh := make(chan error, 2)
-	go b.proxyFromClient(nc, errCh)
-	return b.proxyToClient(nc, errCh)
-}
-
-func (b *TLSConn) proxyToClient(cin io.Writer, errch chan error) error {
-	b.WriteTo(cin) // errors are preserved in stats, 4 kinds possible
-
-	// WriteTo doesn't close the writer !
-	if c, ok := cin.(CloseWriter); ok {
-		c.CloseWrite()
-	}
-
-	remoteErr := <- errch
-
-	// The read part may have returned EOF, or the write may have failed.
-	// In the first case close will send FIN, else will send RST
-	b.Conn.Close()
-
-	if c, ok := cin.(io.Closer); ok {
-		c.Close()
-	}
-
-	return remoteErr
-}
-
-// WriteTo implements the interface, using the read buffer.
-func (tc *TLSConn) WriteTo(w io.Writer) (n int64, err error) {
-	buf1 := bufferPoolCopy.Get().([]byte)
-	defer bufferPoolCopy.Put(buf1)
-	bufCap := cap(buf1)
-	buf := buf1[0:bufCap:bufCap]
-
-	for {
-		sn, sErr := tc.Conn.Read(buf)
-
-		if sn > 0 {
-			wn, wErr := w.Write(buf[0:sn])
-			n += int64(wn)
-			if wErr != nil {
-				tc.Raw.ProxyWriteErr = wErr
-				return n, wErr
-			}
-		}
-		// May return err but still have few bytes
-		if sErr != nil {
-			sErr = eof(sErr)
-			tc.Raw.ReadErr = sErr
-			return n, sErr
-		}
-	}
-}
-
-// proxyFromClient writes to the net.Conn. Should be in a go routine.
-func (b *TLSConn) proxyFromClient(cin io.Reader, errch chan error)  {
-	_, err := b.ReadFrom(cin)
-
-	// At this point either cin returned FIN or RST
-
-	b.Conn.CloseWrite()
-	errch <- err
-}
-
-// Reads data from cin (the client/dialed con) until EOF or error
-// TCP Connections typically implement this, using io.Copy().
-func (b *TLSConn) ReadFrom(cin io.Reader) (n int64, err error) {
-	if wt, ok := cin.(io.WriterTo); ok {
-		return wt.WriteTo(b.Conn)
-	}
-
-	buf1 := bufferPoolCopy.Get().([]byte)
-	defer bufferPoolCopy.Put(buf1)
-	bufCap := cap(buf1)
-	buf := buf1[0:bufCap:bufCap]
-
-	for {
-		if srcc, ok := cin.(net.Conn); ok {
-			srcc.SetReadDeadline(time.Now().Add(15 * time.Minute))
-		}
-		nr, er := cin.Read(buf)
-		if er != nil {
-			er = eof(err)
-			return n, er
-		}
-
-		nw, err := b.Conn.Write(buf[0:nr])
-		n += int64(nw)
-		if err != nil {
-			return n, err
-		}
-	}
-
-	return
 }
 
 func ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
@@ -205,7 +132,6 @@ func ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []
 
 func (pl *TLSConn) handshake(
 		ctx context.Context,
-		tlsConn *tls.Conn,
 		keyCh <-chan []*x509.Certificate,
 ) (*tls.Conn, []*x509.Certificate, error) {
 
@@ -214,7 +140,7 @@ func (pl *TLSConn) handshake(
 	// Close the connection instead.
 	select {
 	case <-ctx.Done():
-		tlsConn.Close()
+		pl.tls.Close()
 	default:
 	}
 
@@ -233,11 +159,11 @@ func (pl *TLSConn) handshake(
 		select {
 		case <-done:
 		case <-ctx.Done():
-			tlsConn.Close()
+			pl.tls.Close()
 		}
 	}()
 
-	if err := tlsConn.Handshake(); err != nil {
+	if err := pl.tls.Handshake(); err != nil {
 		// if the context was canceled, return the context error
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, nil ,ctxErr
@@ -259,5 +185,5 @@ func (pl *TLSConn) handshake(
 	//// At this point the BufferedCon unsecure connection can't be used.
 	//t.Conn = tlsConn
 
-	return tlsConn, remotePubKey, nil
+	return pl.tls, remotePubKey, nil
 }

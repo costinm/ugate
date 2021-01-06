@@ -1,4 +1,4 @@
-package ugate
+package k8s
 
 type Gateway struct {
 	TypeMeta   `json:",inline"`
