@@ -14,6 +14,11 @@ import (
 // curl --socks5 127.0.0.1:15004 ....
 // export HTTP_PROXY=socks5://127.0.0.1:15004
 
+// TODO: tor extensions
+// - send client data in advance, forward to the server
+// - resolve
+
+
 const (
 	ConnectCommand   = uint8(1)
 	BindCommand      = uint8(2)
@@ -73,8 +78,9 @@ const (
 
 // Extract the target from the SOCKS header, consume it, and register a post-dial
 // hook.
-func (ug *UGate) sniffSOCKSConn(acceptedCon *RawConn) error {
+func (ug *UGate) readSocksHeader(acceptedCon *RawConn) error {
 	head := acceptedCon.buf
+	str := acceptedCon.Meta()
 
 	n, err := acceptedCon.Read(head)
 	if err != nil {
@@ -159,10 +165,12 @@ func (ug *UGate) sniffSOCKSConn(acceptedCon *RawConn) error {
 	// TODO: copy the ip (head will be reused)
 	switch atyp {
 	case 1:
-		dest = net.IP(head[4:8])
+		copy(acceptedCon.ipBuf, head[4:8])
+		dest = acceptedCon.ipBuf[0:4]
 		port = binary.BigEndian.Uint16(head[8:])
 	case 4:
-		dest = net.IP(head[4:20])
+		copy(acceptedCon.ipBuf, head[4:20])
+		dest = acceptedCon.ipBuf[0:16]
 		port = binary.BigEndian.Uint16(head[20:])
 	case 3:
 		isString = true
@@ -177,44 +185,50 @@ func (ug *UGate) sniffSOCKSConn(acceptedCon *RawConn) error {
 		return errors.New("Unknown address")
 	}
 
-	localAddr := acceptedCon.LocalAddr()
-	tcpAddr := localAddr.(*net.TCPAddr)
 
 	addr := ""
-	ctype := "socks5"
 	if isString {
 		addr = net.JoinHostPort(destAddr, strconv.Itoa(int(port)))
+		str.Type = "socks5"
 	} else {
 		ta := &net.TCPAddr{IP: dest, Port: int(port)}
 		addr = ta.String()
-		ctype = "socks5IP"
+		str.DestAddr = ta
+		str.Type = "socks5IP"
 	}
 
-	acceptedCon.Meta().Request.Host = addr
-	acceptedCon.Stream.Type = ctype
+	str.Dest = addr
 
+	// Must be called before sending any data.
 	acceptedCon.postDial = func(conn net.Conn, err error) {
-		if err != nil {
+		if err != nil || conn == nil {
 			// TODO: write error code
-			head[1] = 1
-			acceptedCon.Write(head[0:2])
+			acceptedCon.Write([]byte{5, 1})
 			acceptedCon.Close()
 		}
 		// Not accurate for tcp-over-http.
 		// TODO: pass a 'on connect' callback
-		r := head[off:]
+		localAddr := conn.LocalAddr()
+		tcpAddr := localAddr.(*net.TCPAddr)
+		r := make([]byte, len(tcpAddr.IP) + 6)
 		r[0] = 5
 		r[1] = 0 // success
 		r[2] = 0 // rsv
-		r[3] = 1 // ip4
-		// 4-bytes IP4 local
-		copy(r[4:8], []byte(tcpAddr.IP))
-		// 2 bytes local port
-		binary.BigEndian.PutUint16(r[8:], uint16(tcpAddr.Port))
-		acceptedCon.Write(r[0:10])
+		off := 4
+		if tcpAddr.IP.To4() != nil {
+			r[3] = 1
+			copy(r[off:off+4], []byte(tcpAddr.IP))
+			off += 4
+		} else {
+			r[3] = 2
+			copy(r[off:off+16], []byte(tcpAddr.IP))
+			off += 16
+		}
+		binary.BigEndian.PutUint16(r[off:], uint16(tcpAddr.Port))
+		off += 2
+		acceptedCon.Write(r[0:off])
 	}
 
 	acceptedCon.Clean()
-
 	return nil
 }

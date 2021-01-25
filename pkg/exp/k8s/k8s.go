@@ -3,7 +3,6 @@ package k8s
 import (
 	"encoding/json"
 	"time"
-
 )
 
 // To keep things simple and dependency-free, this is a copy of few structs
@@ -15,9 +14,6 @@ import (
 // - only a subset, few unused fields commented out
 // - enums converted to 'string', to make json conversion easy.
 //
-
-
-
 
 // TypeMeta describes an individual object in an API response or request
 // with strings representing the type of the object and its API schema version.
@@ -84,7 +80,6 @@ type ListMeta struct {
 	// +optional
 	RemainingItemCount *int64 `json:"remainingItemCount,omitempty" protobuf:"bytes,4,opt,name=remainingItemCount"`
 }
-
 
 // ObjectMeta is metadata that all persisted resources must have, which includes all objects
 // users must create.
@@ -313,4 +308,3 @@ func (t Time) MarshalJSON() ([]byte, error) {
 	buf = append(buf, '"')
 	return buf, nil
 }
-

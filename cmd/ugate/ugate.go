@@ -2,16 +2,14 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
-	"net/http"
-	"os"
+
+	_ "net/http/pprof"
 
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/local"
 )
-
 
 // Minimal TCP over H2 Gateway, defaulting to Istio ports and capture behavior.
 // There is no envoy - all traffic is upgraded to optional mTLS + H2 and sent to
@@ -30,57 +28,32 @@ import (
 // - SOCKS and PROXY
 //
 func main() {
-	config := ugate.NewConf(".")
-
-	auth := ugate.NewAuth(config, "", "h.webinf.info")
+	config := ugate.NewConf("./")
 
 	cfg := &ugate.GateCfg{
 		BasePort: 15000,
+		Domain: "h.webinf.info",
+		H2R: map[string]string{
+			"c1.webinf.info": "",
+		},
 	}
 
-	data, err := ioutil.ReadFile("h2gate.json")
-	if err != nil {
-		json.Unmarshal(data, cfg)
+	data, err := config.Get("ugate.json")
+	if err == nil && data != nil {
+		err = json.Unmarshal(data, cfg)
+		if err != nil {
+			log.Println("Error parsing json ", err, string(data))
+		}
 	}
 
+	auth := ugate.NewAuth(config, cfg.Name, cfg.Domain)
 	// By default, pass through using net.Dialer
-	ug := ugate.NewGate(&net.Dialer{}, auth)
+	ug := ugate.NewGate(&net.Dialer{}, auth, cfg)
 
-	ug.DefaultPorts(cfg.BasePort)
+	localgw := local.NewLocal(ug, auth)
+	local.ListenUDP(localgw)
+	ug.Mux.HandleFunc("/dmesh/ll/if", localgw.HttpGetLLIf)
 
-	// direct TCP connect to local iperf3 and fortio (or HTTP on default port)
-	ug.Add(&ugate.ListenerConf{
-		Port: cfg.BasePort + 101,
-		Remote: "localhost:5201",
-	})
-	ug.Add(&ugate.ListenerConf{
-		Port: cfg.BasePort + 108,
-		Remote: "localhost:8080",
-	})
-
-	ug.Add(&ugate.ListenerConf{
-		Port: cfg.BasePort + 102,
-		Protocol: "tls",
-		TLSConfig: ug.TLSConfig,
-		//Remote: "localhost:4444",
-		Remote: "localhost:5201",
-	})
-	ug.Add(&ugate.ListenerConf{
-		Port: cfg.BasePort + 103,
-		Protocol: "tcp",
-		Remote: "localhost:15102", // The TLS server
-		RemoteTLS: ug.TLSConfig,
-	})
-	ug.Add(&ugate.ListenerConf{
-		Port: cfg.BasePort + 104,
-		Protocol: "tcp",
-		Remote: "localhost:15101",
-	})
-
-	log.Println("Started UID/GID", os.Getuid(), os.Getegid())
-	err = http.ListenAndServe(fmt.Sprintf(":%d", cfg.BasePort + 2), nil)
-	if err != nil {
-		log.Fatal(err)
-	}
+	log.Println("Started: ", auth.ID)
+	select {}
 }
-

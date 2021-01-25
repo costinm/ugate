@@ -2,11 +2,13 @@ package ugate
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,15 +27,9 @@ import (
 // - TLS - peer certificates, SNI, ALPN
 // -
 type Stream struct {
-	// Associated virtual http request.
-	// Host is extracted from metadata (SOCKS, iptables, etc)
-	// Typically a DNS or IP address
-	// For example in CONNECT it will be hostname:port or IP:port
-	// For HTTP PROXY the path is a full URL.
-	Request *http.Request
-
-	// Metadata to send on response
-	ResponseHeader http.Header
+	// Counter
+	// Key in the Active table.
+	StreamId int
 
 	// remote In - data from remote app to local.
 	// May be an instance:
@@ -41,14 +37,53 @@ type Stream struct {
 	// - a res.Body for http-over-HTTP client. Note that remoteOut will be null in this case.
 	// - a TCPConnection for socks
 	// - for ssh -
+	//
+	// Closing the 'input' without fully reading will result in RST.
 	ServerIn io.ReadCloser `json:"-"`
 
 	// remoteOut - stream sending to the server.
 	// will be nil for http or cases where the API uses Read() and has its own local->remote proxy logic.
 	//
 	// Normally an instance of net.Conn, create directly to app or to another node.
-	// Not WriterCloser because we may use http.Response.
+	// Not WriterCloser because it can be an http.ResponseWriter, which implements
+	// CloseWrite instead.
 	ServerOut io.Writer `json:"-"`
+
+	// Associated virtual http request.
+	Request *http.Request `json:"-"`
+
+	// Set if the connection finished a TLS handshake.
+	// A 'dummy' value may be set if a sidecar terminated the connection.
+	TLS *tls.ConnectionState `json:"-"`
+
+	// Metadata to send on response. Stream implements http.ResponseWriter.
+	// For streams without metadata - will be ignored.
+	ResponseHeader http.Header
+
+	// Original dest - hostname or IP, including port. Parameter of the original Dial from the captured egress stream.
+	// May be a mesh IP6, host, etc. If original address was captured by IP, destIP will also be set.
+	// Host is extracted from metadata (SOCKS, iptables, etc)
+	// Typically a DNS or IP address
+	// For example in CONNECT it will be hostname:port or IP:port
+	// For HTTP PROXY the path is a full URL.
+	Dest string
+
+	// Resolved destination IP. May be nil if SOCKS or forwarding is done. Final Gateway will have it set.
+	// If capture is based on IP, it'll be set in all hops.
+	// If set, this is the authoritiative destination, DestDNS will be a hint.
+	DestAddr *net.TCPAddr
+
+	// Hostname of the destination, based on DNS cache and interception.
+	// Used as a key in the 'per host' stats.
+	DestDNS string
+
+	// Set to the localAddr from the connection, for HTTP requests only
+	localAddr net.Addr
+
+	// Client type - original capture and all transport hops.
+	// SOCKS, CONNECT, PROXY, SOCKSIP, PROXYIP,
+	// EPROXY = TCP-over-HTTP in, direct host out
+	Type string
 
 	Open time.Time
 
@@ -57,33 +92,6 @@ type Stream struct {
 
 	// last receive from remote (and send to local)
 	LastRead time.Time
-
-	// Original dest - hostname or IP, including port. Parameter of the orginal Dial from the captured egress stream.
-	// May be a mesh IP6, host, etc. If original address was captured by IP, destIP will also be set.
-	Dest string
-
-	// Resolved destination IP. May be nil if SOCKS or forwarding is done. Final Gateway will have it set.
-	// If capture is based on IP, it'll be set in all hops.
-	// If set, this is the authoritiative destination, DestDNS will be a hint.
-	DestAddr *net.TCPAddr
-
-	// Address of the source. For accepted/forwarded
-	// stream it is the remote address of the accepted connection.
-	// For local capture is localhost and the remote port.
-	SrcAddr net.Addr
-
-	// Hostname of the destination, based on DNS cache and interception.
-	// Used as a key in the 'per host' stats.
-	DestDNS string
-
-	// Counter
-	// Key in the Active table.
-	StreamId int
-
-	// Client type - original capture and all transport hops.
-	// SOCKS, CONNECT, PROXY, SOCKSIP, PROXYIP,
-	// EPROXY = TCP-over-HTTP in, direct host out
-	Type string
 
 	// Sent from client to server ( client is initiator of the proxy )
 	SentBytes   int
@@ -99,54 +107,135 @@ type Stream struct {
 	// Set for circuits - path so far (over H2)
 	PrevPath []string
 
-
 	// Additional closer, to be called after the proxy function is done and both client and remote closed.
-	Closer func() `json:"-"`
+	Closer     func() `json:"-"`
+	ReadCloser func() `json:"-"`
 
 	// Set if CloseWrite() was called, which should result in a FIN sent.
 	// This should happen if a EOF was received when proxying.
-	ServerClose bool
+	ServerClose bool `json:"-"`
 
 	// Set if Close() was called.
-	Closed bool
+	Closed bool `json:"-"`
 
 	// Errors associated with this stream, read from or write to.
-	ReadErr       error
-	WriteErr      error
+	ReadErr  error `json:"-"`
+	WriteErr error `json:"-"`
 
-	// ---------------------------------------------------------
+	ctx       context.Context `json:"-"`
+	ctxCancel context.CancelFunc `json:"-"`
 
-	// True if the Stream is originated (Dialed). In most cases a simple
-	// net.Conn is sufficient, the server Stream drives the proxying.
-	Egress bool
-
-	// remoteCtx is a context associated with the remote side connection,
-	// will be called when the stream is closed (but not on CloseWrite).
-	RemoteCtx context.CancelFunc
-
-	// Only for 'accepted' streams (server side), in proxy mode: keep track
-	// of the client side. The server is driving the proxying.
-	ProxyReadErr  error
-	ProxyWriteErr error
-	// Set if the client has sent the FIN, and gateway sent the FIN to server
-	ClientClose bool
+	// Set for accepted connections, with the config associated with the listener.
+	Listener *Listener `json:"-"`
 
 	// Optional function to call after dial. Used to send metadata
 	// back to the protocol ( for example SOCKS)
-	postDial func(net.Conn, error)
+	postDial func(net.Conn, error) `json:"-"`
 
-	// Set for accepted connections, with the config associated with the listener.
-	Listener *ListenerConf
+	// True if the Stream is originated from local machine, i.e.
+	// SOCKS/iptables/TUN capture or dialed from local process
+	Egress bool
+
+	// ---------------------------------------------------------
+
+	// Only for 'accepted' streams (server side), in proxy mode: keep track
+	// of the client side. The server is driving the proxying.
+	ProxyReadErr  error `json:"-"`
+	ProxyWriteErr error `json:"-"`
+
+	// Set if the client has sent the FIN, and gateway sent the FIN to server
+	ClientClose bool `json:"-"`
 }
+
+// Create a new stream.
+func NewStream() *Stream {
+	return &Stream{
+		StreamId: int(atomic.AddUint32(&streamIds, 1)),
+		Open:     time.Now(),
+	}
+}
+
+// Create a new stream from a HTTP request/response.
+//
+// For accepted requests, http2/server.go newWriterAndRequests populates the request based on the headers.
+// Server validates method, path and scheme=http|https. Req.Body is a pipe - similar with what we use for egress.
+// Request context is based on stream context, which is a 'with cancel' based on the serverConn baseCtx.
+//
+func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Stream) *Stream {
+	return &Stream{
+		StreamId: int(atomic.AddUint32(&streamIds, 1)),
+		Open:     time.Now(),
+
+		Request:   r,
+		ServerIn:  r.Body,
+		ServerOut: w,
+		TLS:       r.TLS,
+		Dest:      r.Host,
+	}
+}
+
+//func (s *Stream) Reset() {
+//	s.Open = time.Now()
+//	s.LastRead = time.Time{}
+//	s.LastWrite = time.Time{}
+//
+//	s.RcvdBytes = 0
+//	s.SentBytes = 0
+//	s.RcvdPackets = 0
+//	s.SentPackets = 0
+//
+//	s.ReadErr = nil
+//	s.WriteErr = nil
+//	s.Type = ""
+//}
+
+func (s *Stream) HTTPRequest() *http.Request {
+	if s.Request == nil {
+		s.Request = &http.Request{
+			Host: s.Dest,
+		}
+	}
+	return s.Request
+}
+
+func (s *Stream) HTTPResponse() http.ResponseWriter {
+	if rw, ok := s.ServerOut.(http.ResponseWriter); ok {
+		return rw
+	}
+	return nil
+}
+
+const ContextKey = "ugate.stream"
+
+// Used by H2 server to populate TLS in accepted requests.
+// For 'fake' TLS (raw HTTP) it must be populated.
+func (s *Stream) ConnectionState() tls.ConnectionState {
+	if s.TLS == nil {
+		return tls.ConnectionState{Version: tls.VersionTLS12}
+	}
+	return *s.TLS
+}
+
+func (s *Stream) Context() context.Context {
+	if s.Request != nil {
+		return s.Request.Context()
+	}
+	if s.ctx == nil {
+		s.ctx, s.ctxCancel = context.WithCancel(context.Background())
+		s.ctx = context.WithValue(s.ctx, ContextKey, s)
+	}
+	return s.ctx
+}
+
 func (s *Stream) Meta() *Stream {
 	return s
 }
 
 func (s *Stream) RemoteID() string {
-	if s.Request.TLS == nil {
+	if s.TLS == nil {
 		return ""
 	}
-	pk, err := PubKeyFromCertChain(s.Request.TLS.PeerCertificates)
+	pk, err := PubKeyFromCertChain(s.TLS.PeerCertificates)
 	if err != nil {
 		return ""
 	}
@@ -182,14 +271,26 @@ func (s *Stream) Read(out []byte) (int, error) {
 	s.LastRead = time.Now()
 	err = eof(err)
 	if err != nil {
+		log.Println("XXXXX CLOSE ", err)
+		if s.ReadCloser != nil {
+			s.ReadCloser()
+			s.ReadCloser = nil
+		}
 		s.ReadErr = err
 	}
 	return n, err
 }
 
 func (s *Stream) Close() error {
-	if s.RemoteCtx != nil {
-		s.RemoteCtx()
+	if s.Closed {
+		return nil
+	}
+	s.Closed = true
+	if s.Closer != nil {
+		s.Close()
+	}
+	if s.ctxCancel != nil {
+		s.ctxCancel()
 	}
 	if c, ok := s.ServerOut.(io.Closer); ok {
 		return c.Close()
@@ -241,6 +342,9 @@ func (s *Stream) Header() http.Header {
 	if rw, ok := s.ServerOut.(http.ResponseWriter); ok {
 		return rw.Header()
 	}
+	if s.ResponseHeader == nil {
+		s.ResponseHeader = map[string][]string{}
+	}
 	return s.ResponseHeader
 }
 
@@ -250,8 +354,6 @@ func (s *Stream) WriteHeader(statusCode int) {
 		return
 	}
 }
-
-
 
 // Copy src to dst, using a pooled intermediary buffer.
 //
@@ -338,22 +440,21 @@ func (s *Stream) LocalAddr() net.Addr {
 		return cw.LocalAddr()
 	}
 
-	if s.SrcAddr != nil {
-		return s.SrcAddr
-	}
-
-	return s.SrcAddr
+	// For HTTP/BTS requests, local addr should be the address from the listener or
+	// stream.
+	return s.localAddr
 }
 
 // RemoteAddr is the client (for accepted) or server (for originated).
 // It should be the real IP, extracted from connection or metadata.
 // RemoteID returns the authenticated ID.
 func (s *Stream) RemoteAddr() net.Addr {
+	// non-test Streams are either backed by a net.Conn or a Request
 	if cw, ok := s.ServerOut.(net.Conn); ok {
 		return cw.RemoteAddr()
 	}
 
-	if s.Request.RemoteAddr != "" {
+	if s.Request != nil && s.Request.RemoteAddr != "" {
 		r, err := net.ResolveTCPAddr("tcp", s.Request.RemoteAddr)
 		if err == nil {
 			return r
@@ -479,7 +580,7 @@ func (s *Stream) proxyToClient(cout io.WriteCloser, errch chan error) error {
 		s.ServerIn.Close()
 	}
 
-	remoteErr := <- errch
+	remoteErr := <-errch
 
 	// The read part may have returned EOF, or the write may have failed.
 	// In the first case close will send FIN, else will send RST
@@ -542,7 +643,7 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 // proxyFromClient writes to the net.Conn. Should be in a go routine.
-func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error)  {
+func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error) {
 	_, err := s.ReadFrom(cin)
 
 	// At this point either cin returned FIN or RST
@@ -561,7 +662,6 @@ func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error)  {
 	errch <- err
 }
 
-
 type nameAddress string
 
 // name of the network (for example, "tcp", "udp")
@@ -571,4 +671,3 @@ func (na nameAddress) Network() string {
 func (na nameAddress) String() string {
 	return string(na)
 }
-

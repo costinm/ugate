@@ -3,32 +3,42 @@ package ugate
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"runtime/debug"
 	"time"
 )
 
+// Accepting connections on ports and extracting metadata, including sniffing.
+//
+
+var (
+	// ClientPreface is the string that must be sent by new
+	// connections from clients.
+	h2ClientPreface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+)
+
 // Called at the end of the connection handling. After this point
 // nothing should use or refer to the connection, both proxy directions
 // should already be closed for write or fully closed.
 func (ug *UGate) onAcceptDone(rc MetaConn) {
-	s := rc.Meta()
+	str := rc.Meta()
 	ug.m.Lock()
-	delete(ug.ActiveTcp, s.StreamId)
+	delete(ug.ActiveTcp, str.StreamId)
 	ug.m.Unlock()
 	tcpConActive.Add(-1)
 	// TODO: track multiplexed streams separately.
-	if s.ReadErr != nil {
+	if str.ReadErr != nil {
 		VarzSErrRead.Add(1)
 	}
-	if s.WriteErr != nil {
+	if str.WriteErr != nil {
 		VarzSErrWrite.Add(1)
 	}
-	if s.ProxyReadErr != nil {
+	if str.ProxyReadErr != nil {
 		VarzCErrRead.Add(1)
 	}
-	if s.ProxyWriteErr != nil {
+	if str.ProxyWriteErr != nil {
 		VarzCErrWrite.Add(1)
 	}
 
@@ -50,29 +60,26 @@ func (ug *UGate) onAcceptDone(rc MetaConn) {
 		log.Println("AC: Recovered in f", r, err)
 	}
 
-	if s.ReadErr != nil || s.WriteErr != nil {
-		log.Println("Err in:", s.ReadErr, s.WriteErr)
+	if str.ReadErr != io.EOF && str.ReadErr != nil ||
+		str.WriteErr != nil {
+		log.Println("Err in:", str.ReadErr, str.WriteErr)
 	}
-	if s.ProxyReadErr != nil || s.ProxyWriteErr != nil {
-		log.Println("Err out:", s.ProxyReadErr, s.ProxyWriteErr)
+	if str.ProxyReadErr != nil || str.ProxyWriteErr != nil {
+		log.Println("Err out:", str.ProxyReadErr, str.ProxyWriteErr)
+	}
+	if !str.Closed {
+		str.Close()
 	}
 
 	log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
-		s.StreamId,
-		s.Type, rc.RemoteAddr(),
-		s.Request.Host,
-		s.RcvdPackets, s.RcvdBytes,
-		s.SentPackets, s.SentBytes,
-		time.Since(s.LastWrite),
-		time.Since(s.LastRead),
-		int64(time.Since(s.Open).Seconds()))
-
-
-	// Make sure it is closed.
-	err := rc.Close()
-	if err == nil {
-		log.Println("Not closed ?")
-	}
+		str.StreamId,
+		str.Type, rc.RemoteAddr(),
+		str.Dest,
+		str.RcvdPackets, str.RcvdBytes,
+		str.SentPackets, str.SentBytes,
+		time.Since(str.LastWrite),
+		time.Since(str.LastRead),
+		int64(time.Since(str.Open).Seconds()))
 	if bc, ok := rc.(*RawConn); ok {
 		bufferedConPool.Put(bc)
 	}
@@ -90,28 +97,24 @@ func (ug *UGate) onAcceptDoneAndRecycle(rc *RawConn) {
 // - listeners with address 127.0.0.1
 // - connections with src/dst address in 127.0.0.0/8
 //
-// The last 2 are 'whitebox' mode, using the port and address to select
+// The last 2 are 'whitebox' mode, using the Port and address to select
 // the routes.
 //
 // After determining the target from meta or config the request is proxied.
-func (pl *PortListener) handleEgress(acceptedCon net.Conn) error {
+func (pl *Listener) handleEgress(acceptedCon net.Conn) error {
 
 	return nil
 }
 
 // WIP: handling for accepted connections for this node.
-func (pl *PortListener) handleLocal(acceptedCon net.Conn) error {
+func (pl *Listener) handleLocal(acceptedCon net.Conn) error {
 
 	return nil
 }
 
-func (ug *UGate) 	HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte) {
+func (ug *UGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte) {
 
 }
-
-// Hack for netstack/gvisor
-// TODO: add it to the interface if not switching to lwip
-var Reversed = false
 
 // For BTS/H2 and iptables-in, the config for the actual listen port is virtual.
 // LocalAddr port determines which config to use for routing.
@@ -128,27 +131,22 @@ func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
 	defer ug.onAcceptDone(bconn)
 
 	ra := conn.RemoteAddr()
-	la := conn.LocalAddr()
-
-	if Reversed {
-		ta := ra
-		ra = la
-		la = ta
-	}
+	//la := conn.LocalAddr()
 
 	// Testing/debugging - localhost is captured by table local, rule 0.
-	if bconn.Stream.Request.Host == "" {
+	if bconn.Stream.Dest == "" {
 		if ta, ok := ra.(*net.TCPAddr); ok {
 			if ta.Port == 5201 {
 				ta.IP = []byte{0x7f, 0, 0, 1}
 			}
-			bconn.Stream.Request.Host = ta.String()
-			log.Println("LTUN ", conn.RemoteAddr(), conn.LocalAddr(), bconn.Stream.Request.Host)
+			bconn.Stream.Dest = ta.String()
+			log.Println("LTUN ", conn.RemoteAddr(), conn.LocalAddr(), bconn.Stream.Dest)
 		}
 	}
+	bconn.Stream.Egress = true
 
 	// TODO: config ? Could be shared with iptables port
-	return ug.handleStream(bconn)
+	return ug.handleStream(bconn.Meta())
 }
 
 // Handle a virtual (multiplexed) stream, received over
@@ -157,13 +155,7 @@ func (ug *UGate) HandleVirtualIN(bconn MetaConn) error {
 	ug.trackStreamIN(bconn.Meta())
 	defer ug.onAcceptDone(bconn)
 
-	if len(bconn.Meta().Request.Header) == 0 {
-		// No metadata from headers, this is a plain stream.
-		// Try to decode a request.
-
-	}
-
-	return ug.handleStream(bconn)
+	return ug.handleStream(bconn.Meta())
 }
 
 // At this point the stream has the metadata:
@@ -171,29 +163,31 @@ func (ug *UGate) HandleVirtualIN(bconn MetaConn) error {
 // - Host
 // - Headers
 // - TLS context
-// The ListenerConfig may also be known.
-func (ug *UGate) handleStream(bconn MetaConn) error {
-	m := bconn.Meta()
-
-	if m.Listener == nil {
-		m.Listener = ug.findCfg(bconn)
+// - Dest and Listener are set.
+func (ug *UGate) handleStream(str *Stream) error {
+	if str.Listener == nil {
+		str.Listener = ug.DefaultListener
 	}
-	cfg := m.Listener
+	cfg := str.Listener
+
+	if cfg.Protocol == ProtoHTTPS {
+		str.PostDial(str, nil)
+		return ug.h2Handler.Handle(str)
+	}
 
 	// Config has an in-process handler - not forwarding (or the handler may
 	// forward).
 	if cfg.Handler != nil {
 		// SOCKS and others need to send something back - we don't
 		// have a real connection, faking it.
-		if pc, ok := bconn.(ProxyConn); ok {
-			pc.PostDial(bconn, nil)
-		}
-		return cfg.Handler.Handle(bconn)
+		str.PostDial(str, nil)
+		return cfg.Handler.Handle(str)
 	}
 
 	// By default, dial out
-	return ug.dialOut(bconn, m.Listener)
+	return ug.dialOut(str)
 }
+
 func (ug *UGate) trackStreamIN(s *Stream) {
 	ug.m.Lock()
 	ug.ActiveTcp[s.StreamId] = s
@@ -210,98 +204,87 @@ func (ug *UGate) trackStreamIN(s *Stream) {
 // - in:  destination is this host.
 // - ingress: terminate TLS, forward to a different host
 // - relay: proxy based on SNI/metadata without change
-func (ug *UGate) handleAcceptedConn(pl *PortListener, acceptedCon net.Conn) error {
-	var mConn MetaConn
-	// Get a buffered connection with metadata from the pool.
-	bconn := GetConn(acceptedCon)
-	ug.trackStreamIN(bconn.Meta())
-	defer pl.Gate.onAcceptDone(bconn)
-
-	mConn = bconn
-
-	// Attempt to determine the ListenerConf and target
+func (ug *UGate) handleAcceptedConn(l *Listener, acceptedCon net.Conn) {
+	// Attempt to determine the Listener and target
 	// Ingress mode, forward to an IP
-	cfg := pl.cfg
+	cfg := l
+
+	// Get a buffered connection with metadata from the pool.
 	//c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 
+	tlsTerm := false
 
-	// Special listeners - will extract real destination and port
-	// Both are also specific to egress.
-	if cfg.Protocol == ProtoSocks {
-		pl.Gate.sniffSOCKSConn(bconn)
-		bconn.Meta().Egress = true
-		cfg = ug.findCfg(bconn)
-	} else if cfg.Protocol == "iptables" {
-		bconn.Meta().Egress = true
-		if _, ok := bconn.ServerOut.(*net.TCPConn); ok {
-			pl.Gate.sniffIptables(bconn, cfg.Protocol)
-		} else {
-			return nil
-		}
+	// Get a buffered stream - this is used for sniffing.
+	// Most common case is TLS, we want the SNI.
+	bconn := GetConn(acceptedCon)
+	ug.trackStreamIN(bconn.Meta())
+	defer l.gate.onAcceptDone(bconn)
+	str := bconn.Meta()
 
-		cfg = ug.findCfg(bconn)
-	// 	Special listener for multiplexed in or forwarding.
-	} else if cfg.Protocol == "iptables-in" {
-		if _, ok := bconn.ServerOut.(*net.TCPConn); ok {
-			// This is typically for in, not mux (it's on a random port)
-			pl.Gate.sniffIptables(bconn, cfg.Protocol)
-		} else {
-			return nil
+	// Special protocols, muxed on a single port - will extract real
+	// destination and port.
+	//
+	// First are specific to egress capture.
+	switch cfg.Protocol {
+	case ProtoIPTablesIn:
+		// iptables is replacing the conn - process before creating the buffer
+		str.Dest, str.ReadErr = l.gate.sniffIptables(str, cfg.Protocol)
+		cfg = ug.findCfgIptablesIn(bconn)
+	case ProtoIPTables:
+		str.Dest, str.ReadErr = l.gate.sniffIptables(str, cfg.Protocol)
+		str.Egress = true
+	case ProtoSocks:
+		str.Egress = true
+		str.ReadErr = l.gate.readSocksHeader(bconn)
+	case ProtoHTTP:
+		str.ReadErr = l.gate.h2Handler.handleHTTPListener(l, bconn)
+		return
+	case ProtoHTTPS:
+		tlsTerm = true
+		// Used to present the right cert
+		str.ReadErr = l.gate.sniffSNI(bconn)
+	case ProtoTLS:
+		str.ReadErr = l.gate.sniffSNI(bconn)
+		if str.Dest == "" {
+			// No destination - terminate here
+			// TODO: also if dest hostname == local name or VIP or ID
+			tlsTerm = true
+			str.Dest = l.ForwardTo
 		}
-		cfg = ug.findCfg(bconn)
-	} else if cfg.Protocol == ProtoTLS {
-		// try to find the virtual host -
-		bconn.Sniff()
-		err := pl.Gate.sniffSNI(bconn)
-		if err != nil {
-			bconn.Stream.ReadErr = err
-			return err
-		}
+		// TODO: https + TLS - if we have a cert, accept it
+		// Else - forward based on forwardTo or Host
+		//if ug.Auth.certMap[str.Dest] != nil {
+		//	tlsTerm = true
+		//}
+	}
+	str.Listener = cfg
+	str.Type = cfg.Protocol
 
-		// More specific config - else use the default config on the tls
-		l := ug.Conf[bconn.Meta().Request.Host]
-		if l != nil {
-			cfg = l
-		}
+	if str.ReadErr != nil {
+		return
 	}
 
-	if cfg == nil {
-		cfg = pl.Gate.DefaultListener
+	if cfg.ForwardTo != "" {
+		// Override - for explicit ports and virtual ports
+		// At listener level.
+		str.Dest = cfg.ForwardTo
 	}
 
-	// Virtual listeners should update the cfg based on Host
-
-	// At this point we should have a 'cfg' for the virtual listener.
-	bconn.Stream.Listener = cfg
-	bconn.Meta().Type = cfg.Protocol
-
-	if cfg.Remote != "" {
-		bconn.Meta().Request.Host = cfg.Remote
-	} else if cfg.Dialer != nil {
-	} else if cfg.Protocol == "tcp" {
-		// Nothing to do, plain text
-	} else if cfg.Protocol == "http" {
-		// Not explicitly configured. Detect TLS, HTTP, HTTP/2
-		// TODO: HA-PROXY
-		// socks is generally used on localhost.
-		err := pl.sniff(bconn)
-		if err != nil {
-			return err
-		}
-	}
-
+	tlsOrOrigStr := str
 	// Terminate TLS if the stream is detected as TLS and the matched config
 	// is configured for termination.
 	// Else it's just a proxied SNI connection.
-	if cfg.TLSConfig != nil {
-		tc, err := NewTLSConnIn(bconn.Meta().Request.Context(), bconn, cfg.TLSConfig)
+	if tlsTerm {
+		tc, err := ug.NewTLSConnIn(str.Context(), bconn, ug.TLSConfig)
 		if err != nil {
-			return err
+			str.ReadErr = err
+			log.Println("TLS: ", err)
+			return
 		}
-		mConn = tc
+		tlsOrOrigStr = tc.Meta()
 	}
 
-	return ug.handleStream(mConn)
+	str.ReadErr = ug.handleStream(tlsOrOrigStr)
 }
 
 // Auto-detect protocol on the wire, so routing info can be
@@ -312,7 +295,7 @@ func (ug *UGate) handleAcceptedConn(pl *PortListener, acceptedCon net.Conn) erro
 // - SOCKS (5)
 // - H2
 // - TODO: HAproxy
-func (pl *PortListener) sniff(br *RawConn) error {
+func (pl *Listener) sniff(br *RawConn) error {
 	br.Sniff()
 	var proto string
 
@@ -327,7 +310,7 @@ func (pl *PortListener) sniff(br *RawConn) error {
 			b1 := br.buf[1]
 			if b0 == 5 {
 				proto = ProtoSocks
-				break;
+				break
 			}
 			// TLS or SNI - based on the hostname we may terminate locally !
 			if b0 == 22 && b1 == 3 {
@@ -355,12 +338,48 @@ func (pl *PortListener) sniff(br *RawConn) error {
 
 	switch proto {
 	case ProtoSocks:
-		pl.Gate.sniffSOCKSConn(br)
+		pl.gate.readSocksHeader(br)
 	case ProtoTLS:
-		pl.Gate.sniffSNI(br)
+		pl.gate.sniffSNI(br)
 	}
 	br.Stream.Type = proto
 
 	return nil
 }
 
+func (pl *Listener) sniffH2(br *RawConn) error {
+	br.Sniff()
+	var proto string
+
+	for {
+		_, err := br.Fill()
+		if err != nil {
+			return err
+		}
+		off := br.end
+		if ix := bytes.IndexByte(br.buf[0:off], '\n'); ix >=0 {
+			if bytes.Contains(br.buf[0:off], []byte("HTTP/1.1")) {
+				break
+			}
+		}
+		if off >= len(h2ClientPreface) {
+			if bytes.Equal(br.buf[0:len(h2ClientPreface)], h2ClientPreface) {
+				proto = ProtoH2
+				break
+			}
+		}
+	}
+
+	// All bytes in the buffer will be Read again
+	br.Reset(0)
+
+	switch proto {
+	case ProtoSocks:
+		pl.gate.readSocksHeader(br)
+	case ProtoTLS:
+		pl.gate.sniffSNI(br)
+	}
+	br.Stream.Type = proto
+
+	return nil
+}

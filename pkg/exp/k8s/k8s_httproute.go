@@ -591,4 +591,3 @@ type HTTPRouteForwardTo struct {
 type HTTPRouteStatus struct {
 	RouteStatus `json:",inline"`
 }
-

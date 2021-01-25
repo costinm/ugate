@@ -1,0 +1,12 @@
+# skaffold build --filename k8s/skaffold_docker.yaml --tag latest --skip-tests=true
+# 14 s 1st time
+# 2 sec noop
+
+apiVersion: skaffold/v2beta10
+kind: Config
+metadata: {name: ugate}
+build:
+  artifacts:
+    - image: gcr.io/dmeshgate/ugate
+      docker: {dockerfile: Dockerfile}
+  local: {push: true}

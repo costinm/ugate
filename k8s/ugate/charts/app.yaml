@@ -34,10 +34,10 @@ spec:
               name: http
             - containerPort: 5228
               name: tls
-#          envFrom:
-#          - configMapRef:
-#              name: wps
-#              optional: true
+          #          envFrom:
+          #          - configMapRef:
+          #              name: wps
+          #              optional: true
           env:
             - name: GOTRACEBACK
               value: "all"
@@ -81,8 +81,8 @@ spec:
               value: /etc/istio/proxy/
             # Override default ca addr - use real istiod
             # This will save the certs to a dir, available to local istiod
-#            - name: CA_ADDR
-#              value: istiod.istio-system.svc:15012
+            #            - name: CA_ADDR
+            #              value: istiod.istio-system.svc:15012
             - name: PROXY_CONFIG
               value: |-
                 discoveryAddress: istiod.istio-system.svc:15012
@@ -157,7 +157,7 @@ spec:
 
         # /etc/istio/proxy
         - name: istio-envoy
-          emptyDir: {}
+          emptyDir: { }
 
         # /var/run/secrets/istio - public key, autogen
         - name: istiod-ca-cert

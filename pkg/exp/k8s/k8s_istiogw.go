@@ -1,7 +1,5 @@
 package k8s
 
-
-
 // Gateway describes a load balancer operating at the edge of the mesh
 // receiving incoming or outgoing HTTP/TCP connections.
 //
@@ -49,7 +47,7 @@ type IstioGateway struct {
 	// resource must reside in the same namespace as the gateway workload
 	// instance.
 	// If selector is nil, the Gateway will be applied to all workloads.
-	Selector             map[string]string `protobuf:"bytes,2,rep,name=selector,proto3" json:"selector,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	Selector map[string]string `protobuf:"bytes,2,rep,name=selector,proto3" json:"selector,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	//XXX_NoUnkeyedLiteral struct{}          `json:"-"`
 	//XXX_unrecognized     []byte            `json:"-"`
 	//XXX_sizecache        int32             `json:"-"`

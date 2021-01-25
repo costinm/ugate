@@ -1,11 +1,11 @@
 package ugate
 
 import (
-	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
+	"os"
 	"syscall"
+	"unsafe"
 )
 
 //
@@ -19,29 +19,23 @@ import (
 // It works great for transparent proxy in a gateway/router - however same can be also done using the TUN
 // and routing to the TUN using iptables or other means.
 
-
+// Using: https://github.com/Snawoot/transocks/blob/v1.0.0/original_dst_linux.go
 // ServeConn is used to serve a single TCP UdpNat.
 // See https://github.com/cybozu-go/transocks
 // https://github.com/ryanchapman/go-any-proxy/blob/master/any_proxy.go,
 // and other examples.
 // Based on REDIRECT.
-func (ug *UGate) sniffIptables(conn *RawConn, proto string) error {
-	addr, port, conn1, err := getOriginalDst(conn.ServerOut.(*net.TCPConn))
-	if err != nil {
-		conn.Close()
-		return err
+func (ug *UGate) sniffIptables(str *Stream, proto string) (string, error) {
+	if _, ok := str.ServerOut.(*net.TCPConn); !ok {
+		return "", errors.New("invalid connection for iptbles")
 	}
+	ta, err := getOriginalDst(str.ServerOut.(*net.TCPConn))
+	if err != nil {
+		return "", err
+	}
+	str.DestAddr = ta
 
-	iaddr := net.IP(addr)
-
-	ta := net.TCPAddr{IP: iaddr, Port: int(port)}
-	conn.Meta().Request.Host = ta.String()
-	conn.Stream.Type = proto
-	// Needs to be replaced, original has been changed
-	conn.ServerOut = conn1
-	//log.Println("IPT ", proto, ta, conn.RemoteAddr())
-
-	return nil
+	return ta.String(), nil
 }
 
 const (
@@ -49,34 +43,38 @@ const (
 	IP6T_SO_ORIGINAL_DST = 80
 )
 
-// Should be used only for REDIRECT capture.
-func getOriginalDst(clientConn *net.TCPConn) (rawaddr []byte, port uint16, newTCPConn *net.TCPConn, err error) {
-
-	if clientConn == nil {
-		err = errors.New("ERR: clientConn is nil")
-		return
+func getsockopt(s int, level int, optname int, optval unsafe.Pointer, optlen *uint32) (err error) {
+	_, _, e := syscall.Syscall6(
+		syscall.SYS_GETSOCKOPT, uintptr(s), uintptr(level), uintptr(optname),
+		uintptr(optval), uintptr(unsafe.Pointer(optlen)), 0)
+	if e != 0 {
+		return e
 	}
+	return
+}
 
+// Should be used only for REDIRECT capture.
+func getOriginalDst(clientConn *net.TCPConn) (rawaddr *net.TCPAddr, err error) {
 	// test if the underlying fd is nil
 	remoteAddr := clientConn.RemoteAddr()
 	if remoteAddr == nil {
-		err = errors.New("ERR: clientConn.fd is nil")
+		err = errors.New("fd is nil")
 		return
 	}
 
-	//srcipport := fmt.Sprintf("%v", clientConn.RemoteAddr())
-
-	newTCPConn = nil
 	// net.TCPConn.File() will cause the receiver's (clientConn) socket to be placed in blocking mode.
 	// The workaround is to take the File returned by .File(), do getsockopt() to get the original
 	// destination, then create a new *net.TCPConn by calling net.Conn.FileConn().  The new TCPConn
 	// will be in non-blocking mode.  What a pain.
 	clientConnFile, err := clientConn.File()
 	if err != nil {
-		//common.Errorf("GETORIGINALDST|%v->?->FAILEDTOBEDETERMINED|ERR: could not get a copy of the client UdpNat's file object", srcipport)
 		return
-	} else {
-		clientConn.Close()
+	}
+	defer	clientConnFile.Close()
+
+	fd :=  int(clientConnFile.Fd())
+	if err = syscall.SetNonblock(fd, true); err != nil {
+		return
 	}
 
 	// Get original destination
@@ -86,33 +84,44 @@ func getOriginalDst(clientConn *net.TCPConn) (rawaddr []byte, port uint16, newTC
 	// IPv6 version, didn't find a way to detect network family
 	//addr, err := syscall.GetsockoptIPv6Mreq(int(clientConnFile.Fd()), syscall.IPPROTO_IPV6, IP6T_SO_ORIGINAL_DST)
 	// IPv4 address starts at the 5th byte, 4 bytes long (206 190 36 45)
-	addr, err := syscall.GetsockoptIPv6Mreq(int(clientConnFile.Fd()), syscall.IPPROTO_IP, SO_ORIGINAL_DST)
-	if err != nil {
-		return
-	}
-	newConn, err := net.FileConn(clientConnFile)
-	if err != nil {
-		return
-	}
-	if _, ok := newConn.(*net.TCPConn); ok {
-		newTCPConn = newConn.(*net.TCPConn)
-		clientConnFile.Close()
+	v6 := clientConn.LocalAddr().(*net.TCPAddr).IP.To4() == nil
+	if v6 {
+		var addr syscall.RawSockaddrInet6
+		var len uint32
+		len = uint32(unsafe.Sizeof(addr))
+		err = getsockopt(fd, syscall.IPPROTO_IPV6, IP6T_SO_ORIGINAL_DST,
+			unsafe.Pointer(&addr), &len)
+		if err != nil {
+			return
+		}
+		ip := make([]byte, 16)
+		for i, b := range addr.Addr {
+			ip[i] = b
+		}
+		pb := *(*[2]byte)(unsafe.Pointer(&addr.Port))
+		return &net.TCPAddr{
+			IP:   ip,
+			Port: int(pb[0])*256 + int(pb[1]),
+		}, nil
 	} else {
-		errmsg := fmt.Sprintf("ERR: newConn is not a *net.TCPConn, instead it is: %T (%v)", newConn, newConn)
-		err = errors.New(errmsg)
-		return
+		var addr syscall.RawSockaddrInet4
+		var len uint32
+		len = uint32(unsafe.Sizeof(addr))
+		err = getsockopt(fd, syscall.IPPROTO_IP, SO_ORIGINAL_DST,
+			unsafe.Pointer(&addr), &len)
+		if err != nil {
+			return nil, os.NewSyscallError("getsockopt", err)
+		}
+		ip := make([]byte, 4)
+		for i, b := range addr.Addr {
+			ip[i] = b
+		}
+		pb := *(*[2]byte)(unsafe.Pointer(&addr.Port))
+		return &net.TCPAddr{
+			IP:   ip,
+			Port: int(pb[0])*256 + int(pb[1]),
+		}, nil
 	}
-
-	// \attention: IPv4 only!!!
-	// address type, 1 - IPv4, 4 - IPv6, 3 - hostname, only IPv4 is supported now
-	rawaddr = make([]byte, 4)
-	// raw IP address, 4 bytes for IPv4 or 16 bytes for IPv6, only IPv4 is supported now
-	copy(rawaddr, addr.Multiaddr[4:8])
-
-	// Bigendian is the network bit order, seems to be used here.
-	port = binary.BigEndian.Uint16(addr.Multiaddr[2:])
-
-	return
 }
 
 //func isLittleEndian() bool {

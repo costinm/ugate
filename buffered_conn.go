@@ -16,7 +16,6 @@ import (
 	"io"
 	"net"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -37,7 +36,8 @@ var (
 var bufferedConPool = sync.Pool{New: func() interface{} {
 	// Should hold a TLS handshake message
 	return &RawConn{
-		buf: make([]byte, bufSize),
+		buf:    make([]byte, bufSize),
+		ipBuf:    make([]byte, net.IPv6len),
 		Stream: &Stream{},
 	}
 }}
@@ -90,6 +90,8 @@ type RawConn struct {
 
 	// If an error happened while sniffing
 	lastErr error
+
+	ipBuf []byte
 }
 
 func (b *RawConn) empty() bool {
@@ -184,14 +186,14 @@ func (b *RawConn) Read(p []byte) (int, error) {
 	sn, sErr := b.ServerIn.Read(p)
 	if sn > 0 && b.sniffing {
 		b.lastErr = sErr
-		if len(b.buf) < b.end+ sn {
+		if len(b.buf) < b.end+sn {
 			return sn, errors.New("short buffer")
 		}
 		copy(b.buf[b.end:], p[:sn])
 		b.end += sn
 	}
 	b.Stream.RcvdPackets++
-	b.Stream.RcvdBytes+= sn
+	b.Stream.RcvdBytes += sn
 	sErr = eof(sErr)
 	if sErr != nil {
 		b.Stream.ReadErr = sErr
@@ -267,12 +269,12 @@ func eof(err error) error {
 	if err == nil {
 		return nil
 	}
-	if err == io.EOF {
-		err = nil
-	}
-	if err1, ok := err.(*net.OpError); ok && err1.Err == syscall.EPIPE {
-		// typical close
-		err = nil
-	}
+	//if err == io.EOF {
+	//	err = nil
+	//}
+	//if err1, ok := err.(*net.OpError); ok && err1.Err == syscall.EPIPE {
+	//	// typical close
+	//	err = nil
+	//}
 	return err
 }

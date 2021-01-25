@@ -1,0 +1,11 @@
+# /home/costin/.cache/cloud-code/bin/versions/fc3bb462c885176f20d45250b00b028467f5ac0511f7233818e8463966984684/skaffold build --filename /tmp/skaffold11056912503626586399.tmp --tag latest --skip-tests=true
+# 23 sec
+
+apiVersion: skaffold/v2beta10
+kind: Config
+metadata: {name: ugate}
+build:
+  artifacts:
+    - image: gcr.io/dmeshgate/ugate
+      buildpacks: {builder: 'gcr.io/buildpacks/builder:v1'}
+  local: {push: true}

@@ -1,0 +1,33 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="ugate/Dockerfile" type="docker-deploy" factoryName="dockerfile" server-name="Docker">
+    <deployment type="dockerfile">
+      <settings>
+        <option name="imageTag" value="costinm/ugate:latest" />
+        <option name="buildCliOptions" value="" />
+        <option name="command" value="" />
+        <option name="containerName" value="ugate" />
+        <option name="entrypoint" value="" />
+        <option name="envVars">
+          <list>
+            <DockerEnvVarImpl>
+              <option name="name" value="PORT" />
+              <option name="value" value="9080" />
+            </DockerEnvVarImpl>
+          </list>
+        </option>
+        <option name="publishAllPorts" value="true" />
+        <option name="commandLineOptions" value="--cap-add=NET_ADMIN" />
+        <option name="sourceFilePath" value="../ugate/Dockerfile" />
+        <option name="volumeBindings">
+          <list>
+            <DockerVolumeBindingImpl>
+              <option name="containerPath" value="/var/lib/istio" />
+              <option name="hostPath" value="$PROJECT_DIR$/../work/s1" />
+            </DockerVolumeBindingImpl>
+          </list>
+        </option>
+      </settings>
+    </deployment>
+    <method v="2" />
+  </configuration>
+</component>

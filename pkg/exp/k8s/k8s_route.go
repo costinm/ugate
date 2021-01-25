@@ -58,7 +58,6 @@ type RouteGateways struct {
 	GatewayRefs []GatewayReference `json:"gatewayRefs,omitempty"`
 }
 
-
 // RouteStatus defines the observed state that is required across
 // all route types.
 type RouteStatus struct {
@@ -213,4 +212,3 @@ type RouteForwardTo struct {
 	// +kubebuilder:validation:Maximum=1000000
 	Weight int32 `json:"weight,omitempty"`
 }
-

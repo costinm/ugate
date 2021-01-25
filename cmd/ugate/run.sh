@@ -6,5 +6,9 @@
 
 PROXY_GID=1337
 
-/usr/local/bin/iptables.sh
+pwd
+env
+if [ -z "$PORT" ] ; then
+  /usr/local/bin/iptables.sh
+fi
 exec su istio-proxy -s /usr/local/bin/ugate

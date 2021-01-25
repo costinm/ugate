@@ -17,4 +17,3 @@ package k8s
 // the metadata (port is based on listener port or meta), and info in context about which
 // gateway terminated.
 //
-

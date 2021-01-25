@@ -37,8 +37,8 @@ type SPDYConn struct {
 
 func NewSPDY(raw net.Conn, srv bool) (*SPDYConn, error) {
 	h2c := &SPDYConn{
-		framer: http2.NewFramer(raw, raw),
-		streams: map[uint32]*H2Stream{},
+		framer:       http2.NewFramer(raw, raw),
+		streams:      map[uint32]*H2Stream{},
 		nextStreamID: 3,
 	}
 
@@ -82,14 +82,13 @@ func (c *SPDYConn) NewStream(ctx context.Context, req *http.Request) (*H2Stream,
 		}
 	}
 	err := c.framer.WriteHeaders(http2.HeadersFrameParam{
-		StreamID: id,
-		EndHeaders: true,
+		StreamID:      id,
+		EndHeaders:    true,
 		BlockFragment: s.hbuf.Bytes(),
 	})
 
 	return s, err
 }
-
 
 func (h2c *SPDYConn) serve() error {
 	// TODO: Settings handshake
@@ -173,10 +172,10 @@ func (h2s *SPDYConn) addStream(id uint32, f *http2.HeadersFrame) *H2Stream {
 	// TODO: reuse
 	bb := &bytes.Buffer{}
 	ss := &H2Stream{
-		s: h2s,
+		s:    h2s,
 		hbuf: bb,
 		henc: hpack.NewEncoder(bb),
-		hdec : hpack.NewDecoder(uint32(4<<10), func(hf hpack.HeaderField) {
+		hdec: hpack.NewDecoder(uint32(4<<10), func(hf hpack.HeaderField) {
 			log.Println("Header: ", hf.Name, hf.Value)
 		}),
 	}
@@ -201,9 +200,8 @@ func (h2s *SPDYConn) stream(id uint32) *H2Stream {
 type H2Stream struct {
 	meta *ugate.Stream
 
-
 	id *uint32
-	s *SPDYConn
+	s  *SPDYConn
 
 	hbuf *bytes.Buffer // HPACK encoder writes into this
 	hdec *hpack.Decoder
@@ -214,7 +212,7 @@ type H2Stream struct {
 	DataHandlerNB func(*http2.DataFrame) error
 
 	readClosed bool
-	unread []byte
+	unread     []byte
 }
 
 // TODO
@@ -240,12 +238,10 @@ func (str *H2Stream) Read(p []byte) (n int, err error) {
 	if len(str.unread) > 0 {
 
 	}
-	f := <- str.dataChan
+	f := <-str.dataChan
 	if f.StreamEnded() {
 
 	}
 
 	panic("implement me")
 }
-
-

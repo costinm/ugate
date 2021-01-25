@@ -1,13 +1,16 @@
 package ugate
 
 import (
-	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"golang.org/x/net/http2"
 )
@@ -21,22 +24,28 @@ import (
 type H2Transport struct {
 	ug     *UGate
 	Prefix string
-	Mux    *http.ServeMux
 
 	httpListener *listener
 	h2t          *http2.Transport
 	h2Server     *http2.Server
 
 	ALPNHandlers map[string]ConHandler
-	H2R          map[string]*http2.ClientConn
+
+	// Key is a Host:, as it would show in SOCKS and SNI
+	H2R map[string]*http2.ClientConn
+
+	reverse map[string]*Stream
+	fs      http.Handler
 }
 
 func NewH2Transport(ug *UGate) (*H2Transport, error) {
 	h2 := &H2Transport{
-		ug: ug,
+		ug:           ug,
 		httpListener: newListener(),
-		h2t: &http2.Transport{},
-		Mux: http.NewServeMux(),
+		h2t: &http2.Transport{
+			ReadIdleTimeout: 10 * time.Second,
+		},
+		reverse: map[string]*Stream{},
 		ALPNHandlers: map[string]ConHandler{
 
 		},
@@ -44,6 +53,10 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 	}
 	h2.h2Server = &http2.Server{}
 
+	if _, err := os.Stat("./www"); err == nil {
+		h2.fs = http.FileServer(http.Dir("./www"))
+		ug.Mux.Handle("/", h2.fs)
+	}
 
 	// Plain HTTP requests - we only care about CONNECT/ws
 	go http.Serve(h2.httpListener, h2)
@@ -51,136 +64,88 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 	return h2, nil
 }
 
-// Reverse Accept dials a connection to addr, and registers a H2 SERVER
-// conn on it. The other end will register a H2 client, and create streams.
-// The client cert will be used to associate incoming streams, based on config or direct mapping.
-// TODO: break it in 2 for tests to know when accept is in effect.
-func (t *H2Transport) ReverseAccept(addr string) error {
-	ctx := context.Background()
-	tc, err := t.ug.DialContext(ctx, "h2r", addr)
-	if err != nil {
-		return err
+// UpdateReverseAccept updates the upstream accept connections, based on config.
+func (t *H2Transport) UpdateReverseAccept() {
+	for addr, key := range t.ug.Config.H2R {
+		t.maintainRemoteAccept(addr, key)
 	}
-	t.h2Server.ServeConn(
-		tc,
-		&http2.ServeConnOpts{
-			Handler: t,  // Also plain text, needs to be upgraded
-			Context: ctx,
-
-			//Context: // can be used to cancel, pass meta.
-			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
-		})
-	log.Println("Reverse accept closed")
-	// TODO: keep alive
-	return nil
+	for addr, str := range t.reverse {
+		if _, f := t.ug.Config.H2R[addr]; !f {
+			log.Println("Closing removed upstream ", addr)
+			str.Close()
+			delete(t.reverse, addr)
+		}
+	}
 }
 
-// TODO: implement H2 ClientConnPool
-
-// Get a client connection for connecting to a host.
-func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.ClientConn, error) {
-	// The h2 Transport has support for dialing TLS, with the std handshake.
-	// It is possible to replace Transport.DialTLS, used in clientConnPool
-	// which tracks active connections. Or specify a custom conn pool.
-
-	// TODO: reuse connection or use egress server
-	// TODO: track it by addr
-	tc, err := t.ug.DialContext(req.Context(), "tls", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	cc, err :=  t.ug.h2Handler.h2t.NewClientConn(tc)
-
-	return cc, err
-}
-
-func (t *H2Transport) MarkDead(h2c *http2.ClientConn) {
-	log.Println("Dead", h2c)
-}
-
-// HTTP round-trip using the mesh connections. Will use mTLS and internal
-// routing to create the TLS stream.
-func (t *H2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	cc, err := t.GetClientConn(req, req.Host)
-	if err != nil {
-		return nil, err
-	}
-	return cc.RoundTrip(req)
-}
-
-// WIP: can be registered using handlers-by-ALPN
-// May not be needed if H2R works well.
-//func (t *H2Transport) HandleSPDY(c MetaConn) error {
-//	sc, err := h2raw.NewSPDY(c, true)
-//	if err != nil {
-//		return err
-//	}
-//	sc.serve()
-//	return nil
-//}
-
-// Handle a reverse H2 connection, negotiated at TLS handshake level.
-// The connection was accepted, but we act as client. GetClientConn will use the reverse conn.
-func (t *H2Transport) HandleH2R(c MetaConn) error {
-	// This is the H2 in reverse - start a TLS client conn, and keep  track of it
-	// for forwarding to the dest.
-	cc, err := t.h2t.NewClientConn(c)
-	if err != nil {
-		return err
-	}
-	k := c.Meta().RemoteID()
-	t.H2R[k] = cc
-	// Wait until t.MarkDead is called - or the con is closed
-	rc := c.Meta().Request.Context()
-	<- rc.Done()
-	log.Println("H2R done", k)
-	delete(t.H2R, k)
-	return nil
-}
-
-// Implements the Handle connection interface for uGate.
-//
-func (t *H2Transport) Handle(c MetaConn) error {
-	// http2 and http expect a net.Listener, and do their own accept()
-	meta := c.Meta()
-	if meta.Request.TLS != nil && meta.Request.TLS.NegotiatedProtocol == "h2r" {
-		return t.HandleH2R(c)
-	}
-	if meta.Request.TLS != nil && meta.Request.TLS.NegotiatedProtocol == "h2" {
-		t.h2Server.ServeConn(
-			c,
-			&http2.ServeConnOpts{
-				Handler: t,  // Also plain text, needs to be upgraded
-				Context: c.Meta().Request.Context(),
-
-				//Context: // can be used to cancel, pass meta.
-				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
-			})
-		return nil
-	}
-
-	if c.Meta().Type == ProtoConnect {
-		t.httpListener.incoming <- c
-		// TODO: wait for connection to be closed.
-		<- c.Meta().Request.Context().Done()
-	}
-
-	return nil
-}
-
-func (l *H2Transport) Close() error {
-	return nil
-}
-
-// Common entry point for H1, H2, both plain and tls
+// Common entry point for H1, H2 - both plain and tls
 func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Println("Request ", r)
+	t0 := time.Now()
+	var Pub []byte
+	var SAN string
+	defer func() {
+		// TODO: add it to an event buffer
+		log.Println("HTTP", r, Pub, SAN,
+			//h2c.SAN, h2c.ID(),
+			r.RemoteAddr, r.URL, time.Since(t0))
+		if r := recover(); r != nil {
+			fmt.Println("Recovered in f", r)
+
+			debug.PrintStack()
+
+			// find out exactly what the error was and set err
+			var err error
+
+			switch x := r.(type) {
+			case string:
+				err = errors.New(x)
+			case error:
+				err = x
+			default:
+				err = errors.New("Unknown panic")
+			}
+			if err != nil {
+				fmt.Println("ERRROR: ", err)
+			}
+		}
+	}()
+
+	vapidH := r.Header["Authorization"]
+	if len(vapidH) > 0 {
+		tok, pub, err := CheckVAPID(vapidH[0], time.Now())
+		if err == nil {
+			Pub = pub
+			SAN = tok.Sub
+		}
+	}
+
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		pk1 := r.TLS.PeerCertificates[0].PublicKey
+		Pub = PublicKeyBytesRaw(pk1)
+		// TODO: Istio-style, signed by a trusted CA. This is also for SSH-with-cert
+		sans, _ := GetSAN(r.TLS.PeerCertificates[0])
+		if len(sans) > 0 {
+			SAN = sans[0]
+		}
+	}
+
+	// TODO: authz for each case !!!!
 
 	// For plain http requests, the context doesn't have useful data.
+	parts := strings.Split(r.RequestURI, "/")
 
-	if r.ProtoMajor > 1 {
-		parts := strings.Split(r.RequestURI, "/")
+	// Explicit hostname - forwardTo the node.
+	// The request may be a BTS TCP proxy or HTTP - either way forwarding is the same
+	// if the dest is a mesh node (BTS).
+	//
+	// Special case: local plain text http or http2 server ( sidecar )
+	host, found := l.ug.Config.Hosts[r.Host]
+	if found {
+		l.ForwardHTTP(w, r, host.Addr)
+		return
+	}
+
+	//if r.ProtoMajor > 1 {
 		if len(parts) > 2 {
 			if parts[1] == "h2r" {
 				// Regular H2 request, the ALPN negotiation failed due to infrastructure.
@@ -190,8 +155,14 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				r.Host = parts[2]
 				r.URL.Scheme = "https"
 				r.URL.Path = strings.Join(parts[3:], "/")
-				str := l.ug.NewStreamRequest(r, w, nil)
+				str := NewStreamRequest(r, w, nil)
 				str.postDial = func(conn net.Conn, err error) {
+					if err != nil {
+						w.Header().Add("Error", err.Error())
+						w.WriteHeader(500)
+						w.(http.Flusher).Flush()
+						return
+					}
 					w.WriteHeader(200)
 					w.(http.Flusher).Flush()
 				}
@@ -200,14 +171,12 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			} else if parts[1] == "tcp" {
 				// Will use r.Host to find the destination - not sure if this is right.
-				s := l.ug.NewStreamRequest(r, w, nil)
+				s := NewStreamRequest(r, w, nil)
 				l.ug.HandleVirtualIN(s)
 				return
 			}
 		}
-		l.Mux.ServeHTTP(w, r)
-		return
-	}
+
 	// HTTP/1.1
 	if r.Method == "CONNECT" {
 		// WS or HTTP Proxy
@@ -222,176 +191,85 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// TODO: HTTP Proxy with absolute URL
 
 	// Regular HTTP/1.1 methods
-
+	l.ug.Mux.ServeHTTP(w,r)
 }
 
-// createUpstremRequest shallow-copies r into a new request
-// that can be sent upstream.
+// Handle accepted connection on a port declared as "http"
+// Will sniff H2 and use the right handler.
 //
-// Derived from reverseproxy.go in the standard Go httputil package.
-// Derived from caddy
-func createUpstreamRequest(rw http.ResponseWriter, r *http.Request) (*http.Request, context.CancelFunc) {
-	// Original incoming DmDns request may be canceled by the
-	// user or by std lib(e.g. too many idle connections).
-	ctx, cancel := context.WithCancel(r.Context())
-	if cn, ok := rw.(http.CloseNotifier); ok {
-		notifyChan := cn.CloseNotify()
-		go func() {
-			select {
-			case <-notifyChan:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-	}
-
-	outreq := r.WithContext(ctx) // includes shallow copies of maps, but okay
-
-	// We should set body to nil explicitly if request body is empty.
-	// For DmDns requests the Request Body is always non-nil.
-	if r.ContentLength == 0 {
-		outreq.Body = nil
-	}
-
-	// We are modifying the same underlying map from req (shallow
-	// copied above) so we only copy it if necessary.
-	copiedHeaders := false
-
-	// Remove hop-by-hop headers listed in the "Connection" header.
-	// See RFC 2616, section 14.10.
-	if c := outreq.Header.Get("Connection"); c != "" {
-		for _, f := range strings.Split(c, ",") {
-			if f = strings.TrimSpace(f); f != "" {
-				if !copiedHeaders {
-					outreq.Header = make(http.Header)
-					copyHeader(outreq.Header, r.Header)
-					copiedHeaders = true
-				}
-				outreq.Header.Del(f)
-			}
-		}
-	}
-
-	// Remove hop-by-hop headers to the backend. Especially
-	// important is "Connection" because we want a persistent
-	// connection, regardless of what the client sent to us.
-	for _, h := range hopHeaders {
-		if outreq.Header.Get(h) != "" {
-			if !copiedHeaders {
-				outreq.Header = make(http.Header)
-				copyHeader(outreq.Header, r.Header)
-				copiedHeaders = true
-			}
-			outreq.Header.Del(h)
-		}
-	}
-
-	if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		// If we aren't the first proxy, retain prior
-		// X-Forwarded-For information as a comma+space
-		// separated list and fold multiple headers into one.
-		if prior, ok := outreq.Header["X-Forwarded-For"]; ok {
-			clientIP = strings.Join(prior, ", ") + ", " + clientIP
-		}
-		outreq.Header.Set("X-Forwarded-For", clientIP)
-	}
-
-	return outreq, cancel
-}
-
-// Hop-by-hop headers. These are removed when sent to the backend in createUpstreamRequest
-// http://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html
-var hopHeaders = []string{
-	"Alt-Svc",
-	"Alternate-Protocol",
-	"Connection",
-	"Keep-Alive",
-	"HTTPGate-Authenticate",
-	"HTTPGate-Authorization",
-	"HTTPGate-Connection", // non-standard but still sent by libcurl and rejected by e.g. google
-	"Te",                  // canonicalized version of "TE"
-	"Trailer",             // not Trailers per URL above; http://www.rfc-editor.org/errata_search.php?eid=4522
-	"Transfer-Encoding",
-	"Upgrade",
-}
-
-// used in createUpstreamRequetst to copy the headers to the new req.
-func copyHeader(dst, src http.Header) {
-	for k, vv := range src {
-		if _, ok := dst[k]; ok {
-			// skip some predefined headers
-			// see https://github.com/mholt/caddy/issues/1086
-			if _, shouldSkip := skipHeaders[k]; shouldSkip {
-				continue
-			}
-			// otherwise, overwrite to avoid duplicated fields that can be
-			// problematic (see issue #1086) -- however, allow duplicate
-			// Server fields so we can see the reality of the proxying.
-			if k != "Server" {
-				dst.Del(k)
-			}
-		}
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
-}
-
-// skip these headers if they already exist.
-// see https://github.com/mholt/caddy/pull/1112#discussion_r80092582
-var skipHeaders = map[string]struct{}{
-	"Content-Type":        {},
-	"Content-Disposition": {},
-	"accept-Ranges":       {},
-	"Set-Cookie":          {},
-	"Cache-Control":       {},
-	"Expires":             {},
-}
-
-// Used by both ForwardHTTP and ForwardMesh, after RoundTrip is done.
-// Will copy response headers and body
-func SendBackResponse(w http.ResponseWriter, r *http.Request,
-		res *http.Response, err error) {
-
+// Ex: curl localhost:9080/debug/vars --http2-prior-knowledge
+func (t *H2Transport) handleHTTPListener(pl *Listener, bconn *RawConn) error {
+	err := pl.sniffH2(bconn)
 	if err != nil {
-		if res != nil {
-			CopyHeaders(w.Header(), res.Header)
-			w.WriteHeader(res.StatusCode)
-			io.Copy(w, res.Body)
-			log.Println("Got ", err, res.Header)
-		} else {
-			http.Error(w, err.Error(), 500)
+		return err
+	}
+	ctx := bconn.Context()
+
+	if bconn.Stream.Type == ProtoH2 {
+		bconn.TLS = &tls.ConnectionState{
+			Version: tls.VersionTLS12,
+			CipherSuite: tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 		}
-		return
+		t.h2Server.ServeConn(
+			bconn,
+			&http2.ServeConnOpts{
+				Handler: t,                  // Also plain text, needs to be upgraded
+				Context: ctx, // associated with the stream, with cancel
+
+				//Context: // can be used to cancel, pass meta.
+				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
+			})
+	} else {
+		bconn.Stream.Type = ProtoHTTP
+		// TODO: identify 'the proxy protocol'
+		// port is marked as HTTP - assume it is HTTP
+		t.httpListener.incoming <- bconn
+		// TODO: wait for connection to be closed.
+		<-ctx.Done()
 	}
 
-	origBody := res.Body
-	defer origBody.Close()
+	return nil
+}
 
-	CopyHeaders(w.Header(), res.Header)
-	w.WriteHeader(res.StatusCode)
+// Implements the Handle connection interface for uGate.
+//
+func (t *H2Transport) Handle(c MetaConn) error {
+	// http2 and http expect a net.Listener, and do their own accept()
+	str := c.Meta()
+	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2r" {
+		return t.HandleH2R(str)
+	}
+	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2" {
+		t.h2Server.ServeConn(
+			c,
+			&http2.ServeConnOpts{
+				Handler: t,                  // Also plain text, needs to be upgraded
+				Context: c.Meta().Context(), // associated with the stream, with cancel
 
-	stats := &Stream{}
-	n, err := stats.CopyBuffered(w, res.Body, true)
+				//Context: // can be used to cancel, pass meta.
+				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
+			})
+		return nil
+	}
 
-	log.Println("Done: ", r.URL, res.StatusCode, n, err)
+	if str.Type == ProtoConnect {
+		t.httpListener.incoming <- c
+		// TODO: wait for connection to be closed.
+		<-str.Context().Done()
+	}
+
+	return nil
+}
+
+func (l *H2Transport) Close() error {
+	return nil
 }
 
 
-// Also used in httpproxy_capture, for forward http proxy
-func CopyHeaders(dst, src http.Header) {
-	for k, _ := range dst {
-		dst.Del(k)
-	}
-	for k, vs := range src {
-		for _, v := range vs {
-			dst.Add(k, v)
-		}
-	}
-}
-
-
-// Listener backed on an chan.
+// Listener backed on an chan. Go HTTP stack requires a Listener
+// implementation - use with http.Serve().
+// Used with a port sniffer - i.e. a real listener will identify HTTP
+// and H2 requests, and dispatch to the channel listener for HTTP.
 type listener struct {
 	l net.Listener
 
@@ -400,7 +278,7 @@ type listener struct {
 }
 
 func newListener() *listener {
-	return &listener {
+	return &listener{
 		incoming: make(chan net.Conn),
 		closed:   make(chan struct{}),
 	}

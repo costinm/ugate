@@ -100,6 +100,15 @@ func (p *Pipe) Write(d []byte) (n int, err error) {
 // The error must be non-nil.
 func (p *Pipe) CloseWithError(err error) { p.closeWithError(&p.err, err, nil) }
 
+func (p *Pipe) CloseWrite() error {
+	return p.Close()
+}
+
+func (p *Pipe) Close() error {
+	p.closeWithError(&p.err, io.EOF, nil)
+	return nil
+}
+
 // BreakWithError causes the next Read (waking up a current blocked
 // Read if needed) to return the provided err immediately, without
 // waiting for unread data.
@@ -119,6 +128,7 @@ func (p *Pipe) closeWithError(dst *error, err error, fn func()) {
 		p.c.L = &p.mu
 	}
 	defer p.c.Signal()
+
 	if *dst != nil {
 		// Already been done.
 		return

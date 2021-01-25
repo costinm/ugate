@@ -1,92 +1,68 @@
 package ugate
 
 import (
+	"bytes"
+	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"testing"
-	"time"
-
-	"context"
 
 	"github.com/costinm/ugate/pkg/pipe"
+	"golang.org/x/crypto/ed25519"
 )
 
-// Run a suite of tests with a specific key, to repeat the tests for all types of keys.
-func testKey(k crypto.PrivateKey, t *testing.T) {
-	pk := PublicKey(k)
-	if pk == nil {
-		t.Fatal("Invalid public")
+func initServer(basePort int, cfg *GateCfg) *UGate {
+	if cfg == nil {
+		cfg = &GateCfg{
+			BasePort: basePort,
+			//H2R: map[string]string{
+			//	"127.0.0.1:15007": "",
+			//},
+		}
 	}
-	id := IDFromPublicKey(pk)
+	ug := NewGate(&net.Dialer{}, nil, cfg)
 
-	kb, err := MarshalPrivateKey(k)
-	if err != nil {
-		t.Fatal(err)
+	log.Println("Starting server EC", IDFromPublicKey(PublicKey(ug.Auth.EC256Cert.PrivateKey)))
+	if ug.Auth.ED25519Cert != nil {
+		log.Println("Starting server ED", IDFromPublicKey(PublicKey(ug.Auth.ED25519Cert.PrivateKey)))
 	}
-	_, err = UnmarshalPrivateKey(kb)
-	if err != nil {
-		t.Fatal(err)
+	if ug.Auth.RSACert != nil {
+		log.Println("Starting server RSA", IDFromPublicKey(PublicKey(ug.Auth.RSACert.PrivateKey)))
 	}
-
-
-	crt, err := KeyToCertificate(k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := RawToCertChain(crt.Certificate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	certPub, err := PubKeyFromCertChain(chain)
-	if id != IDFromPublicKey(certPub) {
-		t.Fatal("Cert chain public key not matching", id, IDFromPublicKey(certPub))
-	}
-
-	t.Log("Key ID:", id)
-
-	ug := NewGate(&net.Dialer{}, nil)
-	_, _, _ = ug.Add(&ListenerConf{
-
-	})
-
-}
-
-func initServer(basePort int) *UGate {
-	ug := NewGate(&net.Dialer{}, nil)
-	ug.DefaultPorts(basePort)
-
-	log.Println("Starting server EC", IDFromPublicKey(ug.Auth.EC256PrivateKey.Public()))
-	if ug.Auth.EDPrivate != nil {
-		log.Println("Starting server ED", IDFromPublicKey(ug.Auth.EDPrivate.Public()))
-	}
-	if ug.Auth.RSAPrivate != nil {
-		log.Println("Starting server RSA", IDFromPublicKey(ug.Auth.RSAPrivate.Public()))
-	}
-
 
 	// Echo - TCP
-	_, _, _ = ug.Add(&ListenerConf{
-		Port: basePort + 11,
-		Protocol: "tls",
-		TLSConfig: ug.TLSConfig,
-		Handler:  &EchoHandler{},
+	_, _, _ = ug.Add(&Listener{
+		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+11),
+		Protocol:  "tls",
+		Handler:   &EchoHandler{},
 	})
-	_, _, _ = ug.Add(&ListenerConf{
-		Port: basePort + 12,
-		Handler:  &EchoHandler{},
+	_, _, _ = ug.Add(&Listener{
+		Address: fmt.Sprintf("0.0.0.0:%d", basePort+12),
+		Handler: &EchoHandler{},
 	})
-	ug.h2Handler.Mux.Handle("/", &EchoHandler{})
+	ug.Mux.Handle("/", &EchoHandler{})
 	return ug
 }
 
-func checkEcho(in io.Reader, out io.Writer) (string, error){
+var chunk1 = []byte("Hello world")
+var chunk2 = []byte("chunk2")
+
+func checkEcho(in io.Reader, out io.Writer) (string, error) {
 	d := make([]byte, 2048)
-	_, err := out.Write([]byte("Hello world"))
+	// Start with a write - client send first (echo will wait, to verify that body is not cached)
+	_, err := out.Write(chunk1)
 	if err != nil {
 		return "", err
 	}
@@ -96,16 +72,94 @@ func checkEcho(in io.Reader, out io.Writer) (string, error){
 	if err != nil {
 		return "", err
 	}
-	// Expect a JSON with request info, plus what we wrote.
 
-	return string(d[0:n]), nil
+	idx := bytes.IndexByte(d[0:n], '\n')
+	if idx < 0 {
+		return string(d[0:n]), errors.New("missing header")
+	}
+	js := string(d[0:idx])
+
+	// Server writes 2 chunkes - the header and what we wrote
+	n, err = in.Read(d)
+	if err != nil {
+		return "", err
+	}
+
+	if !bytes.Equal(chunk1, d[0:n]) {
+		return js, errors.New("miss-matched result " + string(d[0:n]))
+	}
+
+	_, err = out.Write(chunk2)
+	if err != nil {
+		return "", err
+	}
+
+	n, err = in.Read(d)
+	if err != nil {
+		return "", err
+	}
+
+	if !bytes.Equal(chunk2, d[0:n]) {
+		return js, errors.New("miss-matched result " + string(d[0:n]))
+	}
+
+	/*	_, err = out.Write([]byte("close\n"))
+		if err != nil {
+			return "", err
+		}
+	*/
+	if cw, ok := out.(CloseWriter); ok {
+		cw.CloseWrite()
+	} else {
+		out.(io.Closer).Close()
+	}
+	n, err = in.Read(d)
+	if err != io.EOF {
+		log.Println("unexpected ", err)
+	}
+
+	return js, nil
+}
+
+func xTestLive(t *testing.T) {
+	m := "10.1.10.228:15007"
+	ag := initServer(6300, &GateCfg{
+		BasePort: 6300,
+		H2R: map[string]string{
+			//"h.webinf.info:15007": "",
+			m: "",
+		},
+	})
+	//ag.h2Handler.UpdateReverseAccept()
+
+	//err := ag.h2Handler.maintainRemoteAccept("h.webinf.info:15007", "")
+	//if err != nil {
+	//	t.Fatal("Failed to RA", err)
+	//}
+
+	//p := pipe.New()
+	//r, _ := http.NewRequest("POST",
+	//	"https://" + m + "/dm/" + IDFromPublicKey(ag.Auth.EC256PrivateKey.Public()), p)
+	//res, err := ag.h2Handler.RoundTrip(r)
+	//
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
+	//
+	//res1, err := checkEcho(res.Body, p)
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
+
+	log.Println(ag)
+	//log.Println(res1, ag)
+	select {}
 }
 
 func TestSrv(t *testing.T) {
-	ag := initServer( 6000)
-	bg := initServer( 6100)
-	cg := initServer( 6200)
-
+	ag := initServer(6000, nil)
+	bg := initServer(6100, nil)
+	cg := initServer(6200, nil)
 
 	//http2.DebugGoroutines = true
 	t.Run("Echo-tcp", func(t *testing.T) {
@@ -141,132 +195,164 @@ func TestSrv(t *testing.T) {
 	t.Run("H2-egress", func(t *testing.T) {
 		// This is a H2 request that is forwarded to a stream.
 		p := pipe.New()
-		r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/" + "127.0.0.1:6112", p)
+		r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+"127.0.0.1:6112", p)
 		res, err := ag.h2Handler.RoundTrip(r)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		d := make([]byte, 1024)
-
-		_, err = p.Write([]byte{1})
+		res1, err := checkEcho(res.Body, p)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		//ab.SetDeadline(time.Now().Add(5 * time.Second))
-		n, err := res.Body.Read(d)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		log.Println(string(d[0:n]), ag, bg)
+		log.Println(res1, ag, bg)
 	})
 
 	t.Run("H2R", func(t *testing.T) {
-		go func() {
-			// Bob's gateway acts as listener/accepter for Alice.
-			// Alice maintains the reverse H2 connection open.
-			err := ag.h2Handler.ReverseAccept("127.0.0.1:6107")
-			log.Println("reverse accept closed", err)
-		}()
-
-		time.Sleep(1 * time.Second)
+		ag.Config.H2R = map[string]string{
+			"127.0.0.1:6107": "",
+		}
+		ag.h2Handler.UpdateReverseAccept()
 		// Connecting to Bob's gateway (from c). Request should go to Alice.
 		//
 		p := pipe.New()
 		r, _ := http.NewRequest("POST",
-			"https://127.0.0.1:6107/dm/" + IDFromPublicKey(ag.Auth.EC256PrivateKey.Public()), p)
+			"https://127.0.0.1:6107/dm/"+ag.Auth.ID, p)
 		res, err := cg.h2Handler.RoundTrip(r)
 
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		d := make([]byte, 1024)
-
-		_, err = p.Write([]byte{1})
+		res1, err := checkEcho(res.Body, p)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		//ab.SetDeadline(time.Now().Add(5 * time.Second))
-		n, err := res.Body.Read(d)
-		if err != nil {
-			t.Fatal(err)
-		}
+		log.Println(res1, ag, bg)
 
-		log.Println(string(d[0:n]), ag, bg)
+		ag.Config.H2R = map[string]string{
+		}
+		ag.h2Handler.UpdateReverseAccept()
+		if len(ag.h2Handler.reverse) > 0 {
+			t.Error("Failed to disconnect")
+		}
 	})
+}
 
+// Run a suite of tests with a specific key, to repeat the tests for all types of keys.
+func testKey(k crypto.PrivateKey, t *testing.T) {
+	pk := PublicKey(k)
+	if pk == nil {
+		t.Fatal("Invalid public")
+	}
+	id := IDFromPublicKey(pk)
+	//crt, err := KeyToCertificate(k)
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
+	//chain, err := RawToCertChain(crt.Certificate)
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
+	//certPub, err := PubKeyFromCertChain(chain)
+	//if id != IDFromPublicKey(certPub) {
+	//	t.Fatal("Cert chain public key not matching", id, IDFromPublicKey(certPub))
+	//}
+
+	t.Log("Key ID:", id)
+}
+
+type MemCfg struct {
+	data map[string][]byte
+}
+
+func (m MemCfg) Get(name string) ([]byte, error) {
+	return m.data[name], nil
+}
+
+func (m MemCfg) Set(conf string, data []byte) error {
+	m.data[conf] = data
+	return nil
+}
+
+func (m MemCfg) List(name string, tp string) ([]string, error) {
+	return []string{}, nil
 }
 
 func TestCrypto(t *testing.T) {
-	t.Run("ED25519", func(t *testing.T) {
-		ed := GenerateKeyPair()
-		testKey(ed, t)
+	t.Run("AuthInit", func(t *testing.T) {
+		cfg := &MemCfg{data: map[string][]byte{}}
+		a := NewAuth(cfg, "", "")
 
-		al := GenerateKeyPair()
-		testKey(al, t)
+		if a.RSACert == nil {
+			t.Error("Missing RSA")
+		}
+		if a.EC256Cert == nil {
+			t.Error("Missing EC")
+		}
+		if a.ED25519Cert == nil {
+			t.Error("Missing ED")
+		}
 
-
+		b := NewAuth(cfg, "", "")
+		if !bytes.Equal(a.ED25519Cert.PrivateKey.(ed25519.PrivateKey),
+			b.ED25519Cert.PrivateKey.(ed25519.PrivateKey)) {
+			t.Error("Error loading")
+		}
+		if !a.RSACert.PrivateKey.(*rsa.PrivateKey).Equal(
+			b.RSACert.PrivateKey) {
+			t.Error("Error loading")
+		}
+		if !a.EC256Cert.PrivateKey.(*ecdsa.PrivateKey).Equal(b.EC256Cert.PrivateKey) {
+			t.Error("Error loading")
+		}
+		testKey(a.ED25519Cert.PrivateKey, t)
+		testKey(a.RSACert.PrivateKey, t)
+		testKey(a.EC256Cert, t)
 	})
-	t.Run("RSA", func(t *testing.T) {
-		ed := GenerateRSAKeyPair()
-		testKey(ed, t)
-	})
-	t.Run("EC256", func(t *testing.T) {
-		ed := GenerateEC256KeyPair()
-		testKey(ed, t)
-	})
-
 }
-
 
 func TestUGate(t *testing.T) {
 	td := &net.Dialer{}
-	ug := NewGate(td, nil)
+	ug := NewGate(td, nil, nil)
 
-	ug.Add(&ListenerConf{
-		Port: 3000,
+	basePort := 2900
+	ug.Add(&Listener{
+		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+100),
 		Protocol: "echo",
 	})
-	ug.Add(&ListenerConf{
-		Port: 3001,
+	ug.Add(&Listener{
+		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+101),
 		Protocol: "static",
 	})
-	ug.Add(&ListenerConf{
-		Port: 3002,
+	ug.Add(&Listener{
+		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+102),
 		Protocol: "delay",
 	})
-	ug.Add(&ListenerConf{
-		Port: 3006,
+	ug.Add(&Listener{
+		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+106),
 		Protocol: "tls",
 	})
-	ug.Add(&ListenerConf{
-		Port:     3003,
-		Host:     "127.0.0.1:3003",
+	ug.Add(&Listener{
+		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+103),
 		Protocol: "socks5",
 	})
-	// In-process dialer (ssh, etc)
-	ug.Add(&ListenerConf{
-		Port:   3004,
-		Dialer: td,
-	})
-	ug.Add(&ListenerConf{
-		Port: 3005,
-		Remote: "localhost:3000",
+	ug.Add(&Listener{
+		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+105),
+		ForwardTo: "localhost:3000",
 	})
 
-	ug.Add(&ListenerConf{
-		Port: 3006,
+	ug.Add(&Listener{
+		Address: fmt.Sprintf("0.0.0.0:%d", basePort+106),
 		Handler: &EchoHandler{},
 	})
 
 }
 
 func BenchmarkUGate(t *testing.B) {
-// WIP
+	// WIP
 }
 
 var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
@@ -303,3 +389,57 @@ var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
 //		t.Fatal("location", res)
 //	}
 //}
+
+func xTestKube(t *testing.T) {
+	d, _ := ioutil.ReadFile("testdata/kube.json")
+	kube := &KubeConfig{}
+	err := json.Unmarshal(d, kube)
+	if err != nil {
+		t.Fatal("Invalid kube config ", err)
+	}
+	//log.Printf("%#v\n", kube)
+	var pubk crypto.PublicKey
+	for _, c := range kube.Clusters {
+		//log.Println(string(c.Cluster.CertificateAuthorityData))
+		block, _ := pem.Decode(c.Cluster.CertificateAuthorityData)
+		xc, _ := x509.ParseCertificate(block.Bytes)
+		log.Printf("%#v\n", xc.Subject)
+		pubk = xc.PublicKey
+	}
+
+	scrt, _ := ioutil.ReadFile("testdata/server.crt")
+	block, _ := pem.Decode(scrt)
+	xc, _ := x509.ParseCertificate(block.Bytes)
+	log.Printf("%#v\n", xc.Subject)
+	pubk1 := xc.PublicKey
+
+	for _, a := range kube.Users {
+		if a.User.Token != "" {
+			h, t, txt, sig, _ := jwtRawParse(a.User.Token)
+			log.Printf("%#v %#v\n", h, t)
+
+			if h.Alg == "RS256" {
+				rsak := pubk.(*rsa.PublicKey)
+				hasher := crypto.SHA256.New()
+				hasher.Write(txt)
+				hashed := hasher.Sum(nil)
+				err = rsa.VerifyPKCS1v15(rsak,crypto.SHA256, hashed, sig)
+				if err != nil {
+					log.Println("K8S Root Certificate not a signer")
+				}
+				err = rsa.VerifyPKCS1v15(pubk1.(*rsa.PublicKey),crypto.SHA256, hashed, sig)
+				if err != nil {
+					log.Println("K8S Server Certificate not a signer")
+				}
+			}
+
+		}
+
+		if a.User.ClientKeyData != nil {
+
+		}
+		if a.User.ClientCertificateData != nil {
+
+		}
+	}
+}

@@ -35,7 +35,9 @@ COPY --from=build /ws/cmd/ugate/run.sh /usr/local/bin/
 RUN apk add iptables &&\
     mkdir -p /var/lib/istio && \
     addgroup -g 1337 istio-proxy && \
-    adduser -S -G istio-proxy istio-proxy -u 1337
+    adduser -S -G istio-proxy istio-proxy -u 1337 && \
+    mkdir -p /var/lib/istio && \
+    chown -R 1337:1337 /var/lib/istio
 
 WORKDIR /var/lib/istio
 #RUN mkdir -p /etc/certs && \
@@ -45,6 +47,13 @@ WORKDIR /var/lib/istio
 #    mkdir -p /var/lib/istio/config && \
 #    mkdir -p /var/lib/istio/proxy && \
 #    chown -R 1337 /etc/certs /etc/istio /var/lib/istio
+
+EXPOSE 15007
+EXPOSE 8080
+EXPOSE 15009
+EXPOSE 15003
+
+ENV PORT=8080
 
 # Defaults
 #COPY ./var/lib/istio /var/lib/istio/

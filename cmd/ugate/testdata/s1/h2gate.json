@@ -1,6 +1,0 @@
-{
-  "basePort": 14000,
-  "Master": "localhost:15004",
-  "Gateways": [
-  ]
-}

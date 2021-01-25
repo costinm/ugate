@@ -21,7 +21,7 @@ type TLSConn struct {
 	tls *tls.Conn
 }
 
-func NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*TLSConn, error) {
+func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*TLSConn, error) {
 	lc := &TLSConn{
 	}
 	if mc, ok := nc.(MetaConn); ok {
@@ -33,7 +33,7 @@ func NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID str
 		lc.Stream = NewStream()
 	}
 
-	config, keyCh := ConfigForPeer(cfg, peerID)
+	config, keyCh := ug.Auth.ConfigForPeer(cfg, peerID)
 	if alpn != nil {
 		config.NextProtos = alpn
 	}
@@ -47,51 +47,43 @@ func NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID str
 
 	//lc.tls.ConnectionState().DidResume
 	tcs := lc.tls.ConnectionState()
-	lc.Stream.Request.TLS = &tcs
+	lc.Stream.TLS = &tcs
 	lc.tls = cs
 
 	return lc, err
 }
 
-
 // SecureInbound runs the TLS handshake as a server.
 // Accepts connections without client certificate - alternate form of auth will be used, either
 // an inner TLS connection or JWT in metadata.
-func NewTLSConnIn(ctx context.Context, nc net.Conn, cfg *tls.Config) (*TLSConn, error) {
-	config, keyCh := ConfigForPeer(cfg, "")
-	config.NextProtos = []string{"h2r",  "h2"}
+func (ug *UGate) NewTLSConnIn(ctx context.Context, nc net.Conn, cfg *tls.Config) (*TLSConn, error) {
+	config, keyCh := ug.Auth.ConfigForPeer(cfg, "")
+	config.NextProtos = []string{"h2r", "h2"}
+
 	tc := &TLSConn{}
-	//if mc, ok := nc.(MetaConn); ok {
-	//	tc.Stream = mc.Meta()
-	//	if rnc, ok := tc.ServerOut.(net.Conn); ok {
-	//		nc = rnc
-	//	}
-	//} else {
-	// TODO: preserve the original info ?
 	tc.Stream = NewStream()
 	if mc, ok := nc.(MetaConn); ok {
 		m := mc.Meta()
 		// Sniffed, etc
 		tc.Listener = m.Listener
-		tc.Request = m.Request
+		tc.Dest = m.Dest
 	}
 
-	//}
 	tc.tls = tls.Server(nc, config)
 	cs, _, err := tc.handshake(ctx, keyCh)
-	tc.tls= cs
+	tc.tls = cs
 	if err != nil {
 		return nil, err
 	}
 	tcs := tc.tls.ConnectionState()
-	tc.Stream.Request.TLS = &tcs
+	tc.Stream.TLS = &tcs
 	tc.Stream.ServerIn = tc.tls
 	tc.Stream.ServerOut = tc.tls
 
 	return tc, err
 }
 
-func ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
+func (auth *Auth) ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
 	keyCh := make(chan []*x509.Certificate, 1)
 	// We need to check the peer ID in the VerifyPeerCertificate callback.
 	// The tls.Config it is also used for listening, and we might also have concurrent dials.
@@ -109,7 +101,9 @@ func ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []
 		}
 
 		chain, err := RawToCertChain(rawCerts)
-		if err != nil {return err}
+		if err != nil {
+			return err
+		}
 
 		pubKey, err := PubKeyFromCertChain(chain)
 		pubKeyPeerID := IDFromPublicKey(pubKey)
@@ -129,7 +123,6 @@ func ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []
 	return conf, keyCh
 }
 
-
 func (pl *TLSConn) handshake(
 		ctx context.Context,
 		keyCh <-chan []*x509.Certificate,
@@ -138,11 +131,6 @@ func (pl *TLSConn) handshake(
 	// There's no way to pass a context to tls.Conn.Handshake().
 	// See https://github.com/golang/go/issues/18482.
 	// Close the connection instead.
-	select {
-	case <-ctx.Done():
-		pl.tls.Close()
-	default:
-	}
 
 	done := make(chan struct{})
 	var wg sync.WaitGroup
@@ -154,6 +142,7 @@ func (pl *TLSConn) handshake(
 	defer close(done)
 
 	wg.Add(1)
+
 	go func() {
 		defer wg.Done()
 		select {
@@ -166,7 +155,7 @@ func (pl *TLSConn) handshake(
 	if err := pl.tls.Handshake(); err != nil {
 		// if the context was canceled, return the context error
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, nil ,ctxErr
+			return nil, nil, ctxErr
 		}
 		return nil, nil, err
 	}

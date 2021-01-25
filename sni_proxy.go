@@ -45,6 +45,8 @@ const (
 )
 
 func (ug *UGate) sniffSNI(acc *RawConn) error {
+	acc.Sniff()
+
 	buf := acc.buf
 	n, err := acc.Read(buf[0:5])
 	if err != nil {
@@ -192,10 +194,11 @@ func (ug *UGate) sniffSNI(acc *RawConn) error {
 
 	// TODO: unmangle server name - port, mesh node
 
-	destAddr := m.serverName + ":443"
-	acc.Meta().Request.Host = destAddr
+	if m.serverName != "" {
+		//destAddr := m.serverName + ":443"
+		acc.Meta().Dest = m.serverName
+	}
 	acc.Stream.Type = ProtoTLS
-
 	// Leave all bytes in the buffer, will be sent
 	acc.Reset(0)
 

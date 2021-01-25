@@ -56,7 +56,7 @@ type NodeAnnounce struct {
 
 	// Non-link local IPs from all interfaces. Includes public internet addresses
 	// and Wifi IP4 address. Used to determine if a node is directly connected.
-	IPs []*net.UDPAddr `json:"IPs,omitempty"`
+	IPs []*net.UDPAddr `json:"addrs,omitempty"`
 
 	// Set if the node is an active Android AP.
 	SSID string `json:"ssid,omitempty"`
@@ -73,69 +73,6 @@ type NodeAnnounce struct {
 	Vpn string `json:"Vpn,omitempty"`
 }
 
-// Node information, based on registration info or discovery.
-// Map of nodes, keyed by interface address is stored in Gateway.nodes.
-type DMNode struct {
-	// VIP is the mesh specific IP6 address. The 'network' identifies the master node, the
-	// link part is the sha of the public key. This is a byte[16].
-	// Last 8 bytes as uint64 are the primary key in the map.
-	VIP net.IP `json:"vip,omitempty"`
-
-	// Pub
-	PublicKey []byte `json:"pub,omitempty"`
-
-	// Information from the node - from an announce or message.
-	NodeAnnounce *NodeAnnounce
-
-	Labels map[string]string `json:"l,omitempty"`
-
-	Bacokff time.Duration `json:"-"`
-
-	// Last LL GW address used by the peer.
-	// Public IP addresses are stored in Reg.IPs.
-	// If set, returned as the first address in GWs, which is used to connect.
-	// This is not sent in the registration - but extracted from the request
-	// remote address.
-	GW *net.UDPAddr `json:"gw,omitempty"`
-
-	// Set if the gateway has an active incoming connection from this
-	// node, with the node acting as client.
-	// Streams will be forwarded to the node using special 'accept' mode.
-	// This is similar with PUSH in H2.
-	TunSrv MuxedConn `json:"-"`
-
-	// Existing tun to the remote node, previously dialed.
-	TunClient MuxedConn `json:"-"`
-
-	// IP4 address of last announce
-	Last4 *net.UDPAddr `json:"-"`
-
-	// IP6 address of last announce
-	Last6 *net.UDPAddr `json:"-"`
-
-	FirstSeen time.Time
-
-	// Last packet or registration from the peer.
-	LastSeen time.Time `json:"t"`
-
-	// In seconds since first seen, last 100
-	Seen []int `json:"-"`
-
-	// LastSeen in a multicast announce
-	LastSeen4 time.Time
-
-	// LastSeen in a multicast announce
-	LastSeen6 time.Time `json:"-"`
-
-	// Number of multicast received
-	Announces int
-
-	// Numbers of announces received from that node on the P2P interface
-	AnnouncesOnP2P int
-
-	// Numbers of announces received from that node on the P2P interface
-	AnnouncesFromP2P int
-}
 
 func NewDMNode() *DMNode {
 	now := time.Now()
@@ -191,4 +128,3 @@ func (n *DMNode) BackoffSleep() {
 		n.Bacokff = n.Bacokff * 2
 	}
 }
-

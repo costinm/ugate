@@ -17,8 +17,10 @@ package ugate
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -34,6 +36,8 @@ import (
 var (
 	// encoded {"typ":"JWT","alg":"ES256"}
 	vapidPrefix = []byte("eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.")
+	// encoded {"typ":"JWT","alg":"EdDSA"}
+	vapidPrefixED = []byte("eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.")
 	dot         = []byte(".")
 )
 
@@ -89,41 +93,120 @@ func (auth *Auth) VAPIDToken(aud string) string {
 	t64 := make([]byte, enc.EncodedLen(len(t)))
 	enc.Encode(t64, t)
 
+	c0 := auth.tlsCerts[0]
+
 	token := make([]byte, len(t)+len(vapidPrefix)+100)
-	token = append(token[:0], vapidPrefix...)
+	if _, ok := c0.PrivateKey.(*ecdsa.PrivateKey); ok {
+		token = append(token[:0], vapidPrefix...)
+	} else if _, ok := c0.PrivateKey.(ed25519.PrivateKey); ok {
+		token = append(token[:0], vapidPrefixED...)
+	} else {
+		return ""
+	}
 	token = append(token, t64...)
 
 	hasher := crypto.SHA256.New()
 	hasher.Write(token)
 
-	if r, s, err := ecdsa.Sign(rand.Reader, auth.EC256PrivateKey, hasher.Sum(nil)); err == nil {
-		// Vapid key is 32 bytes
-		keyBytes := 32
-		sig := make([]byte, 2*keyBytes)
+	var sig []byte
+	if ec, ok := c0.PrivateKey.(*ecdsa.PrivateKey); ok {
+		if r, s, err := ecdsa.Sign(rand.Reader, ec, hasher.Sum(nil)); err == nil {
+			// Vapid key is 32 bytes
+			keyBytes := 32
+			sig = make([]byte, 2*keyBytes)
 
-		rBytes := r.Bytes()
-		rBytesPadded := make([]byte, keyBytes)
-		copy(rBytesPadded[keyBytes-len(rBytes):], rBytes)
+			rBytes := r.Bytes()
+			rBytesPadded := make([]byte, keyBytes)
+			copy(rBytesPadded[keyBytes-len(rBytes):], rBytes)
 
-		sBytes := s.Bytes()
-		sBytesPadded := make([]byte, keyBytes)
-		copy(sBytesPadded[keyBytes-len(sBytes):], sBytes)
+			sBytes := s.Bytes()
+			sBytesPadded := make([]byte, keyBytes)
+			copy(sBytesPadded[keyBytes-len(sBytes):], sBytes)
 
-		sig = append(sig[:0], rBytesPadded...)
-		sig = append(sig, sBytesPadded...)
+			sig = append(sig[:0], rBytesPadded...)
+			sig = append(sig, sBytesPadded...)
 
-		sigB64 := make([]byte, enc.EncodedLen(len(sig)))
-		enc.Encode(sigB64, sig)
-
-		token = append(token, dot...)
-		token = append(token, sigB64...)
+		}
+	} else if ed, ok := c0.PrivateKey.(ed25519.PrivateKey); ok {
+		sig, _ = ed.Sign(rand.Reader, hasher.Sum(nil), nil)
 	}
+	sigB64 := make([]byte, enc.EncodedLen(len(sig)))
+	enc.Encode(sigB64, sig)
+
+	token = append(token, dot...)
+	token = append(token, sigB64...)
+
 
 	return "vapid t=" + string(token) + ", k=" + auth.pub64
 }
 
+func jwtRawParse(tok string) (*jwtHead, *JWT, []byte, []byte, error) {
+	// Token is parsed with square/go-jose
+	parts := strings.Split(tok, ".")
+	if len(parts) < 2 {
+		return nil, nil, nil, nil, fmt.Errorf("VAPID: malformed jwt, parts=%d", len(parts))
+	}
+	head, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
+	}
+	h := &jwtHead{}
+	json.Unmarshal(head, h)
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
+	}
+	b := &JWT{}
+	json.Unmarshal(payload, b)
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, nil,nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
+	}
+
+	return h, b, []byte(tok[0 : len(parts[0])+len(parts[1])+1]), sig, nil
+}
+
+func JWTParseAndSig(tok string, pk crypto.PublicKey) (*JWT, error) {
+	h, b, txt, sig, err := jwtRawParse(tok)
+	if err != nil {
+		return nil, err
+	}
+
+	hasher := crypto.SHA256.New()
+	hasher.Write(txt)
+
+	if h.Alg == "ES256" {
+		r := big.NewInt(0).SetBytes(sig[0:32])
+		s := big.NewInt(0).SetBytes(sig[32:64])
+		match := ecdsa.Verify(pk.(*ecdsa.PublicKey), hasher.Sum(nil), r, s)
+		if !match {
+			return nil, errors.New("invalid ES256 signature")
+		}
+		return b, nil
+	} else if h.Alg == "EdDSA" {
+		ok := ed25519.Verify(pk.(ed25519.PublicKey), hasher.Sum(nil), sig)
+		if !ok {
+			return nil, errors.New("invalid ED25519 signature")
+		}
+	} else if h.Alg == "RS256" {
+		rsak := pk.(*rsa.PublicKey)
+		hashed := hasher.Sum(nil)
+		err = rsa.VerifyPKCS1v15(rsak,crypto.SHA256, hashed, sig)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
+
+	return nil, errors.New("Unsupported " + h.Alg)
+}
+
 // CheckVAPID verifies the signature and returns the token and public key.
 // expCheck should be set to current time to set expiration
+//
+// Data is extracted from VAPID header - 'vapid' scheme and t/k params
 func CheckVAPID(tok string, now time.Time) (jwt *JWT, pub []byte, err error) {
 	// Istio uses oidc - will make a HTTP request to fetch the .well-known from
 	// iss.
@@ -131,7 +214,7 @@ func CheckVAPID(tok string, now time.Time) (jwt *JWT, pub []byte, err error) {
 	// Provider uses verifier, using KeySet interface 'verifySignature(jwt)
 	// The keyset is expected to be cached and configured (trusted)
 
-	scheme, keys := ParseAuth(tok)
+	scheme, _, keys := ParseAuthorization(tok)
 	if scheme != "vapid" {
 		return nil, nil, errors.New("Unexected scheme " + scheme)
 	}
@@ -139,52 +222,24 @@ func CheckVAPID(tok string, now time.Time) (jwt *JWT, pub []byte, err error) {
 	tok = keys["t"]
 	pubk := keys["k"]
 
-	// Token is parsed with square/go-jose
-	parts := strings.Split(tok, ".")
-	if len(parts) < 2 {
-		return nil, nil, fmt.Errorf("VAPID: malformed jwt, parts=%d", len(parts))
-	}
-	head, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
-	}
-	h := &jwtHead{}
-	json.Unmarshal(head, h)
-
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
-	}
-	b := &JWT{}
-	json.Unmarshal(payload, b)
-
-	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
-	}
-
 	publicUncomp, err := base64.RawURLEncoding.DecodeString(pubk)
 	if err != nil {
 		return nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
 	}
-	if len(publicUncomp) != 65 {
+
+	var pk crypto.PublicKey
+	if len(publicUncomp) == 32 {
+		pk = ed25519.PublicKey(publicUncomp)
+	} else if len(publicUncomp) == 65 {
+		x, y := elliptic.Unmarshal(elliptic.P256(), publicUncomp)
+		pk = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+	} else {
 		return nil, nil, fmt.Errorf("VAPI: malformed jwt %d", len(pubk))
 	}
 
-	// TODO: Check expiration !
-
-	hasher := crypto.SHA256.New()
-	hasher.Write([]byte(tok[0 : len(parts[0])+len(parts[1])+1]))
-
-	x, y := elliptic.Unmarshal(elliptic.P256(), publicUncomp)
-	pk := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
-
-	r := big.NewInt(0).SetBytes(sig[0:32])
-	s := big.NewInt(0).SetBytes(sig[32:64])
-	match := ecdsa.Verify(pk, hasher.Sum(nil), r, s)
-
-	if !match {
-		return nil, nil, errors.New("invalid signature")
+	b, err := JWTParseAndSig(tok, pk)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if !now.IsZero() {
@@ -192,24 +247,28 @@ func CheckVAPID(tok string, now time.Time) (jwt *JWT, pub []byte, err error) {
 		if expT.Before(now) {
 			return nil, nil, errors.New("Expired token")
 		}
-
 	}
 
 	return b, publicUncomp, nil
 }
 
-// ParseAuth splits the Authorization header, returning the scheme and parameters.
-func ParseAuth(auth string) (string, map[string]string) {
+// ParseAuthorization splits the Authorization header, returning the scheme and parameters.
+// Used with the "scheme k=v,k=v" format.
+func ParseAuthorization(auth string) (string, string, map[string]string) {
 	auth = strings.TrimSpace(auth)
 	params := map[string]string{}
 
 	spaceIdx := strings.Index(auth, " ")
 	if spaceIdx == -1 {
-		return auth, params
+		return "", auth, params
 	}
 
 	scheme := auth[0:spaceIdx]
 	auth = auth[spaceIdx:]
+
+	if strings.Index(auth, "=") < 0 {
+		return scheme, auth, params
+	}
 
 	pl := strings.Split(auth, ",")
 	for _, p := range pl {
@@ -221,5 +280,5 @@ func ParseAuth(auth string) (string, map[string]string) {
 		}
 	}
 
-	return scheme, params
+	return scheme, "", params
 }

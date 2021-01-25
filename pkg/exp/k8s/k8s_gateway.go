@@ -624,7 +624,6 @@ type Condition struct {
 	Message string `json:"message" protobuf:"bytes,6,opt,name=message"`
 }
 
-
 // GatewayStatus defines the observed state of Gateway.
 type GatewayStatus struct {
 	// Addresses lists the IP addresses that have actually been

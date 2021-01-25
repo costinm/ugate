@@ -2,67 +2,89 @@ package ugate
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // HTTP handlers for admin, debug and testing
 
+// Control handler, also used for testing
 type EchoHandler struct {
 }
 
-func (*EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Println("ECHOH ", r)
-
-	d := make([]byte, 2048)
-	//fmt.Fprintf(ac, "%v\n", ac.Meta())
 	w.WriteHeader(200)
-	w.Write([]byte{32})
+	//w.Write([]byte{32})
 	w.(http.Flusher).Flush()
 
-	n, err := r.Body.Read(d)
-	if err != nil {
-		return
-	}
-	log.Println("ECHO rcv", n )
-	b := &bytes.Buffer{}
-	r.Write(b)
-	fmt.Fprintf(b, "%s %v\n", r.RemoteAddr, r.TLS)
-	b.Write(d[0:n])
+	// H2 requests require write to be flushed - buffering happens !
+	// Wrap w.Body into Stream which does this automatically
+	str := NewStreamRequest(r, w, nil)
 
-	w.Write(b.Bytes())
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-
-	io.Copy(w, r.Body)
+	eh.handle(str, false)
 }
 
-func (*EchoHandler) Handle(ac MetaConn) error {
-	log.Println("ECHO ", ac.Meta())
-	//ac.Write([]byte{1})
+type StreamInfo struct {
+	LocalAddr  net.Addr
+	RemoteAddr net.Addr
+	Meta       http.Header
+
+	RemoteID string
+	ALPN     string
+
+	Dest string
+	Type string
+}
+
+func (*EchoHandler) handle(str *Stream, serverFirst bool) error {
 	d := make([]byte, 2048)
-	//fmt.Fprintf(ac, "%v\n", ac.Meta())
+
+	si := &StreamInfo{
+		LocalAddr:  str.LocalAddr(),
+		RemoteAddr: str.RemoteAddr(),
+		Meta:       str.HTTPRequest().Header,
+		RemoteID:   str.RemoteID(),
+		Dest:       str.Dest,
+		Type:       str.Type,
+	}
+	if str.TLS != nil {
+		si.ALPN = str.TLS.NegotiatedProtocol
+	}
+	b1, _ := json.Marshal(si)
+	b := &bytes.Buffer{}
+	b.Write(b1)
+	b.Write([]byte{'\n'})
+
+	if serverFirst {
+		str.Write(b.Bytes())
+	}
 	//ac.SetDeadline(time.Now().Add(5 * time.Second))
-	n, err := ac.Read(d)
+	n, err := str.Read(d)
 	if err != nil {
 		return err
 	}
-	log.Println("ECHO rcv", n )
+	log.Println("ECHO rcv", n)
 
-	b := &bytes.Buffer{}
-	ac.Meta().Request.Write(b)
-	fmt.Fprintf(b, "%v\n", ac.Meta().Request.TLS)
-	b.Write(d[0:n])
+	if !serverFirst {
+		str.Write(b.Bytes())
+	}
+	str.Write(d[0:n])
 
-	ac.Write(b.Bytes())
-
-	io.Copy(ac, ac)
+	io.Copy(str, str)
 	return nil
+}
+
+func (eh *EchoHandler) Handle(ac MetaConn) error {
+	log.Println("ECHO ", ac.Meta())
+
+	return eh.handle(ac.Meta(), false)
 }
 
 // WIP: Adapter to HTTP handlers
@@ -72,7 +94,7 @@ type HTTPHandler struct {
 
 func (*HTTPHandler) Handle(ac MetaConn) error {
 	//u, _ := url.Parse("https://localhost/")
-	r := ac.Meta().Request
+	r := ac.Meta().HTTPRequest()
 	w := ac.(http.ResponseWriter)
 	http.DefaultServeMux.ServeHTTP(w, r)
 	return nil
@@ -90,7 +112,6 @@ type H2P struct {
 	// Active pushed connections.
 	// Key is peerID / stream ID
 	active map[string]*net.Conn
-
 }
 
 // Single Pusher - one for each monitor
@@ -159,3 +180,56 @@ func (h2p *H2P) HTTPHandlerPushPromise(w http.ResponseWriter, req *http.Request)
 	}
 }
 
+// Debug handlers - on default mux, on 15000
+
+// curl -v http://s6.webinf.info:15000/...
+// - /debug/vars
+// - /debug/pprof
+
+func (gw *UGate) HttpTCP(w http.ResponseWriter, r *http.Request) {
+	gw.m.RLock()
+	defer gw.m.RUnlock()
+	w.Header().Add("content-type", "application/json")
+	err := json.NewEncoder(w).Encode(gw.ActiveTcp)
+	if err != nil {
+		log.Println("Error encoding ", err)
+	}
+}
+
+func (gw *UGate) HttpNodesFilter(w http.ResponseWriter, r *http.Request) {
+	gw.m.RLock()
+	defer gw.m.RUnlock()
+	r.ParseForm()
+	w.Header().Add("content-type", "application/json")
+	t := r.Form.Get("t")
+	rec := []*DMNode{}
+	t0 := time.Now()
+	for _, n := range gw.NodesByID {
+		if t != "" {
+			if t0.Sub(n.LastSeen) < 6000*time.Millisecond {
+				rec = append(rec, n)
+			}
+		} else {
+			rec = append(rec, n)
+		}
+	}
+
+	je := json.NewEncoder(w)
+	je.SetIndent(" ", " ")
+	je.Encode(rec)
+	return
+}
+
+func (gw *UGate) HttpH2R(w http.ResponseWriter, r *http.Request) {
+	gw.m.RLock()
+	defer gw.m.RUnlock()
+
+	json.NewEncoder(w).Encode(gw.ActiveTcp)
+}
+
+// WIP: Istio-style signing
+func (gw *UGate) SignCert(w http.ResponseWriter, r *http.Request) {
+	// TODO: json and raw proto
+	// use a list of 'authorized' OIDC and roots ( starting with loaded istio and k8s pub )
+	// get the csr and sign
+}
