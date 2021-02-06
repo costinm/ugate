@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ugate
+package auth
 
 import (
 	"crypto"
@@ -37,6 +37,7 @@ var (
 	// encoded {"typ":"JWT","alg":"ES256"}
 	vapidPrefix = []byte("eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.")
 	// encoded {"typ":"JWT","alg":"EdDSA"}
+	//https://tools.ietf.org/html/rfc8037
 	vapidPrefixED = []byte("eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.")
 	dot         = []byte(".")
 )
@@ -88,12 +89,15 @@ func (auth *Auth) VAPIDToken(aud string) string {
 	jwt.Exp = time.Now().Unix() + 3600
 	t, _ := json.Marshal(jwt)
 
+	return auth.VAPIDSign(t)
+}
+
+func (auth *Auth) VAPIDSign(t []byte) string {
 	enc := base64.RawURLEncoding
 	// Base64URL for the content of the token
 	t64 := make([]byte, enc.EncodedLen(len(t)))
 	enc.Encode(t64, t)
-
-	c0 := auth.tlsCerts[0]
+	c0 := auth.TlsCerts[0]
 
 	token := make([]byte, len(t)+len(vapidPrefix)+100)
 	if _, ok := c0.PrivateKey.(*ecdsa.PrivateKey); ok {
@@ -140,7 +144,7 @@ func (auth *Auth) VAPIDToken(aud string) string {
 	return "vapid t=" + string(token) + ", k=" + auth.pub64
 }
 
-func jwtRawParse(tok string) (*jwtHead, *JWT, []byte, []byte, error) {
+func JwtRawParse(tok string) (*jwtHead, *JWT, []byte, []byte, error) {
 	// Token is parsed with square/go-jose
 	parts := strings.Split(tok, ".")
 	if len(parts) < 2 {
@@ -169,7 +173,7 @@ func jwtRawParse(tok string) (*jwtHead, *JWT, []byte, []byte, error) {
 }
 
 func JWTParseAndSig(tok string, pk crypto.PublicKey) (*JWT, error) {
-	h, b, txt, sig, err := jwtRawParse(tok)
+	h, b, txt, sig, err := JwtRawParse(tok)
 	if err != nil {
 		return nil, err
 	}

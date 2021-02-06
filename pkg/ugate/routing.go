@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/costinm/ugate"
 )
 
 // After a Stream ( TCP+meta or HTTP ) is accepted, we need to route it based on
@@ -29,7 +31,7 @@ var NotFound = errors.New("not found")
 //
 // str.Dest is the destination hostname:port or hostname.
 //
-func (ug *UGate) dialOut(str *Stream) error {
+func (ug *UGate) dialOut(str *ugate.Stream) error {
 	// sets clientEventContextKey - if ctx is used for a round trip, will
 	// set all data.
 	// Will also make sure DNSStart, Connect, etc are set (if we want to)
@@ -50,7 +52,7 @@ func (ug *UGate) dialOut(str *Stream) error {
 	// Dial out via an existing 'reverse h2' connection
 	dmn := ug.GetNode(nid) // no port
 	if dmn != nil {
-		rt := dmn.h2r
+		rt := dmn.H2r
 		if rt != nil {
 			// We have a H2C connection or can make RT.
 			rw := str.HTTPResponse()

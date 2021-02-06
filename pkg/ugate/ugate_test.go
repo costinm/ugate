@@ -19,13 +19,14 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/pipe"
-	"golang.org/x/crypto/ed25519"
 )
 
-func initServer(basePort int, cfg *GateCfg) *UGate {
+func initServer(basePort int, cfg *ugate.GateCfg) *UGate {
 	if cfg == nil {
-		cfg = &GateCfg{
+		cfg = &ugate.GateCfg{
 			BasePort: basePort,
 			//H2R: map[string]string{
 			//	"127.0.0.1:15007": "",
@@ -34,21 +35,21 @@ func initServer(basePort int, cfg *GateCfg) *UGate {
 	}
 	ug := NewGate(&net.Dialer{}, nil, cfg)
 
-	log.Println("Starting server EC", IDFromPublicKey(PublicKey(ug.Auth.EC256Cert.PrivateKey)))
-	if ug.Auth.ED25519Cert != nil {
-		log.Println("Starting server ED", IDFromPublicKey(PublicKey(ug.Auth.ED25519Cert.PrivateKey)))
-	}
-	if ug.Auth.RSACert != nil {
-		log.Println("Starting server RSA", IDFromPublicKey(PublicKey(ug.Auth.RSACert.PrivateKey)))
-	}
+	log.Println("Starting server EC", auth.IDFromPublicKey(auth.PublicKey(ug.Auth.EC256Cert.PrivateKey)))
+	//if ug.Auth.ED25519Cert != nil {
+	//	log.Println("Starting server ED", auth.IDFromPublicKey(auth.PublicKey(ug.Auth.ED25519Cert.PrivateKey)))
+	//}
+	//if ug.Auth.RSACert != nil {
+	//	log.Println("Starting server RSA", auth.IDFromPublicKey(auth.PublicKey(ug.Auth.RSACert.PrivateKey)))
+	//}
 
 	// Echo - TCP
-	_, _, _ = ug.Add(&Listener{
+	_, _, _ = ug.Add(&ugate.Listener{
 		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+11),
 		Protocol:  "tls",
 		Handler:   &EchoHandler{},
 	})
-	_, _, _ = ug.Add(&Listener{
+	_, _, _ = ug.Add(&ugate.Listener{
 		Address: fmt.Sprintf("0.0.0.0:%d", basePort+12),
 		Handler: &EchoHandler{},
 	})
@@ -108,7 +109,7 @@ func checkEcho(in io.Reader, out io.Writer) (string, error) {
 			return "", err
 		}
 	*/
-	if cw, ok := out.(CloseWriter); ok {
+	if cw, ok := out.(ugate.CloseWriter); ok {
 		cw.CloseWrite()
 	} else {
 		out.(io.Closer).Close()
@@ -123,7 +124,7 @@ func checkEcho(in io.Reader, out io.Writer) (string, error) {
 
 func xTestLive(t *testing.T) {
 	m := "10.1.10.228:15007"
-	ag := initServer(6300, &GateCfg{
+	ag := initServer(6300, &ugate.GateCfg{
 		BasePort: 6300,
 		H2R: map[string]string{
 			//"h.webinf.info:15007": "",
@@ -187,7 +188,7 @@ func TestSrv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mc := ab.(MetaConn)
+		mc := ab.(ugate.MetaConn)
 		meta := mc.Meta()
 		log.Println("Result ", res, meta)
 	})
@@ -243,11 +244,11 @@ func TestSrv(t *testing.T) {
 
 // Run a suite of tests with a specific key, to repeat the tests for all types of keys.
 func testKey(k crypto.PrivateKey, t *testing.T) {
-	pk := PublicKey(k)
+	pk := auth.PublicKey(k)
 	if pk == nil {
 		t.Fatal("Invalid public")
 	}
-	id := IDFromPublicKey(pk)
+	id := auth.IDFromPublicKey(pk)
 	//crt, err := KeyToCertificate(k)
 	//if err != nil {
 	//	t.Fatal(err)
@@ -284,32 +285,32 @@ func (m MemCfg) List(name string, tp string) ([]string, error) {
 func TestCrypto(t *testing.T) {
 	t.Run("AuthInit", func(t *testing.T) {
 		cfg := &MemCfg{data: map[string][]byte{}}
-		a := NewAuth(cfg, "", "")
+		a := auth.NewAuth(cfg, "", "")
 
-		if a.RSACert == nil {
-			t.Error("Missing RSA")
-		}
+		//if a.RSACert == nil {
+		//	t.Error("Missing RSA")
+		//}
 		if a.EC256Cert == nil {
 			t.Error("Missing EC")
 		}
-		if a.ED25519Cert == nil {
-			t.Error("Missing ED")
-		}
+		//if a.ED25519Cert == nil {
+		//	t.Error("Missing ED")
+		//}
 
-		b := NewAuth(cfg, "", "")
-		if !bytes.Equal(a.ED25519Cert.PrivateKey.(ed25519.PrivateKey),
-			b.ED25519Cert.PrivateKey.(ed25519.PrivateKey)) {
-			t.Error("Error loading")
-		}
-		if !a.RSACert.PrivateKey.(*rsa.PrivateKey).Equal(
-			b.RSACert.PrivateKey) {
-			t.Error("Error loading")
-		}
+		b := auth.NewAuth(cfg, "", "")
+		//if !bytes.Equal(a.ED25519Cert.PrivateKey.(ed25519.PrivateKey),
+		//	b.ED25519Cert.PrivateKey.(ed25519.PrivateKey)) {
+		//	t.Error("Error loading")
+		//}
+		//if !a.RSACert.PrivateKey.(*rsa.PrivateKey).Equal(
+		//	b.RSACert.PrivateKey) {
+		//	t.Error("Error loading")
+		//}
 		if !a.EC256Cert.PrivateKey.(*ecdsa.PrivateKey).Equal(b.EC256Cert.PrivateKey) {
 			t.Error("Error loading")
 		}
-		testKey(a.ED25519Cert.PrivateKey, t)
-		testKey(a.RSACert.PrivateKey, t)
+		//testKey(a.ED25519Cert.PrivateKey, t)
+		//testKey(a.RSACert.PrivateKey, t)
 		testKey(a.EC256Cert, t)
 	})
 }
@@ -319,32 +320,32 @@ func TestUGate(t *testing.T) {
 	ug := NewGate(td, nil, nil)
 
 	basePort := 2900
-	ug.Add(&Listener{
+	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+100),
 		Protocol: "echo",
 	})
-	ug.Add(&Listener{
+	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+101),
 		Protocol: "static",
 	})
-	ug.Add(&Listener{
+	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+102),
 		Protocol: "delay",
 	})
-	ug.Add(&Listener{
+	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+106),
 		Protocol: "tls",
 	})
-	ug.Add(&Listener{
+	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+103),
 		Protocol: "socks5",
 	})
-	ug.Add(&Listener{
+	ug.Add(&ugate.Listener{
 		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+105),
 		ForwardTo: "localhost:3000",
 	})
 
-	ug.Add(&Listener{
+	ug.Add(&ugate.Listener{
 		Address: fmt.Sprintf("0.0.0.0:%d", basePort+106),
 		Handler: &EchoHandler{},
 	})
@@ -392,7 +393,7 @@ var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
 
 func xTestKube(t *testing.T) {
 	d, _ := ioutil.ReadFile("testdata/kube.json")
-	kube := &KubeConfig{}
+	kube := &ugate.KubeConfig{}
 	err := json.Unmarshal(d, kube)
 	if err != nil {
 		t.Fatal("Invalid kube config ", err)
@@ -415,7 +416,7 @@ func xTestKube(t *testing.T) {
 
 	for _, a := range kube.Users {
 		if a.User.Token != "" {
-			h, t, txt, sig, _ := jwtRawParse(a.User.Token)
+			h, t, txt, sig, _ := auth.JwtRawParse(a.User.Token)
 			log.Printf("%#v %#v\n", h, t)
 
 			if h.Alg == "RS256" {

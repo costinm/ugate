@@ -5,6 +5,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/costinm/ugate"
 )
 
 // Similar with go-ipfs/p2p
@@ -54,9 +56,13 @@ import (
 // - use websocket - no multiplexing.
 // - binary messages, using websocket frames
 
+type Listener struct {
+	ugate.Listener
+}
+
 // Creates a raw (port) TCP listener. Accepts connections
 // on a local port, forwards to a remote destination.
-func (cfg *Listener) start() error {
+func (cfg *Listener) start(gate *UGate) error {
 	ll := cfg
 
 	if cfg.Address == "" {
@@ -67,7 +73,7 @@ func (cfg *Listener) start() error {
 		return nil // virtual listener
 	}
 
-	if cfg.Listener == nil {
+	if cfg.NetListener == nil {
 		if strings.HasPrefix(cfg.Address, "/") ||
 				strings.HasPrefix(cfg.Address, "@") {
 			us, err := net.ListenUnix("unix",
@@ -78,7 +84,7 @@ func (cfg *Listener) start() error {
 			if err != nil {
 				return err
 			}
-			cfg.Listener = us
+			cfg.NetListener = us
 		} else {
 			// Not supported: RFC: address "" means all families, 0.0.0.0 IP4, :: IP6, localhost IP4/6, etc
 			listener, err := net.Listen("tcp", ll.Address)
@@ -91,41 +97,41 @@ func (cfg *Listener) start() error {
 					return err
 				}
 			}
-			cfg.Listener = listener
+			cfg.NetListener = listener
 		}
 
 	}
 
-	go ll.serve()
+	go ll.serve(gate)
 	return nil
 }
 
 func (pl *Listener) Close() error {
-	pl.Listener.Close()
+	pl.NetListener.Close()
 	return nil
 }
 
 func (pl Listener) Accept() (net.Conn, error) {
-	return pl.Listener.Accept()
+	return pl.NetListener.Accept()
 }
 
 func (pl Listener) Addr() net.Addr {
-	if pl.Listener == nil {
+	if pl.NetListener == nil {
 		return nil
 	}
-	return pl.Listener.Addr()
+	return pl.NetListener.Addr()
 }
 
 // For -R, runs on the remote ssh server to accept connections and forward back to client, which in turn
 // will forward to a Port/app.
 // Blocking.
-func (pl *Listener) serve() {
+func (pl *Listener) serve(gate *UGate) {
 	log.Println("Gateway: open on ", pl.Address, pl.ForwardTo, pl.Protocol)
 	for {
-		remoteConn, err := pl.Listener.Accept()
-		VarzAccepted.Add(1)
+		remoteConn, err := pl.NetListener.Accept()
+		ugate.VarzAccepted.Add(1)
 		if ne, ok := err.(net.Error); ok {
-			VarzAcceptErr.Add(1)
+			ugate.VarzAcceptErr.Add(1)
 			if ne.Temporary() {
 				time.Sleep(100 * time.Millisecond)
 				continue
@@ -135,7 +141,7 @@ func (pl *Listener) serve() {
 			log.Println("Accept error, closing listener ", pl, err)
 			return
 		}
-		go pl.gate.handleAcceptedConn(pl, remoteConn)
+		go gate.handleAcceptedConn(&pl.Listener, remoteConn)
 	}
 }
 

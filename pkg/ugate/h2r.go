@@ -1,13 +1,13 @@
 package ugate
 
 import (
-	"context"
 	"errors"
 	"log"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/costinm/ugate"
 	"golang.org/x/net/http2"
 )
 
@@ -39,8 +39,8 @@ func (t *H2Transport) maintainRemoteAccept(host, key string) error {
 		return errors.New("not configured")
 	}
 
-	ctx := context.Background()
-	ctx, _ = context.WithTimeout(ctx, 5*time.Second)
+	//ctx := context.Background()
+	//ctx, ctxCancel = context.WithTimeout(ctx, 5*time.Second)
 
 	var addr string
 
@@ -76,7 +76,7 @@ func (t *H2Transport) maintainRemoteAccept(host, key string) error {
 		}
 
 		go func() {
-			log.Println("H2R-Client: Reverse accept start ", str.RemoteAddr(), str.LocalAddr(), str.RemoteID())
+			log.Println("H2R-Client: Reverse accept start ", str.RemoteAddr(), str.LocalAddr(), RemoteID(str))
 			t.h2Server.ServeConn(
 				str,
 				&http2.ServeConnOpts{
@@ -120,7 +120,7 @@ func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.Clie
 	nid := t.ug.Auth.Host2ID(addr)
 	dmn := t.ug.GetNode(nid)
 	if dmn != nil {
-		rt := dmn.h2r
+		rt := dmn.H2r
 		if rt != nil {
 			return rt, nil
 		}
@@ -165,7 +165,7 @@ func (t *H2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // Handle a raw reverse H2 connection, negotiated at TLS handshake level.
 // The connection was accepted, but we act as client.
-func (t *H2Transport) HandleH2R(str *Stream) error {
+func (t *H2Transport) HandleH2R(str *ugate.Stream) error {
 	// This is the H2 in reverse - start a TLS client conn, and keep  track of it
 	// for forwarding to the dest.
 	end := make(chan int)
@@ -178,9 +178,9 @@ func (t *H2Transport) HandleH2R(str *Stream) error {
 		return err
 	}
 
-	k := str.RemoteID()
+	k := RemoteID(str)
 	n := t.ug.GetOrAddNode(k)
-	n.h2r = cc
+	n.H2r = cc
 	t.H2R[k] = cc
 
 	ra := str.RemoteAddr()
@@ -191,7 +191,7 @@ func (t *H2Transport) HandleH2R(str *Stream) error {
 	<-end
 	log.Println("H2R done", k)
 	delete(t.H2R, k)
-	n.h2r = nil
+	n.H2r = nil
 	return nil
 }
 

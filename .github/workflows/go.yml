@@ -1,0 +1,48 @@
+name: Go
+on: [push]
+env:
+  GO111MODULE: on
+
+jobs:
+  build-docker:
+    name: Build-in-docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+      - name: push
+        uses: docker/build-push-action@v1
+        with:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: docker.pkg.github.com
+          repository: costinm/ugate/ugate
+          tag_with_ref: true
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Set up Go 1.14
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.14
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: Get dependencies
+      run: |
+        go mod download
+
+    - name: Build
+      run: |
+        go build -o ugate -v ./cmd/ugate
+
+    - name: Upload ugate
+      uses: actions/upload-artifact@v2
+      with:
+        name: ugate
+        path: ugate

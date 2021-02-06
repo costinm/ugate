@@ -1,4 +1,4 @@
-package ugate
+package iptables
 
 import (
 	"errors"
@@ -6,6 +6,8 @@ import (
 	"os"
 	"syscall"
 	"unsafe"
+
+	"github.com/costinm/ugate"
 )
 
 //
@@ -25,11 +27,11 @@ import (
 // https://github.com/ryanchapman/go-any-proxy/blob/master/any_proxy.go,
 // and other examples.
 // Based on REDIRECT.
-func (ug *UGate) sniffIptables(str *Stream, proto string) (string, error) {
-	if _, ok := str.ServerOut.(*net.TCPConn); !ok {
+func SniffIptables(str *ugate.Stream, proto string) (string, error) {
+	if _, ok := str.Out.(*net.TCPConn); !ok {
 		return "", errors.New("invalid connection for iptbles")
 	}
-	ta, err := getOriginalDst(str.ServerOut.(*net.TCPConn))
+	ta, err := getOriginalDst(str.Out.(*net.TCPConn))
 	if err != nil {
 		return "", err
 	}

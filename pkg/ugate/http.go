@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/auth"
 	"golang.org/x/net/http2"
 )
 
@@ -29,12 +31,12 @@ type H2Transport struct {
 	h2t          *http2.Transport
 	h2Server     *http2.Server
 
-	ALPNHandlers map[string]ConHandler
+	ALPNHandlers map[string]ugate.ConHandler
 
 	// Key is a Host:, as it would show in SOCKS and SNI
 	H2R map[string]*http2.ClientConn
 
-	reverse map[string]*Stream
+	reverse map[string]*ugate.Stream
 	fs      http.Handler
 }
 
@@ -45,8 +47,8 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 		h2t: &http2.Transport{
 			ReadIdleTimeout: 10 * time.Second,
 		},
-		reverse: map[string]*Stream{},
-		ALPNHandlers: map[string]ConHandler{
+		reverse: map[string]*ugate.Stream{},
+		ALPNHandlers: map[string]ugate.ConHandler{
 
 		},
 		H2R: map[string]*http2.ClientConn{},
@@ -112,7 +114,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	vapidH := r.Header["Authorization"]
 	if len(vapidH) > 0 {
-		tok, pub, err := CheckVAPID(vapidH[0], time.Now())
+		tok, pub, err := auth.CheckVAPID(vapidH[0], time.Now())
 		if err == nil {
 			Pub = pub
 			SAN = tok.Sub
@@ -121,9 +123,9 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		pk1 := r.TLS.PeerCertificates[0].PublicKey
-		Pub = PublicKeyBytesRaw(pk1)
+		Pub = auth.PublicKeyBytesRaw(pk1)
 		// TODO: Istio-style, signed by a trusted CA. This is also for SSH-with-cert
-		sans, _ := GetSAN(r.TLS.PeerCertificates[0])
+		sans, _ := auth.GetSAN(r.TLS.PeerCertificates[0])
 		if len(sans) > 0 {
 			SAN = sans[0]
 		}
@@ -155,8 +157,8 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				r.Host = parts[2]
 				r.URL.Scheme = "https"
 				r.URL.Path = strings.Join(parts[3:], "/")
-				str := NewStreamRequest(r, w, nil)
-				str.postDial = func(conn net.Conn, err error) {
+				str := ugate.NewStreamRequest(r, w, nil)
+				str.PostDialHandler = func(conn net.Conn, err error) {
 					if err != nil {
 						w.Header().Add("Error", err.Error())
 						w.WriteHeader(500)
@@ -166,12 +168,13 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(200)
 					w.(http.Flusher).Flush()
 				}
+				str.Dest = parts[2]
 
 				l.ug.HandleVirtualIN(str)
 				return
 			} else if parts[1] == "tcp" {
 				// Will use r.Host to find the destination - not sure if this is right.
-				s := NewStreamRequest(r, w, nil)
+				s := ugate.NewStreamRequest(r, w, nil)
 				l.ug.HandleVirtualIN(s)
 				return
 			}
@@ -198,14 +201,14 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Will sniff H2 and use the right handler.
 //
 // Ex: curl localhost:9080/debug/vars --http2-prior-knowledge
-func (t *H2Transport) handleHTTPListener(pl *Listener, bconn *RawConn) error {
-	err := pl.sniffH2(bconn)
+func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, bconn *ugate.RawConn) error {
+	err := SniffH2(bconn)
 	if err != nil {
 		return err
 	}
 	ctx := bconn.Context()
 
-	if bconn.Stream.Type == ProtoH2 {
+	if bconn.Stream.Type == ugate.ProtoH2 {
 		bconn.TLS = &tls.ConnectionState{
 			Version: tls.VersionTLS12,
 			CipherSuite: tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
@@ -220,7 +223,7 @@ func (t *H2Transport) handleHTTPListener(pl *Listener, bconn *RawConn) error {
 				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
 			})
 	} else {
-		bconn.Stream.Type = ProtoHTTP
+		bconn.Stream.Type = ugate.ProtoHTTP
 		// TODO: identify 'the proxy protocol'
 		// port is marked as HTTP - assume it is HTTP
 		t.httpListener.incoming <- bconn
@@ -233,7 +236,7 @@ func (t *H2Transport) handleHTTPListener(pl *Listener, bconn *RawConn) error {
 
 // Implements the Handle connection interface for uGate.
 //
-func (t *H2Transport) Handle(c MetaConn) error {
+func (t *H2Transport) Handle(c ugate.MetaConn) error {
 	// http2 and http expect a net.Listener, and do their own accept()
 	str := c.Meta()
 	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2r" {
@@ -252,7 +255,7 @@ func (t *H2Transport) Handle(c MetaConn) error {
 		return nil
 	}
 
-	if str.Type == ProtoConnect {
+	if str.Type == ugate.ProtoConnect {
 		t.httpListener.incoming <- c
 		// TODO: wait for connection to be closed.
 		<-str.Context().Done()

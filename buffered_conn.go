@@ -33,24 +33,24 @@ var (
 	}}
 )
 
-var bufferedConPool = sync.Pool{New: func() interface{} {
+var BufferedConPool = sync.Pool{New: func() interface{} {
 	// Should hold a TLS handshake message
 	return &RawConn{
-		buf:    make([]byte, bufSize),
-		ipBuf:    make([]byte, net.IPv6len),
+		Buf:    make([]byte, bufSize),
+		IpBuf:  make([]byte, net.IPv6len),
 		Stream: &Stream{},
 	}
 }}
 
 func GetConn(in net.Conn) *RawConn {
-	br := bufferedConPool.Get().(*RawConn)
+	br := BufferedConPool.Get().(*RawConn)
 	br.resetStats()
-	br.ServerOut = in
-	br.ServerOut = in
-	br.ServerIn = in
+	br.Out = in
+	br.Out = in
+	br.In = in
 	br.sniffing = false
 	br.off = 0
-	br.end = 0
+	br.End = 0
 	return br
 }
 
@@ -73,39 +73,39 @@ type RawConn struct {
 	//ServerOut net.Conn
 
 	// if true, anything read will be added to buffer.
-	// if false, Read() will consume the buffer from off to end, then use
+	// if false, Read() will consume the buffer from off to End, then use
 	// direct Read.
 	sniffing bool
 
 	// b has end and capacity, set at creation to the size of the buffer,
-	// end(buf) == cap(buf) == 8k
+	// end(Buf) == cap(Buf) == 8k
 	// using end and off as pointers to data
-	buf []byte
+	Buf []byte
 
 	// read so far from buffer. Unread data in off:last
 	off int
 
 	// number of bytes in buffer.
-	end int
+	End int
 
 	// If an error happened while sniffing
 	lastErr error
 
-	ipBuf []byte
+	IpBuf []byte
 }
 
 func (b *RawConn) empty() bool {
-	return b.off >= b.end
+	return b.off >= b.End
 }
 
 func (b *RawConn) Len() int {
 	//
-	return b.end - b.off
+	return b.End - b.off
 }
 
 // Return the unread portion of the buffer
 func (b *RawConn) Bytes() []byte {
-	return b.buf[b.off:b.end]
+	return b.Buf[b.off:b.End]
 }
 
 func (b *RawConn) ReadByte() (byte, error) {
@@ -115,7 +115,7 @@ func (b *RawConn) ReadByte() (byte, error) {
 			return 0, err
 		}
 	}
-	r := b.buf[b.off]
+	r := b.Buf[b.off]
 	b.off++
 	return r, nil
 }
@@ -125,18 +125,18 @@ func (b *RawConn) ReadByte() (byte, error) {
 func (b *RawConn) Fill() ([]byte, error) {
 	if b.empty() && !b.sniffing {
 		b.off = 0
-		b.end = 0
+		b.End = 0
 	}
-	n, err := b.ServerIn.Read(b.buf[b.end:])
-	b.end += n
+	n, err := b.In.Read(b.Buf[b.End:])
+	b.End += n
 	if err != nil {
 		return nil, err
 	}
-	return b.buf[b.off:b.end], nil
+	return b.Buf[b.off:b.End], nil
 }
 
 func (b *RawConn) Buffer() []byte {
-	return b.buf[b.off:b.end]
+	return b.Buf[b.off:b.End]
 }
 
 // Reset will set the bufferRead to off, so Read() will start from there (ignoring
@@ -150,13 +150,13 @@ func (b *RawConn) Reset(off int) {
 func (b *RawConn) Clean() {
 	b.sniffing = false
 	b.off = 0
-	b.end = 0
+	b.End = 0
 }
 
 func (b *RawConn) Sniff() {
 	b.sniffing = true
 	b.off = 0
-	b.end = 0
+	b.End = 0
 }
 
 func (b *RawConn) resetStats() {
@@ -165,17 +165,17 @@ func (b *RawConn) resetStats() {
 }
 
 func (b *RawConn) Read(p []byte) (int, error) {
-	if b.end > b.off {
+	if b.End > b.off {
 		// If we have already read something from the buffer before, we return the
 		// same data and the last error if any. We need to immediately return,
 		// otherwise we may block for ever, if we try to be smart and call
 		// source.Read() seeking a little bit of more data.
-		bn := copy(p, b.buf[b.off:b.end])
+		bn := copy(p, b.Buf[b.off:b.End])
 		b.off += bn
-		if !b.sniffing && b.end <= b.off {
+		if !b.sniffing && b.End <= b.off {
 			// buffer has been consummed, not in sniff mode
 			b.off = 0
-			b.end = 0
+			b.End = 0
 		}
 		return bn, b.lastErr
 	}
@@ -183,14 +183,14 @@ func (b *RawConn) Read(p []byte) (int, error) {
 
 	// If there is nothing more to return in the sniffed buffer, read from the
 	// source.
-	sn, sErr := b.ServerIn.Read(p)
+	sn, sErr := b.In.Read(p)
 	if sn > 0 && b.sniffing {
 		b.lastErr = sErr
-		if len(b.buf) < b.end+sn {
+		if len(b.Buf) < b.End+sn {
 			return sn, errors.New("short buffer")
 		}
-		copy(b.buf[b.end:], p[:sn])
-		b.end += sn
+		copy(b.Buf[b.End:], p[:sn])
+		b.End += sn
 	}
 	b.Stream.RcvdPackets++
 	b.Stream.RcvdBytes += sn
@@ -217,7 +217,7 @@ func CanSplice(in io.Reader, out io.Writer) bool {
 func (b *RawConn) WriteTo(w io.Writer) (n int64, err error) {
 	// Finish up the buffer first
 	if !b.empty() {
-		bn, err := w.Write(b.buf[b.off:b.end])
+		bn, err := w.Write(b.Buf[b.off:b.End])
 		if err != nil {
 			//"Write must return non-nil if it doesn't write the full buffer"
 			b.Stream.ProxyWriteErr = err
@@ -228,10 +228,10 @@ func (b *RawConn) WriteTo(w io.Writer) (n int64, err error) {
 	}
 
 	// but the dialed connection might, so we can splice
-	if CanSplice(b.ServerIn, w) {
+	if CanSplice(b.In, w) {
 		if wt, ok := w.(io.ReaderFrom); ok {
 			VarzReadFrom.Add(1)
-			n, err = wt.ReadFrom(b.ServerIn)
+			n, err = wt.ReadFrom(b.In)
 			b.Stream.RcvdPackets++
 			b.Stream.RcvdBytes += int(n)
 			b.Stream.LastRead = time.Now()
@@ -240,7 +240,7 @@ func (b *RawConn) WriteTo(w io.Writer) (n int64, err error) {
 	}
 
 	for {
-		sn, sErr := b.ServerIn.Read(b.buf)
+		sn, sErr := b.In.Read(b.Buf)
 		b.Stream.RcvdPackets++
 		b.Stream.RcvdBytes += sn
 
@@ -249,7 +249,7 @@ func (b *RawConn) WriteTo(w io.Writer) (n int64, err error) {
 		}
 
 		if sn > 0 {
-			wn, wErr := w.Write(b.buf[0:sn])
+			wn, wErr := w.Write(b.Buf[0:sn])
 			n += int64(wn)
 			if wErr != nil {
 				b.Stream.ProxyWriteErr = wErr

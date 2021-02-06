@@ -12,42 +12,46 @@ import (
 	"time"
 )
 
-// Connection with metadata
-// Common to TCP and UDP proxies
-// - Represents an outgoing connection to a remote site, with stats and metadata.
-// - Also represents an incoming connection from a remote
+// Stream is the main abstraction, representing a connection with metadata and additional
+// helpers.
 //
-// Implements net.Conn
+// The connection is typically:
+// - an accepted connection - In/Out are the raw net.Conn
+// - a TLSConn, wrapping the accepted connection
+// - HTTP2 RequestBody+ResponseWriter
 //
+// Metadata is extracted from the headers, SNI, SOCKS, Iptables. 
 // Example:
 // - raw TCP connection
 // - SOCKS - extracted dest host:port or IP:port
 // - IPTables - extracted original DST IP:port
 // - SNI - extracted 'Server Name' - port based on the listener port
 // - TLS - peer certificates, SNI, ALPN
-// -
+//
+// Metrics are maintained.
+//
+// Implements net.Conn
 type Stream struct {
+
 	// Counter
 	// Key in the Active table.
 	StreamId int
 
-	// remote In - data from remote app to local.
-	// May be an instance:
-	// - net.Conn - for outbound TCP connections
-	// - a res.Body for http-over-HTTP client. Note that remoteOut will be null in this case.
-	// - a TCPConnection for socks
-	// - for ssh -
+	// In - data from remote.
 	//
-	// Closing the 'input' without fully reading will result in RST.
-	ServerIn io.ReadCloser `json:"-"`
+	// Closing without fully reading will result in RST.
+	In io.ReadCloser `json:"-"`
 
-	// remoteOut - stream sending to the server.
-	// will be nil for http or cases where the API uses Read() and has its own local->remote proxy logic.
+	// Out - send to remote.
 	//
-	// Normally an instance of net.Conn, create directly to app or to another node.
+	// Normally an instance of net.Conn or tls.Conn - both implementing CloseWrite and Close
+	//
 	// Not WriterCloser because it can be an http.ResponseWriter, which implements
-	// CloseWrite instead.
-	ServerOut io.Writer `json:"-"`
+	// CloseWrite instead, but not Close.
+	//
+	// Normal close sequence is to call CloseWrite on Out, and after reading the full In to call
+	// Close on In.
+	Out io.Writer `json:"-"`
 
 	// Associated virtual http request.
 	Request *http.Request `json:"-"`
@@ -130,7 +134,7 @@ type Stream struct {
 
 	// Optional function to call after dial. Used to send metadata
 	// back to the protocol ( for example SOCKS)
-	postDial func(net.Conn, error) `json:"-"`
+	PostDialHandler func(net.Conn, error) `json:"-"`
 
 	// True if the Stream is originated from local machine, i.e.
 	// SOCKS/iptables/TUN capture or dialed from local process
@@ -150,7 +154,7 @@ type Stream struct {
 // Create a new stream.
 func NewStream() *Stream {
 	return &Stream{
-		StreamId: int(atomic.AddUint32(&streamIds, 1)),
+		StreamId: int(atomic.AddUint32(&StreamId, 1)),
 		Open:     time.Now(),
 	}
 }
@@ -163,14 +167,14 @@ func NewStream() *Stream {
 //
 func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Stream) *Stream {
 	return &Stream{
-		StreamId: int(atomic.AddUint32(&streamIds, 1)),
+		StreamId: int(atomic.AddUint32(&StreamId, 1)),
 		Open:     time.Now(),
 
-		Request:   r,
-		ServerIn:  r.Body,
-		ServerOut: w,
-		TLS:       r.TLS,
-		Dest:      r.Host,
+		Request: r,
+		In:      r.Body,
+		Out:     w,
+		TLS:     r.TLS,
+		Dest:    r.Host,
 	}
 }
 
@@ -199,7 +203,7 @@ func (s *Stream) HTTPRequest() *http.Request {
 }
 
 func (s *Stream) HTTPResponse() http.ResponseWriter {
-	if rw, ok := s.ServerOut.(http.ResponseWriter); ok {
+	if rw, ok := s.Out.(http.ResponseWriter); ok {
 		return rw
 	}
 	return nil
@@ -231,20 +235,8 @@ func (s *Stream) Meta() *Stream {
 	return s
 }
 
-func (s *Stream) RemoteID() string {
-	if s.TLS == nil {
-		return ""
-	}
-	pk, err := PubKeyFromCertChain(s.TLS.PeerCertificates)
-	if err != nil {
-		return ""
-	}
-
-	return IDFromPublicKey(pk)
-}
-
 func (s *Stream) Write(b []byte) (n int, err error) {
-	n, err = s.ServerOut.Write(b)
+	n, err = s.Out.Write(b)
 	if err != nil {
 		s.WriteErr = err
 		return n, err
@@ -252,20 +244,20 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 	s.SentBytes += n
 	s.SentPackets++
 	s.LastWrite = time.Now()
-	if f, ok := s.ServerOut.(http.Flusher); ok {
+	if f, ok := s.Out.(http.Flusher); ok {
 		f.Flush()
 	}
 
 	return
 }
 func (s *Stream) Flush() {
-	if f, ok := s.ServerOut.(http.Flusher); ok {
+	if f, ok := s.Out.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
 func (s *Stream) Read(out []byte) (int, error) {
-	n, err := s.ServerIn.Read(out)
+	n, err := s.In.Read(out)
 	s.RcvdBytes += n
 	s.RcvdPackets++
 	s.LastRead = time.Now()
@@ -281,6 +273,8 @@ func (s *Stream) Read(out []byte) (int, error) {
 	return n, err
 }
 
+// Must be called at the end. It is expected CloseWrite has been called, for graceful FIN.
+//
 func (s *Stream) Close() error {
 	if s.Closed {
 		return nil
@@ -292,10 +286,10 @@ func (s *Stream) Close() error {
 	if s.ctxCancel != nil {
 		s.ctxCancel()
 	}
-	if c, ok := s.ServerOut.(io.Closer); ok {
+	if c, ok := s.Out.(io.Closer); ok {
 		return c.Close()
 	} else {
-		return s.ServerIn.Close()
+		return s.In.Close()
 	}
 }
 
@@ -306,40 +300,42 @@ func (s *Stream) CloseWrite() error {
 	}
 	s.ServerClose = true
 
-	if cw, ok := s.ServerOut.(CloseWriter); ok {
+	if cw, ok := s.Out.(CloseWriter); ok {
 		return cw.CloseWrite()
-	}
-
-	if c, ok := s.ServerOut.(io.Closer); ok {
-		log.Println("ServerOut is not CloseWriter - closing full connection")
-		return c.Close()
+	} else {
+		if c, ok := s.Out.(io.Closer); ok {
+			log.Println("ServerOut is not CloseWriter - closing full connection")
+			return c.Close()
+		} else {
+			log.Println("Server out not Closer nor CloseWriter")
+		}
 	}
 	return nil
 }
 
 func (s *Stream) SetDeadline(t time.Time) error {
-	if cw, ok := s.ServerOut.(net.Conn); ok {
+	if cw, ok := s.Out.(net.Conn); ok {
 		cw.SetDeadline(t)
 	}
 	return nil
 }
 
 func (s *Stream) SetReadDeadline(t time.Time) error {
-	if cw, ok := s.ServerOut.(net.Conn); ok {
+	if cw, ok := s.Out.(net.Conn); ok {
 		cw.SetReadDeadline(t)
 	}
 	return nil
 }
 
 func (s *Stream) SetWriteDeadline(t time.Time) error {
-	if cw, ok := s.ServerOut.(net.Conn); ok {
+	if cw, ok := s.Out.(net.Conn); ok {
 		cw.SetWriteDeadline(t)
 	}
 	return nil
 }
 
 func (s *Stream) Header() http.Header {
-	if rw, ok := s.ServerOut.(http.ResponseWriter); ok {
+	if rw, ok := s.Out.(http.ResponseWriter); ok {
 		return rw.Header()
 	}
 	if s.ResponseHeader == nil {
@@ -349,7 +345,7 @@ func (s *Stream) Header() http.Header {
 }
 
 func (s *Stream) WriteHeader(statusCode int) {
-	if rw, ok := s.ServerOut.(http.ResponseWriter); ok {
+	if rw, ok := s.Out.(http.ResponseWriter); ok {
 		rw.WriteHeader(statusCode)
 		return
 	}
@@ -436,7 +432,7 @@ func (s *Stream) CopyBuffered(dst io.Writer, src io.Reader, srcIsRemote bool) (w
 }
 
 func (s *Stream) LocalAddr() net.Addr {
-	if cw, ok := s.ServerOut.(net.Conn); ok {
+	if cw, ok := s.Out.(net.Conn); ok {
 		return cw.LocalAddr()
 	}
 
@@ -450,7 +446,7 @@ func (s *Stream) LocalAddr() net.Addr {
 // RemoteID returns the authenticated ID.
 func (s *Stream) RemoteAddr() net.Addr {
 	// non-test Streams are either backed by a net.Conn or a Request
-	if cw, ok := s.ServerOut.(net.Conn); ok {
+	if cw, ok := s.Out.(net.Conn); ok {
 		return cw.RemoteAddr()
 	}
 
@@ -493,8 +489,8 @@ func (s *Stream) ReadFrom(cin io.Reader) (n int64, err error) {
 	// Typical case for accepted connections, TCPConn  implements
 	// this efficiently by splicing.
 	// TCP conn ReadFrom fallbacks to Copy without recycling the buffer
-	if CanSplice(cin, s.ServerOut) {
-		if wt, ok := s.ServerOut.(io.ReaderFrom); ok {
+	if CanSplice(cin, s.Out) {
+		if wt, ok := s.Out.(io.ReaderFrom); ok {
 			VarzReadFromC.Add(1)
 			n, err = wt.ReadFrom(cin)
 			s.SentPackets++
@@ -521,11 +517,11 @@ func (s *Stream) ReadFrom(cin io.Reader) (n int64, err error) {
 			VarzMaxRead.Set(int64(nr))
 		}
 
-		nw, err := s.ServerOut.Write(buf[0:nr])
+		nw, err := s.Out.Write(buf[0:nr])
 		n += int64(nw)
 		s.SentBytes += nw
 		s.SentPackets++
-		if f, ok := s.ServerOut.(http.Flusher); ok {
+		if f, ok := s.Out.(http.Flusher); ok {
 			f.Flush()
 		}
 
@@ -538,8 +534,8 @@ func (s *Stream) ReadFrom(cin io.Reader) (n int64, err error) {
 }
 
 func (b *Stream) PostDial(nc net.Conn, err error) {
-	if b.postDial != nil {
-		b.postDial(nc, err)
+	if b.PostDialHandler != nil {
+		b.PostDialHandler(nc, err)
 	}
 }
 
@@ -548,7 +544,21 @@ func (b *Stream) PostDial(nc net.Conn, err error) {
 func (s *Stream) ProxyTo(nc net.Conn) error {
 	errCh := make(chan error, 2)
 	go s.proxyFromClient(nc, errCh)
-	return s.proxyToClient(nc, errCh)
+	// Blocking, returns when all data is read from In, or error
+	err1 := s.proxyToClient(nc, errCh)
+
+	// Wait for data to be read from nc and sent to Out, or error
+	remoteErr := <-errCh
+	if remoteErr == nil {
+		remoteErr = err1
+	}
+
+	// The read part may have returned EOF, or the write may have failed.
+	// In the first case close will send FIN, else will send RST
+
+	s.In.Close()
+	nc.Close()
+	return remoteErr
 }
 
 // Read from the Reader, send to the client.
@@ -556,13 +566,18 @@ func (s *Stream) ProxyTo(nc net.Conn) error {
 func (s *Stream) proxyToClient(cout io.WriteCloser, errch chan error) error {
 	s.WriteTo(cout) // errors are preserved in stats, 4 kinds possible
 
-	// At this point an error or graceful EOF from Reader has been received.
-	// TODO: if error do a Close instead of CloseWrite (so EOF is not sent if
-	// possible ).
-	if s.ProxyWriteErr != nil || s.ReadErr != nil {
+	// At this point an error or graceful EOF from our Reader has been received.
+	err := s.ProxyWriteErr
+	if err == nil {
+		err = s.ReadErr
+	}
+
+	if err != nil {
+		// Should send RST if unbuffered data (may also be FIN - no way to control)
 		cout.Close()
+		s.In.Close()
 	} else {
-		// WriteTo doesn't close the writer !
+		// WriteTo doesn't close the writer ! We need to send a FIN, so remote knows we're done.
 		if c, ok := cout.(CloseWriter); ok {
 			s.ClientClose = true
 			c.CloseWrite()
@@ -570,37 +585,22 @@ func (s *Stream) proxyToClient(cout io.WriteCloser, errch chan error) error {
 			log.Println("Missing CloseWrite ", cout)
 			cout.Close()
 		}
+		// EOF was received already for normal close.
+		// If a write error happened - we want to close it to force a RST.
+		if cc, ok := s.In.(CloseReader); ok {
+			cc.CloseRead()
+		}
 	}
-
-	// EOF was received already for normal close.
-	// If a write error happened - we want to close it to force a RST.
-	if cc, ok := s.ServerIn.(CloseReader); ok {
-		cc.CloseRead()
-	} else {
-		s.ServerIn.Close()
-	}
-
-	remoteErr := <-errch
-
-	// The read part may have returned EOF, or the write may have failed.
-	// In the first case close will send FIN, else will send RST
-	if c, ok := s.ServerOut.(io.Closer); ok {
-		c.Close()
-	}
-	if c, ok := cout.(io.Closer); ok {
-		c.Close()
-	}
-
-	return remoteErr
+	return err
 }
 
 // WriteTo implements the interface, using the read buffer.
 func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 
-	if CanSplice(s.ServerIn, w) {
+	if CanSplice(s.In, w) {
 		if wt, ok := w.(io.ReaderFrom); ok {
 			VarzReadFrom.Add(1)
-			n, err = wt.ReadFrom(s.ServerIn)
+			n, err = wt.ReadFrom(s.In)
 			s.RcvdPackets++
 			s.RcvdBytes += int(n)
 			s.LastRead = time.Now()
@@ -614,7 +614,7 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 	buf := buf1[0:bufCap:bufCap]
 
 	for {
-		sn, sErr := s.ServerIn.Read(buf)
+		sn, sErr := s.In.Read(buf)
 		s.RcvdPackets++
 		s.RcvdBytes += sn
 
@@ -646,17 +646,16 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error) {
 	_, err := s.ReadFrom(cin)
 
-	// At this point either cin returned FIN or RST
+	// At this point cin either returned an EOF (FIN), or error (RST from remote, or error writing)
 	if s.ProxyReadErr != nil || s.WriteErr != nil {
+		// May send RST
 		s.Close()
+		cin.Close()
 	} else {
 		s.CloseWrite()
-	}
-
-	if cc, ok := cin.(CloseReader); ok {
-		cc.CloseRead()
-	} else {
-		cin.Close()
+		if cc, ok := cin.(CloseReader); ok {
+			cc.CloseRead()
+		}
 	}
 
 	errch <- err

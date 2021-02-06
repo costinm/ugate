@@ -1,4 +1,4 @@
-package ugate
+package auth
 
 import (
 	"crypto"
@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"math/big"
 	"time"
+
+	"github.com/costinm/ugate"
 )
 
 // Support for ID and authn using certificates.
@@ -46,7 +48,7 @@ type Auth struct {
 	VIP64 uint64
 
 	// Blob store - for loading/saving certs and keys. If nil, all is just in memory.
-	Config ConfStore
+	Config ugate.ConfStore
 
 	// Trust domain, should be 'cluster.local' or a real domain with OIDC keys.
 	Domain string
@@ -72,7 +74,7 @@ type Auth struct {
 
 	// Certificates associated with this node. The first certificate is the workload
 	// id, primary cert.
-	tlsCerts []tls.Certificate
+	TlsCerts []tls.Certificate
 
 	EC256Cert *tls.Certificate
 	//// Secondary private keys.
@@ -85,12 +87,12 @@ type Auth struct {
 	cfg        *KubeConfig
 
 	// Explicit certificates (lego), key is hostname from file
-	certMap    map[string]*tls.Certificate
+	CertMap map[string]*tls.Certificate
 }
 
 var certValidityPeriod = 100 * 365 * 24 * time.Hour
 
-func NewAuth(cs ConfStore, name, domain string) *Auth {
+func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 	if name == "" {
 		if os.Getenv("POD_NAME") != "" {
 			name = os.Getenv("POD_NAME") + "." + os.Getenv("POD_NAMESPACE")
@@ -118,7 +120,7 @@ func NewAuth(cs ConfStore, name, domain string) *Auth {
 	//auth.generateCert()
 	//auth.tlsCerts = append(auth.tlsCerts, *auth.EC256Cert)
 
-	c0 := auth.tlsCerts[0]
+	c0 := auth.TlsCerts[0]
 	pk := c0.PrivateKey
 
 	if priv, ok := pk.(*ecdsa.PrivateKey); ok {
@@ -136,7 +138,7 @@ func NewAuth(cs ConfStore, name, domain string) *Auth {
 	auth.pub64 = base64.RawURLEncoding.EncodeToString(auth.Pub)
 	auth.ID = IDFromPublicKey(auth.Pub)
 
-	auth.certMap = auth.GetCerts()
+	auth.CertMap = auth.GetCerts()
 
 	return auth
 }
@@ -148,11 +150,11 @@ func NewAuth(cs ConfStore, name, domain string) *Auth {
 func (auth *Auth) GenerateTLSConfigServer() *tls.Config {
 	var crt *tls.Certificate
 
-	crt = &auth.tlsCerts[0]
+	crt = &auth.TlsCerts[0]
 
 	certs := []tls.Certificate{*crt}
 
-	auth.certMap["*"] = crt
+	auth.CertMap["*"] = crt
 
 	return &tls.Config{
 		Certificates: certs,
@@ -164,7 +166,7 @@ func (auth *Auth) GenerateTLSConfigServer() *tls.Config {
 			//
 			log.Printf("Server/NewConn/CH %s %v %v", ch.ServerName, ch.SupportedProtos, ch.Conn.RemoteAddr())
 			// doesn't include :5228
-			c, ok := auth.certMap[ch.ServerName]
+			c, ok := auth.CertMap[ch.ServerName]
 			if ok {
 				return c, nil
 			}
@@ -230,7 +232,7 @@ func (auth *Auth) Sign(data []byte, sig []byte) {
 	hasher.Write(data) //[0:64]) // only public key, for debug
 	hash := hasher.Sum(nil)
 
-	c0 := auth.tlsCerts[0]
+	c0 := auth.TlsCerts[0]
 	if ec, ok := c0.PrivateKey.(*ecdsa.PrivateKey); ok {
 		r, s, _ := ecdsa.Sign(rand.Reader, ec, hash)
 		copy(sig, r.Bytes())
@@ -282,7 +284,7 @@ func (auth *Auth) GenerateTLSConfigClient() *tls.Config {
 		// VerifyPeerCertificate used instead
 		InsecureSkipVerify: true,
 
-		Certificates: auth.tlsCerts,
+		Certificates: auth.TlsCerts,
 		// not set on client !! Setting it also disables Auth !
 		//NextProtos: nextProtosH2,
 	}
@@ -296,7 +298,7 @@ func (auth *Auth) GetSignedCert(url string) error {
 			log.Println("Failed to load system istio certs", err)
 		} else {
 			//auth.RSACert = &crt
-			auth.tlsCerts = append(auth.tlsCerts, crt)
+			auth.TlsCerts = append(auth.TlsCerts, crt)
 			if crt.Leaf != nil {
 				log.Println("Loaded istio cert ", crt.Leaf.URIs)
 			}
@@ -315,7 +317,7 @@ var useED = false
 
 func (auth *Auth) initCert() {
 	auth.loadAuthCfg()
-	if len(auth.tlsCerts) > 0 {
+	if len(auth.TlsCerts) > 0 {
 		return // got a cert
 	}
 	var keyPEM, certPEM []byte
@@ -324,12 +326,12 @@ func (auth *Auth) initCert() {
 		_, edpk, _ := ed25519.GenerateKey(rand.Reader)
 		auth.ID = IDFromPublicKey(PublicKey(edpk))
 		tlsCert, keyPEM, certPEM = auth.generateSelfSigned("ed25519", edpk, auth.Name+"."+auth.Domain)
-		auth.tlsCerts = []tls.Certificate{tlsCert}
+		auth.TlsCerts = []tls.Certificate{tlsCert}
 	} else {
 		privk, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		auth.ID = IDFromPublicKey(PublicKey(privk))
 		tlsCert, keyPEM, certPEM = auth.generateSelfSigned("ec256", privk, auth.Name+"."+auth.Domain)
-		auth.tlsCerts = []tls.Certificate{tlsCert}
+		auth.TlsCerts = []tls.Certificate{tlsCert}
 		auth.EC256Cert = &tlsCert
 	}
 
@@ -346,7 +348,7 @@ func (auth *Auth) initCert() {
 		},
 		Users: []KubeNamedUser{
 			{Name: "default",
-				User: AuthInfo{
+				User: KubeUser{
 					ClientKeyData: keyPEM,
 					ClientCertificateData: certPEM,
 				},
@@ -395,7 +397,7 @@ func (auth *Auth) loadAuthCfg() {
 	// TODO: default context or context env
 
 	auth.cfg = kube
-	auth.tlsCerts = []tls.Certificate{tlsCert}
+	auth.TlsCerts = []tls.Certificate{tlsCert}
 	auth.EC256Cert = &tlsCert
 }
 
@@ -625,7 +627,7 @@ func (auth *Auth) SignCSR(csrBytes []byte, org string, sans ...string) ([]byte, 
 		return nil, fmt.Errorf("failed to parse X.509 certificate signing request")
 	}
 
-	certDER := auth.signCertDER(csr.PublicKey, auth.tlsCerts[0].PrivateKey, sans...)
+	certDER := auth.signCertDER(csr.PublicKey, auth.TlsCerts[0].PrivateKey, sans...)
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
 	return certPEM, nil

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+
+	"github.com/costinm/ugate"
 )
 
-func (ug *UGate) processUnixConn(bc *RawConn) error {
-	uc, ok := bc.ServerOut.(*net.UnixConn)
+func (ug *UGate) processUnixConn(bc *ugate.RawConn) error {
+	uc, ok := bc.Out.(*net.UnixConn)
 	if !ok {
 		return errors.New("Unexpected con")
 	}

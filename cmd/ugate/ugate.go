@@ -8,7 +8,9 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/costinm/ugate"
+	auth2 "github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/local"
+	ug "github.com/costinm/ugate/pkg/ugate"
 )
 
 // Minimal TCP over H2 Gateway, defaulting to Istio ports and capture behavior.
@@ -28,7 +30,7 @@ import (
 // - SOCKS and PROXY
 //
 func main() {
-	config := ugate.NewConf("./")
+	config := ug.NewConf("./")
 
 	cfg := &ugate.GateCfg{
 		BasePort: 15000,
@@ -46,9 +48,9 @@ func main() {
 		}
 	}
 
-	auth := ugate.NewAuth(config, cfg.Name, cfg.Domain)
+	auth := auth2.NewAuth(config, cfg.Name, cfg.Domain)
 	// By default, pass through using net.Dialer
-	ug := ugate.NewGate(&net.Dialer{}, auth, cfg)
+	ug := ug.NewGate(&net.Dialer{}, auth, cfg)
 
 	localgw := local.NewLocal(ug, auth)
 	local.ListenUDP(localgw)

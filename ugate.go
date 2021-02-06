@@ -2,20 +2,18 @@ package ugate
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
+	"encoding/json"
 	"expvar"
-	"fmt"
-	"log"
 	"net"
 	"net/http"
-	"os"
-	"sync"
+	"strconv"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
 var (
-	streamIds = uint32(0)
+	StreamId = uint32(0)
 )
 
 var (
@@ -34,285 +32,429 @@ var (
 	VarzMaxRead = expvar.NewInt("ugate.maxRead")
 
 	// Managed by 'NewTCPProxy' - before dial.
-	tcpConTotal = expvar.NewInt("gate:tcp:total")
+	TcpConTotal = expvar.NewInt("gate:tcp:total")
 
 	// Managed by updateStatsOnClose - including error cases.
-	tcpConActive = expvar.NewInt("gate:tcp:active")
+	TcpConActive = expvar.NewInt("gate:tcp:active")
 )
 
-type UGate struct {
-	// Actual (real) port listeners, key is the host:port
-	// Typically host is 0.0.0.0 or 127.0.0.1 - may also be one of the
-	// local addresses.
-	Listeners map[string]*Listener
-
-	Config *GateCfg
-
-	// Default dialer used to connect to host:port extracted from metadata.
-	// Defaults to net.Dialer, making real connections.
-	// Can be replaced with a mux or egress dialer or router.
-	Dialer ContextDialer
-
-	// Configurations, keyed by host + port and URL.
-	Conf map[string]*Listener
-
-	DefaultListener *Listener
-
-	// Handlers for incoming connections - local accept or forwarding.
-	Mux *http.ServeMux
-
-	// Handlers for egress - source is local. Default is to forward using Dialer.
-	EgressMux *http.ServeMux
-
-	// Used to inject UDP packets into the host with custom source address.
-	// Only set when a TUN or TPROXY are used.
-	TUNUDPWriter UdpWriter
-
-	// template, used for TLS connections and the host ID
-	TLSConfig *tls.Config
-
-	h2Handler *H2Transport
-
-	// Direct Nodes by interface address (which is derived from public key). This includes only
-	// directly connected notes - either Wifi on same segment, or VPNs and
-	// connected devices - with TLS termination and mutual auth. The nodes typically
-	// have a multiplexed connection.
-	Nodes     map[uint64]*DMNode
-	NodesByID map[string]*DMNode
-
-	// Active connection by internal stream ID.
-	// Tracks incoming Streams - if the stream is getting proxied to
-	// a net.Conn or Stream, the dest will not be tracked here.
-	ActiveTcp map[int]*Stream
-
-	m     sync.RWMutex
-	Auth  *Auth
-}
-
-func NewGate(d ContextDialer, auth *Auth, cfg *GateCfg) *UGate {
-	if auth == nil {
-		auth = NewAuth(nil, "", "cluster.local")
-	}
-	if cfg == nil {
-		cfg = &GateCfg{
-
-		}
-	}
-
-	ug := &UGate{
-		Listeners: map[string]*Listener{},
-		Dialer:    d,
-		Config:    cfg,
-		NodesByID: map[string]*DMNode{},
-		Nodes:     map[uint64]*DMNode{},
-		Conf:      map[string]*Listener{},
-		Mux:       http.NewServeMux(),
-		EgressMux: http.NewServeMux(),
-		Auth:      auth,
-		ActiveTcp: map[int]*Stream{},
-		DefaultListener: &Listener{
-		},
-	}
-
-
-	ug.TLSConfig = &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		//PreferServerCipherSuites: ugate.preferServerCipherSuites(),
-		InsecureSkipVerify: true,                  // This is not insecure here. We will verify the cert chain ourselves.
-		ClientAuth:         tls.RequestClientCert, // not require - we'll fallback to JWT
-		Certificates:       auth.tlsCerts,
-		VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
-			panic("tls config not specialized for peer")
-		},
-		NextProtos: []string{"istio", "h2"},
-		// Will only be called if client supplies SNI and Certificates empty
-		GetCertificate: func(ch *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			// Log on each new TCP connection, after client hello
-			//
-			log.Printf("Server/NewConn/CH %s %v %v", ch.ServerName, ch.SupportedProtos, ch.Conn.RemoteAddr())
-			// doesn't include :5228
-			c, ok := auth.certMap[ch.ServerName]
-			if ok {
-				return c, nil
-			}
-			return &ug.Auth.tlsCerts[0], nil
-		},
-
-		//SessionTicketsDisabled: true,
-	}
-
-	ug.h2Handler, _ = NewH2Transport(ug)
-
-	go ug.h2Handler.UpdateReverseAccept()
-
-	ug.Mux.Handle("/debug/", http.DefaultServeMux)
-	ug.Mux.HandleFunc("/dmesh/tcpa", ug.HttpTCP)
-	ug.Mux.HandleFunc("/dmesh/rd", ug.HttpNodesFilter)
-	ug.Mux.Handle("/debug/echo/", &EchoHandler{})
-
-	ug.DefaultPorts(ug.Config.BasePort)
-
-	// Explicit TCP forwarders.
-	for k, t := range ug.Config.Listeners {
-		t.Address = k
-		ug.Add(t)
-	}
-
-	return ug
-}
-
-// Expects the result to be validated and do ALPN.
-//func (ug *UGate) DialTLS(net, addr string, tc *tls.Config) {
+// Configuration for the micro Gateway.
 //
-//}
+type GateCfg struct {
+	// BasePort is the first port used for the virtual/control ports.
+	// For Istio interop, it defaults to 15000 and uses same offsets.
+	// Primarily used for testing, or if Istio is also used.
+	BasePort int `json:"basePort,omitempty"`
 
-// New TLS or TCP connection.
-func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
-	tcpC, err := ug.Dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
+	// Name of the node, defaults to hostname or POD_NAME
+	Name string `json:"name,omitempty"`
 
-	if "tls" == netw {
-		// TODO: parse addr as URL or VIP6 extract peer ID
-		return ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", nil)
-	}
-	if "h2r" == netw {
-		// TODO: parse addr as URL or VIP6 extract peer ID
-		return ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", []string{"h2r", "h2"})
-	}
+	// Domain name, also default control plane and gateway.
+	Domain string `json:"domain,omitempty"`
 
-	return tcpC, err
+	// Additional port listeners.
+	// Egress: listen on 127.0.0.1:port
+	// Ingress: listen on 0.0.0.0:port (or actual IP)
+	//
+	// Port proxies: will register a listener for each port, forwarding to the
+	// given address.
+	Listeners map[string]*Listener `json:"listeners,omitempty"`
+
+	// Configured hosts, key is a domain name without port.
+	Hosts map[string]*DMNode `json:"hosts,omitempty"`
+
+	// Egress gateways for reverse H2 - key is the domain name, value is the
+	// pubkey or root CA. If empty, public certificates are required.
+	H2R map[string]string `json:"remoteAccept,omitempty"`
 }
 
-func (ug *UGate) DialTLS(addr string, alpn []string) (*Stream, error) {
-	ctx, cf := context.WithTimeout(context.Background(), 5*time.Second)
-	tcpC, err := ug.Dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	// TODO: parse addr as URL or VIP6 extract peer ID
-	t, err := ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", alpn)
-	if err != nil {
-		return nil, err
-	}
-	cf()
-	return t.Meta(), nil
+const (
+	// Offsets from BasePort for the default ports.
+
+	// Used for local UDP messages and multicast.
+	PORT_UDP = 8
+
+	PORT_IPTABLES = 1
+	PORT_IPTABLES_IN = 6
+	PORT_SOCKS = 9
+	PORT_SNI = 3
+	PORT_HTTPS = 7
+)
+
+// Node information, based on registration info or discovery.
+type DMNode struct {
+	// VIP is the mesh specific IP6 address. The 'network' identifies the master node, the
+	// link part is the sha of the public key. This is a byte[16].
+	VIP net.IP `json:"vip,omitempty"`
+
+	// Public key. If empty, the VIP should be set.
+	PublicKey []byte `json:"pub,omitempty"`
+
+	// Information from the node - from an announce or message.
+	NodeAnnounce *NodeAnnounce `json:"info,omitempty"`
+
+	// Primary/main address and port of the BTS endpoint.
+	// Can be a DNS name that resolves, or some other node.
+	// Individual IPs (relay, etc) will be in the info.addrs field
+	Addr string `json:"addr,omitempty"`
+
+	Labels map[string]string `json:"l,omitempty"`
+
+	Bacokff time.Duration `json:"-"`
+
+	// Last LL GW address used by the peer.
+	// Public IP addresses are stored in Reg.IPs.
+	// If set, returned as the first address in GWs, which is used to connect.
+	// This is not sent in the registration - but extracted from the request
+	// remote address.
+	GW *net.UDPAddr `json:"gw,omitempty"`
+
+	// Set if the gateway has an active incoming connection from this
+	// node, with the node acting as client.
+	// Streams will be forwarded to the node using special 'accept' mode.
+	// This is similar with PUSH in H2.
+	// Deprecated
+	TunSrv MuxedConn `json:"-"`
+
+	// Existing tun to the remote node, previously dialed.
+	// Deprecated
+	TunClient MuxedConn `json:"-"`
+
+	// IP4 address of last announce
+	Last4 *net.UDPAddr `json:"-"`
+
+	// IP6 address of last announce
+	Last6 *net.UDPAddr `json:"-"`
+
+	FirstSeen time.Time
+
+	// Last packet or registration from the peer.
+	LastSeen time.Time `json:"t"`
+
+	// In seconds since first seen, last 100
+	Seen []int `json:"-"`
+
+	// LastSeen in a multicast announce
+	LastSeen4 time.Time
+
+	// LastSeen in a multicast announce
+	LastSeen6 time.Time `json:"-"`
+
+	// Number of multicast received
+	Announces int `json:"-"`
+
+	// Numbers of announces received from that node on the P2P interface
+	AnnouncesOnP2P int `json:"-"`
+
+	// Numbers of announces received from that node on the P2P interface
+	AnnouncesFromP2P int `json:"-"`
+
+	H2r *http2.ClientConn `json:"-"`
+
+	Mux http.Handler `json:"-"`
 }
 
-func (ug *UGate) GetNode(id string) *DMNode {
-	ug.m.RLock()
-	n := ug.NodesByID[id]
-	if n == nil {
-		n = ug.Config.Hosts[id]
-	}
-	ug.m.RUnlock()
-	return n
+const ProtoTLS = "tls"
+
+// autodetected for TLS.
+const ProtoH2 = "h2"
+const ProtoHTTP = "http" // 1.1
+const ProtoHTTPS = "https"
+
+const ProtoHAProxy = "haproxy"
+
+// Egress capture - for dedicated listeners
+const ProtoSocks = "socks5"
+const ProtoIPTables = "iptables"
+const ProtoIPTablesIn = "iptables-in"
+const ProtoConnect = "connect"
+
+// Listener represents the configuration for an acceptor on a port.
+//
+// For each port, metadata is optionally extracted - in particular a 'hostname', which
+// is the destination IP or name:
+// - socks5 dest
+// - iptables original dst ( may be combined with DNS interception )
+// - NAT dst address
+// - SNI for TLS
+// - :host header for HTTP
+//
+// Stream Dest and meta will be set after metadata extraction.
+//
+// Based on Istio/K8S Gateway models.
+type Listener struct {
+
+	// Address address (ex :8080). This is the requested address.
+	// Addr() returns the actual address of the listener.
+	Address string `json:"address,omitempty"`
+
+	// Port can have multiple protocols:
+	// - iptables
+	// - iptables_in
+	// - socks5
+	// - tls - will use SNI to detect the host config, depending
+	// on that we may terminate or proxy
+	// - http - will auto-detect http/2, proxy
+	//
+	// If missing or other value, this is a dedicated port, specific to a single
+	// destination.
+	Protocol string `json:"proto,omitempty"`
+
+	// ForwardTo where to forward the proxied connections.
+	// Used for accepting on a dedicated port. Will be set as Dest in
+	// the stream, can be mesh node.
+	// IP:port format, where IP can be a mesh VIP
+	ForwardTo string `json:"forwardTo,omitempty"`
+
+	// Custom listener - not guaranteed to return TCPConn.
+	// After the listener is added, will be set to the port listener.
+	// For future use with IPFS
+	NetListener net.Listener `json:-`
+
+	// Must block until the connection is fully handled !
+	Handler ConHandler `json:-`
+
+//	gate *UGate `json:-`
 }
 
-func (ug *UGate) GetOrAddNode(id string) *DMNode {
-	ug.m.Lock()
-	n := ug.NodesByID[id]
-	if n == nil {
-		n = &DMNode{
-			FirstSeen: time.Now(),
-		}
-		ug.NodesByID[id] = n
+// Mapping to Istio:
+// - gateway port -> listener conf
+// - Remote -> shortcut for a TCP listener with  single deset.
+// - SNI/Socks -> host extracted from protocol.
+//
+//
+
+// -------------------- Used by upgate
+
+// TODO: use net.Dialer (timeout, keep alive, resolver, etc)
+
+// TODO: use net.Dialer.DialContext(ctx context.Context, network, address string) (Conn, error)
+// Dialer also uses nettrace in context, calls resolver,
+// can do parallel or serial calls. Supports TCP, UDP, Unix, IP
+
+// nettrace: internal, uses TraceKey in context used for httptrace,
+// but not exposed. Net has hooks into it.
+// Dial, lookup keep track of DNSStart, DNSDone, ConnectStart, ConnectDone
+
+// httptrace:
+// WithClientTrace(ctx, trace) Context
+// ContextClientTrace(ctx) -> *ClientTrace
+
+// Defined in x.net.proxy
+// Used to create the actual connection to an address.
+type ContextDialer interface {
+	DialContext(ctx context.Context, net, addr string) (net.Conn, error)
+}
+
+// Alternative to http.Handler
+type ConHandler interface {
+	Handle(conn MetaConn) error
+}
+
+type ConHandlerF func(conn MetaConn) error
+
+func (c ConHandlerF) Handle(conn MetaConn) error {
+	return c(conn)
+}
+
+// For integration with TUN
+// TODO: use same interfaces.
+
+// UdpWriter is the interface implemented by the TunTransport, to send
+// packets back to the virtual interface
+type UdpWriter interface {
+	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
+}
+
+// Interface implemented by TCPHandler.
+type UDPHandler interface {
+	HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte)
+}
+
+// Used by the TUN interface.
+type TCPHandler interface {
+	HandleTUN(conn net.Conn, target *net.TCPAddr) error
+}
+
+
+// IPFS:
+// http://<gateway host>/ipfs/CID/path
+// http://<cid>.ipfs.<gateway host>/<path>
+// http://gateway/ipns/IPNDS_ID/path
+// ipfs://<CID>/<path>, ipns://<peer ID>/<path>, and dweb://<IPFS address>
+//
+// Multiaddr: TLV
+
+// Internal use.
+
+type MetaConn interface {
+	net.Conn
+	//http.ResponseWriter
+
+	// Returns request metadata. This is a subset of
+	// http.Request. An adapter exists to convert this into
+	// a proper http.Request and use normal http.Handler and
+	// RoundTrip.
+	Meta() *Stream
+}
+type CloseWriter interface {
+	CloseWrite() error
+}
+
+type CloseReader interface {
+	CloseRead() error
+}
+
+
+
+// Helpers for very simple configuration and key loading.
+// Will use json files for config.
+type ConfStore interface {
+	// Get a config blob by name
+	Get(name string) ([]byte, error)
+
+	// Save a config blob
+	Set(conf string, data []byte) error
+
+	// List the configs starting with a prefix, of a given type
+	List(name string, tp string) ([]string, error)
+}
+
+func ConfStr(cs ConfStore, name, def string) string {
+	if cs == nil {
+		return def
 	}
+	b, _ := cs.Get(name)
+	if b == nil {
+		return def
+	}
+	return string(b)
+}
+
+func ConfInt(cs ConfStore, name string, def int) int {
+	if cs == nil {
+		return def
+	}
+	b, _ := cs.Get(name)
+	if b == nil {
+		return def
+	}
+	v, err := strconv.Atoi(string(b))
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+// IPResolver uses DNS cache or lookups to return the name
+// associated with an IP, for metrics/stats/logs
+type IPResolver interface {
+	IPResolve(ip string) string
+}
+
+// Information about a node.
+// Sent periodically, signed by the origin - for example as a JWT, or UDP
+// proto.
+// TODO: map it to Pod, IPFS announce
+// TODO: move Wifi discovery to separate package.
+type NodeAnnounce struct {
+	UA string `json:"UA,omitempty"`
+
+	// Non-link local IPs from all interfaces. Includes public internet addresses
+	// and Wifi IP4 address. Used to determine if a node is directly connected.
+	IPs []*net.UDPAddr `json:"addrs,omitempty"`
+
+	// Set if the node is an active Android AP.
+	SSID string `json:"ssid,omitempty"`
+
+	// True if the node is an active Android AP on the interface sending the message.
+	// Will trigger special handling in link-local - if the receiving interface is also
+	// an android client.
+	AP bool `json:"AP,omitempty"`
+
+	Ack bool `json:"ACK,omitempty"`
+
+	// VIP of the direct parent, if this node is connected.
+	// Used to determine the mesh topology.
+	Vpn string `json:"Vpn,omitempty"`
+}
+
+// A Connection that can multiplex.
+// Will dial a stream, may also accept streams and dispatch them.
+//
+// For example SSHClient, SSHServer, Quic can support this.
+type MuxedConn interface {
+	// DialProxy will use the remote gateway to jump to
+	// a different destination, indicated by stream.
+	// On return, the stream ServerOut and ServerIn will be
+	// populated, and connected to stream Dest.
+	DialProxy(tp *Stream) error
+
+	// The VIP of the remote host, after authentication.
+	RemoteVIP() net.IP
+
+	// Wait for the stream to finish.
+	Wait() error
+}
+
+// Textual representation of the node registration data.
+func (n *DMNode) String() string {
+	b, _ := json.Marshal(n)
+	return string(b)
+}
+
+// Return the list of gateways for the node, starting with the link local if any.
+func (n *DMNode) GWs() []*net.UDPAddr {
+	res := []*net.UDPAddr{}
+
+	if n.GW != nil {
+		res = append(res, n.GW)
+	}
+	if n.Last4 != nil {
+		res = append(res, n.Last4)
+	}
+	if n.Last6 != nil {
+		res = append(res, n.Last6)
+	}
+	return res
+}
+
+// Called when receiving a registration or regular valid message via a different gateway.
+// - HandleRegistrationRequest - after validating the VIP
+//
+//
+// For VPN, the srcPort is assigned by the NAT, can be anything
+// For direct, the port will be 5228 or 5229
+func (n *DMNode) UpdateGWDirect(addr net.IP, zone string, srcPort int, onRes bool) {
 	n.LastSeen = time.Now()
-	ug.m.Unlock()
-	return n
+	n.GW = &net.UDPAddr{IP: addr, Port: srcPort, Zone: zone}
 }
-
-// Add a real port listener on a port.
-// Virtual listeners can be added to ug.Conf or the mux.
-func (ug *UGate) Add(cfg *Listener) (*Listener, net.Addr, error) {
-	cfg.gate = ug
-	err := cfg.start()
-	if err != nil {
-		return nil, nil, err
+func (n *DMNode) BackoffReset() {
+	n.Bacokff = 0
+}
+func (n *DMNode) BackoffSleep() {
+	if n.Bacokff == 0 {
+		n.Bacokff = 5 * time.Second
 	}
-	ug.Listeners[cfg.Address] = cfg
-	return cfg, cfg.Addr(), nil
-}
-
-func (ug *UGate) Close() error {
-	var err error
-	for _, p := range ug.Listeners {
-		e := p.Close()
-		if e != nil {
-			err = err
-		}
-		delete(ug.Listeners, p.Address)
+	time.Sleep(n.Bacokff)
+	if n.Bacokff < 5*time.Minute {
+		n.Bacokff = n.Bacokff * 2
 	}
-	return err
 }
 
-// Setup default ports, using base port.
-// For Istio, should be 15000
-func (ug *UGate) DefaultPorts(base int) error {
-	// Set if running in a knative env.
-	knativePort := os.Getenv("PORT")
-	if knativePort != "" {
-		ug.Add(&Listener{
-			Address: ":" + knativePort,
-			Protocol: ProtoHTTP,
-		})
-		// KNative doesn't support other ports by default - but still register them
-	}
-
-	// Egress: iptables and SOCKS5
-	// Not on localhost - redirect changes the port, keeps IP
-	ug.Add(&Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+PORT_IPTABLES),
-		Protocol: ProtoIPTables,
-	})
-	ug.Add(&Listener{
-		Address:  fmt.Sprintf("127.0.0.1:%d", base+PORT_SOCKS),
-		Protocol: ProtoSocks,
-	})
-	// TODO: add HTTP CONNECT for egress.
-
-	// Ingress: iptables ( capture all incoming )
-	ug.Add(&Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+PORT_IPTABLES_IN),
-		Protocol: ProtoIPTablesIn,
-	})
-	// BTS - incoming, SNI, relay
-	// Normally should be 443 for SNI gateways
-	// Use iptables to redirect, or an explicit config for port 443 if running as root.
-	// Based on SNI a virtual listener may be selected.
-	ug.Add(&Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+PORT_SNI),
-		Protocol: ProtoTLS,
-	})
-
-	ug.Add(&Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+PORT_HTTPS),
-		Protocol: ProtoHTTPS,
-		Handler:  ug.h2Handler,
-	})
-	go func() {
-		err := http.ListenAndServe(fmt.Sprintf(":%d", base), ug.Mux)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	return nil
+// === Messaging
+// The former messaging interface is mapped to HTTP:
+// - incoming messages are treated as HTTP requests. CloudEvents/Pubub/etc are ok.
+// - polling results in posting same HTTP requests, internally
+// - sending events: using a special HttpClient.
+//
+// Main 'difference' between a message and a regular HTTP is the size of request is limited.
+// Webpush is also mapped in the same way - the glue code handles encryption/decryption.
+// PubSubMessage is the payload of a Pub/Sub event.
+type PubSubMessage struct {
+	Message struct {
+		Data []byte `json:"data,omitempty"`
+		ID   string `json:"id"`
+	} `json:"message"`
+	Subscription string `json:"subscription"`
 }
-
-func (ug *UGate) findCfgIptablesIn(bconn MetaConn) *Listener {
-	m := bconn.Meta()
-	_, p, _ := net.SplitHostPort(m.Dest)
-	l := ug.Config.Listeners["-:"+p]
-	if l != nil {
-		return l
-	}
-	return ug.DefaultListener
-}
-
-func (ug *UGate) httpEgressProxy(pl *Listener, bconn *RawConn) error {
-	return nil
-}
-

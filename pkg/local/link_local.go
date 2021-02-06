@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate"
+	ug "github.com/costinm/ugate/pkg/ugate"
 )
 
 
@@ -39,7 +41,7 @@ var (
 )
 
 
-func NewLocal(gw *ugate.UGate, auth *ugate.Auth) *LLDiscovery {
+func NewLocal(gw *ug.UGate, auth *auth.Auth) *LLDiscovery {
 	return &LLDiscovery{
 		mcPort:   5227,
 		udpPort:  gw.Config.BasePort + 8,
@@ -258,7 +260,7 @@ func mcMessage(gw *LLDiscovery, i *ActiveInterface, isAck bool) []byte {
 }
 
 // Sign the message in the buffer.
-func signedMessage(buf *bytes.Buffer, auth *ugate.Auth) []byte {
+func signedMessage(buf *bytes.Buffer, auth *auth.Auth) []byte {
 
 	buf.Write(auth.Pub[1:])
 	buf.Write(auth.Pub[1:]) // to add another 64 bytes
@@ -678,13 +680,13 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 	sig := data[dl-64 : dl]
 
 	// Check signature. Verified Public key is the identity
-	err := ugate.Verify(data[0:dl-64], pub, sig)
+	err := auth.Verify(data[0:dl-64], pub, sig)
 	if err != nil {
 		log.Println("MCDirect: Signature ", err)
 		return nil, nil, err
 	}
 
-	dmFrom := ugate.Pub2ID(pub)
+	dmFrom := auth.Pub2ID(pub)
 	if gw.auth.VIP64 == dmFrom {
 		return nil, nil, selfRegister
 	}
@@ -698,7 +700,7 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 
 	now := time.Now()
 
-	node := gw.gw.GetOrAddNode(ugate.IDFromPublicKey(pub))
+	node := gw.gw.GetOrAddNode(auth.IDFromPublicKey(pub))
 
 	since := int(now.Sub(node.LastSeen) / time.Second)
 	if since > 2 {

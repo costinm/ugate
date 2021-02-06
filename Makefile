@@ -1,6 +1,7 @@
 OUT=build
 
 #include ${HOME}/.hosts.mk
+ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
 run/home:
 	HOST=ugate $(MAKE) run
@@ -13,7 +14,7 @@ run:
 	CGO_ENABLED=0 go build -o ${OUT}/ugate ./cmd/ugate
 	ssh ${HOST} pkill ugate || true
 	scp ${OUT}/ugate ${HOST}:/x/ugate
-	ssh  ${HOST} "cd /x/ugate; /x/ugate/ugate"
+	ssh  ${HOST} "cd /x/ugate; HOME=/x/ugate /x/ugate/ugate"
 
 update:
 	yq -j < cmd/ugate/testdata/ugate.yaml > cmd/ugate/testdata/ugate.json
@@ -25,15 +26,17 @@ docker:
 
 run/docker-image:
 	docker run -P -v /ws/dmesh-src/work/s1:/var/lib/istio \
-		-v ${PWD}:/ws \
+		-v ${ROOT_DIR}:/ws \
 		--name ugate \
 		--cap-add NET_ADMIN \
 		-p 443:9999 \
 	   ${IMAGE}:latest
 
 run/docker-test:
+	docker stop ugate || true
+	docker rm ugate || true
 	docker run -P -v /ws/dmesh-src/work/s1:/var/lib/istio \
-		-v ${PWD}:/ws \
+		-v ${ROOT_DIR}:/ws \
 		--name ugate \
 		--cap-add NET_ADMIN \
 		-p 443:9999 \
@@ -65,6 +68,17 @@ gcp/secret:
 		--project dmeshgate \
 		--format json \
 		--quiet
+
+test/run-iptables:
+	docker run -P  \
+		-v ${ROOT_DIR}:/ws \
+		--rm \
+		-w /ws \
+		--entrypoint /bin/sh \
+		--cap-add NET_ADMIN \
+	   ${IMAGE}:latest \
+	   -c "make test/iptables"
+
 
 # Should be run in docker, as root
 test/iptables:

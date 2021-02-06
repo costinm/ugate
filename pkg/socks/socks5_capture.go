@@ -1,4 +1,4 @@
-package ugate
+package socks
 
 import (
 	"encoding/binary"
@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"strconv"
+
+	"github.com/costinm/ugate"
 )
 
 // Egress capture. See also iptables, TUN, CONNECT proxy
@@ -78,8 +80,8 @@ const (
 
 // Extract the target from the SOCKS header, consume it, and register a post-dial
 // hook.
-func (ug *UGate) readSocksHeader(acceptedCon *RawConn) error {
-	head := acceptedCon.buf
+func  ReadSocksHeader(acceptedCon *ugate.RawConn) error {
+	head := acceptedCon.Buf
 	str := acceptedCon.Meta()
 
 	n, err := acceptedCon.Read(head)
@@ -165,12 +167,12 @@ func (ug *UGate) readSocksHeader(acceptedCon *RawConn) error {
 	// TODO: copy the ip (head will be reused)
 	switch atyp {
 	case 1:
-		copy(acceptedCon.ipBuf, head[4:8])
-		dest = acceptedCon.ipBuf[0:4]
+		copy(acceptedCon.IpBuf, head[4:8])
+		dest = acceptedCon.IpBuf[0:4]
 		port = binary.BigEndian.Uint16(head[8:])
 	case 4:
-		copy(acceptedCon.ipBuf, head[4:20])
-		dest = acceptedCon.ipBuf[0:16]
+		copy(acceptedCon.IpBuf, head[4:20])
+		dest = acceptedCon.IpBuf[0:16]
 		port = binary.BigEndian.Uint16(head[20:])
 	case 3:
 		isString = true
@@ -200,7 +202,7 @@ func (ug *UGate) readSocksHeader(acceptedCon *RawConn) error {
 	str.Dest = addr
 
 	// Must be called before sending any data.
-	acceptedCon.postDial = func(conn net.Conn, err error) {
+	acceptedCon.PostDialHandler = func(conn net.Conn, err error) {
 		if err != nil || conn == nil {
 			// TODO: write error code
 			acceptedCon.Write([]byte{5, 1})

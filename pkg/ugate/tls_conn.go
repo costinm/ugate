@@ -7,6 +7,9 @@ import (
 	"errors"
 	"net"
 	"sync"
+
+	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/auth"
 )
 
 // TLSConn extens tls.Conn with extra metadata.
@@ -14,7 +17,7 @@ import (
 type TLSConn struct {
 	// Raw TCP connection, for remote address and stats
 	// TODO: for H2-over-TLS-over-WS, it will be a WS conn
-	*Stream
+	*ugate.Stream
 
 	// wrapps the original conn for Local/RemoteAddress and deadlines
 	// Implements CloseWrite, ConnectionState,
@@ -24,16 +27,16 @@ type TLSConn struct {
 func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*TLSConn, error) {
 	lc := &TLSConn{
 	}
-	if mc, ok := nc.(MetaConn); ok {
+	if mc, ok := nc.(ugate.MetaConn); ok {
 		lc.Stream = mc.Meta()
-		if rnc, ok := lc.ServerOut.(net.Conn); ok {
+		if rnc, ok := lc.Out.(net.Conn); ok {
 			nc = rnc
 		}
 	} else {
-		lc.Stream = NewStream()
+		lc.Stream = ugate.NewStream()
 	}
 
-	config, keyCh := ug.Auth.ConfigForPeer(cfg, peerID)
+	config, keyCh := ConfigForPeer(ug.Auth,cfg, peerID)
 	if alpn != nil {
 		config.NextProtos = alpn
 	}
@@ -42,8 +45,8 @@ func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config
 	if err != nil {
 		return nil, err
 	}
-	lc.Stream.ServerIn = lc.tls
-	lc.Stream.ServerOut = lc.tls
+	lc.Stream.In = lc.tls
+	lc.Stream.Out = lc.tls
 
 	//lc.tls.ConnectionState().DidResume
 	tcs := lc.tls.ConnectionState()
@@ -57,12 +60,12 @@ func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config
 // Accepts connections without client certificate - alternate form of auth will be used, either
 // an inner TLS connection or JWT in metadata.
 func (ug *UGate) NewTLSConnIn(ctx context.Context, nc net.Conn, cfg *tls.Config) (*TLSConn, error) {
-	config, keyCh := ug.Auth.ConfigForPeer(cfg, "")
+	config, keyCh := ConfigForPeer(ug.Auth, cfg, "")
 	config.NextProtos = []string{"h2r", "h2"}
 
 	tc := &TLSConn{}
-	tc.Stream = NewStream()
-	if mc, ok := nc.(MetaConn); ok {
+	tc.Stream = ugate.NewStream()
+	if mc, ok := nc.(ugate.MetaConn); ok {
 		m := mc.Meta()
 		// Sniffed, etc
 		tc.Listener = m.Listener
@@ -77,13 +80,13 @@ func (ug *UGate) NewTLSConnIn(ctx context.Context, nc net.Conn, cfg *tls.Config)
 	}
 	tcs := tc.tls.ConnectionState()
 	tc.Stream.TLS = &tcs
-	tc.Stream.ServerIn = tc.tls
-	tc.Stream.ServerOut = tc.tls
+	tc.Stream.In = tc.tls
+	tc.Stream.Out = tc.tls
 
 	return tc, err
 }
 
-func (auth *Auth) ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
+func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
 	keyCh := make(chan []*x509.Certificate, 1)
 	// We need to check the peer ID in the VerifyPeerCertificate callback.
 	// The tls.Config it is also used for listening, and we might also have concurrent dials.
@@ -100,13 +103,13 @@ func (auth *Auth) ConfigForPeer(cfg *tls.Config, remotePeerID string) (*tls.Conf
 			return nil
 		}
 
-		chain, err := RawToCertChain(rawCerts)
+		chain, err := auth.RawToCertChain(rawCerts)
 		if err != nil {
 			return err
 		}
 
-		pubKey, err := PubKeyFromCertChain(chain)
-		pubKeyPeerID := IDFromPublicKey(pubKey)
+		pubKey, err := auth.PubKeyFromCertChain(chain)
+		pubKeyPeerID := auth.IDFromPublicKey(pubKey)
 		if err != nil {
 			return err
 		}

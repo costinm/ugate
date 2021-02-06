@@ -1,9 +1,11 @@
-package ugate
+package sni
 
 import (
 	"errors"
 	"log"
 	"strings"
+
+	"github.com/costinm/ugate"
 )
 
 // Istio-style SNI proxy.
@@ -44,10 +46,10 @@ const (
 	extensionServerName uint16 = 0
 )
 
-func (ug *UGate) sniffSNI(acc *RawConn) error {
+func SniffSNI(acc *ugate.RawConn) error {
 	acc.Sniff()
 
-	buf := acc.buf
+	buf := acc.Buf
 	n, err := acc.Read(buf[0:5])
 	if err != nil {
 		acc.Close()
@@ -198,7 +200,7 @@ func (ug *UGate) sniffSNI(acc *RawConn) error {
 		//destAddr := m.serverName + ":443"
 		acc.Meta().Dest = m.serverName
 	}
-	acc.Stream.Type = ProtoTLS
+	acc.Stream.Type = ugate.ProtoTLS
 	// Leave all bytes in the buffer, will be sent
 	acc.Reset(0)
 

@@ -32,7 +32,7 @@ COPY --from=build /ws/cmd/ugate/iptables.sh /usr/local/bin/
 COPY --from=build /ws/cmd/ugate/run.sh /usr/local/bin/
 #COPY --from=build /ws/dlv /usr/local/bin/dlv
 
-RUN apk add iptables &&\
+RUN apk add iptables ip6tables make &&\
     mkdir -p /var/lib/istio && \
     addgroup -g 1337 istio-proxy && \
     adduser -S -G istio-proxy istio-proxy -u 1337 && \

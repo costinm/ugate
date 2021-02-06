@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/costinm/ugate"
 )
 
 // HTTP handlers for admin, debug and testing
@@ -26,7 +29,7 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// H2 requests require write to be flushed - buffering happens !
 	// Wrap w.Body into Stream which does this automatically
-	str := NewStreamRequest(r, w, nil)
+	str := ugate.NewStreamRequest(r, w, nil)
 
 	eh.handle(str, false)
 }
@@ -43,14 +46,14 @@ type StreamInfo struct {
 	Type string
 }
 
-func (*EchoHandler) handle(str *Stream, serverFirst bool) error {
+func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	d := make([]byte, 2048)
 
 	si := &StreamInfo{
 		LocalAddr:  str.LocalAddr(),
 		RemoteAddr: str.RemoteAddr(),
 		Meta:       str.HTTPRequest().Header,
-		RemoteID:   str.RemoteID(),
+		RemoteID:   RemoteID(str),
 		Dest:       str.Dest,
 		Type:       str.Type,
 	}
@@ -81,7 +84,7 @@ func (*EchoHandler) handle(str *Stream, serverFirst bool) error {
 	return nil
 }
 
-func (eh *EchoHandler) Handle(ac MetaConn) error {
+func (eh *EchoHandler) Handle(ac ugate.MetaConn) error {
 	log.Println("ECHO ", ac.Meta())
 
 	return eh.handle(ac.Meta(), false)
@@ -92,7 +95,7 @@ func (eh *EchoHandler) Handle(ac MetaConn) error {
 type HTTPHandler struct {
 }
 
-func (*HTTPHandler) Handle(ac MetaConn) error {
+func (*HTTPHandler) Handle(ac ugate.MetaConn) error {
 	//u, _ := url.Parse("https://localhost/")
 	r := ac.Meta().HTTPRequest()
 	w := ac.(http.ResponseWriter)
@@ -202,7 +205,7 @@ func (gw *UGate) HttpNodesFilter(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	w.Header().Add("content-type", "application/json")
 	t := r.Form.Get("t")
-	rec := []*DMNode{}
+	rec := []*ugate.DMNode{}
 	t0 := time.Now()
 	for _, n := range gw.NodesByID {
 		if t != "" {
@@ -233,3 +236,4 @@ func (gw *UGate) SignCert(w http.ResponseWriter, r *http.Request) {
 	// use a list of 'authorized' OIDC and roots ( starting with loaded istio and k8s pub )
 	// get the csr and sign
 }
+

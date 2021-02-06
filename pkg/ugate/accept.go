@@ -8,38 +8,37 @@ import (
 	"net"
 	"runtime/debug"
 	"time"
+
+	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/iptables"
+	"github.com/costinm/ugate/pkg/sni"
+	"github.com/costinm/ugate/pkg/socks"
 )
 
 // Accepting connections on ports and extracting metadata, including sniffing.
 //
 
-var (
-	// ClientPreface is the string that must be sent by new
-	// connections from clients.
-	h2ClientPreface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-)
-
 // Called at the end of the connection handling. After this point
 // nothing should use or refer to the connection, both proxy directions
 // should already be closed for write or fully closed.
-func (ug *UGate) onAcceptDone(rc MetaConn) {
+func (ug *UGate) onAcceptDone(rc ugate.MetaConn) {
 	str := rc.Meta()
 	ug.m.Lock()
 	delete(ug.ActiveTcp, str.StreamId)
 	ug.m.Unlock()
-	tcpConActive.Add(-1)
+	ugate.TcpConActive.Add(-1)
 	// TODO: track multiplexed streams separately.
 	if str.ReadErr != nil {
-		VarzSErrRead.Add(1)
+		ugate.VarzSErrRead.Add(1)
 	}
 	if str.WriteErr != nil {
-		VarzSErrWrite.Add(1)
+		ugate.VarzSErrWrite.Add(1)
 	}
 	if str.ProxyReadErr != nil {
-		VarzCErrRead.Add(1)
+		ugate.VarzCErrRead.Add(1)
 	}
 	if str.ProxyWriteErr != nil {
-		VarzCErrWrite.Add(1)
+		ugate.VarzCErrWrite.Add(1)
 	}
 
 	if r := recover(); r != nil {
@@ -80,15 +79,15 @@ func (ug *UGate) onAcceptDone(rc MetaConn) {
 		time.Since(str.LastWrite),
 		time.Since(str.LastRead),
 		int64(time.Since(str.Open).Seconds()))
-	if bc, ok := rc.(*RawConn); ok {
-		bufferedConPool.Put(bc)
+	if bc, ok := rc.(*ugate.RawConn); ok {
+		ugate.BufferedConPool.Put(bc)
 	}
 }
 
 // Deferred to connection close, only for the raw accepted connection.
-func (ug *UGate) onAcceptDoneAndRecycle(rc *RawConn) {
+func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.RawConn) {
 	ug.onAcceptDone(rc)
-	bufferedConPool.Put(rc)
+	ugate.BufferedConPool.Put(rc)
 }
 
 // WIP: special handling for egress, i.e. locally originated streams.
@@ -101,16 +100,16 @@ func (ug *UGate) onAcceptDoneAndRecycle(rc *RawConn) {
 // the routes.
 //
 // After determining the target from meta or config the request is proxied.
-func (pl *Listener) handleEgress(acceptedCon net.Conn) error {
-
-	return nil
-}
+//func (pl *Listener) handleEgress(acceptedCon net.Conn) error {
+//
+//	return nil
+//}
 
 // WIP: handling for accepted connections for this node.
-func (pl *Listener) handleLocal(acceptedCon net.Conn) error {
-
-	return nil
-}
+//func (pl *Listener) handleLocal(acceptedCon net.Conn) error {
+//
+//	return nil
+//}
 
 func (ug *UGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte) {
 
@@ -125,7 +124,7 @@ func (ug *UGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, loc
 
 // New style, based on lwip. Blocks until connect, proxy runs in background.
 func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
-	bconn := GetConn(conn)
+	bconn := ugate.GetConn(conn)
 	bconn.Meta().Egress = true
 	ug.trackStreamIN(bconn.Meta())
 	defer ug.onAcceptDone(bconn)
@@ -151,7 +150,7 @@ func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
 
 // Handle a virtual (multiplexed) stream, received over
 // another connection.
-func (ug *UGate) HandleVirtualIN(bconn MetaConn) error {
+func (ug *UGate) HandleVirtualIN(bconn ugate.MetaConn) error {
 	ug.trackStreamIN(bconn.Meta())
 	defer ug.onAcceptDone(bconn)
 
@@ -164,13 +163,13 @@ func (ug *UGate) HandleVirtualIN(bconn MetaConn) error {
 // - Headers
 // - TLS context
 // - Dest and Listener are set.
-func (ug *UGate) handleStream(str *Stream) error {
+func (ug *UGate) handleStream(str *ugate.Stream) error {
 	if str.Listener == nil {
 		str.Listener = ug.DefaultListener
 	}
 	cfg := str.Listener
 
-	if cfg.Protocol == ProtoHTTPS {
+	if cfg.Protocol == ugate.ProtoHTTPS {
 		str.PostDial(str, nil)
 		return ug.h2Handler.Handle(str)
 	}
@@ -188,13 +187,13 @@ func (ug *UGate) handleStream(str *Stream) error {
 	return ug.dialOut(str)
 }
 
-func (ug *UGate) trackStreamIN(s *Stream) {
+func (ug *UGate) trackStreamIN(s *ugate.Stream) {
 	ug.m.Lock()
 	ug.ActiveTcp[s.StreamId] = s
 	ug.m.Unlock()
 
-	tcpConActive.Add(1)
-	tcpConTotal.Add(1)
+	ugate.TcpConActive.Add(1)
+	ugate.TcpConTotal.Add(1)
 }
 
 // A real accepted connection. Based on config, sniff and possibly
@@ -204,7 +203,7 @@ func (ug *UGate) trackStreamIN(s *Stream) {
 // - in:  destination is this host.
 // - ingress: terminate TLS, forward to a different host
 // - relay: proxy based on SNI/metadata without change
-func (ug *UGate) handleAcceptedConn(l *Listener, acceptedCon net.Conn) {
+func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 	// Attempt to determine the Listener and target
 	// Ingress mode, forward to an IP
 	cfg := l
@@ -216,9 +215,9 @@ func (ug *UGate) handleAcceptedConn(l *Listener, acceptedCon net.Conn) {
 
 	// Get a buffered stream - this is used for sniffing.
 	// Most common case is TLS, we want the SNI.
-	bconn := GetConn(acceptedCon)
+	bconn := ugate.GetConn(acceptedCon)
 	ug.trackStreamIN(bconn.Meta())
-	defer l.gate.onAcceptDone(bconn)
+	defer ug.onAcceptDone(bconn)
 	str := bconn.Meta()
 
 	// Special protocols, muxed on a single port - will extract real
@@ -226,25 +225,25 @@ func (ug *UGate) handleAcceptedConn(l *Listener, acceptedCon net.Conn) {
 	//
 	// First are specific to egress capture.
 	switch cfg.Protocol {
-	case ProtoIPTablesIn:
+	case ugate.ProtoIPTablesIn:
 		// iptables is replacing the conn - process before creating the buffer
-		str.Dest, str.ReadErr = l.gate.sniffIptables(str, cfg.Protocol)
+		str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
 		cfg = ug.findCfgIptablesIn(bconn)
-	case ProtoIPTables:
-		str.Dest, str.ReadErr = l.gate.sniffIptables(str, cfg.Protocol)
+	case ugate.ProtoIPTables:
+		str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
 		str.Egress = true
-	case ProtoSocks:
+	case ugate.ProtoSocks:
 		str.Egress = true
-		str.ReadErr = l.gate.readSocksHeader(bconn)
-	case ProtoHTTP:
-		str.ReadErr = l.gate.h2Handler.handleHTTPListener(l, bconn)
+		str.ReadErr = socks.ReadSocksHeader(bconn)
+	case ugate.ProtoHTTP:
+		str.ReadErr = ug.h2Handler.handleHTTPListener(l, bconn)
 		return
-	case ProtoHTTPS:
+	case ugate.ProtoHTTPS:
 		tlsTerm = true
 		// Used to present the right cert
-		str.ReadErr = l.gate.sniffSNI(bconn)
-	case ProtoTLS:
-		str.ReadErr = l.gate.sniffSNI(bconn)
+		str.ReadErr = sni.SniffSNI(bconn)
+	case ugate.ProtoTLS:
+		str.ReadErr = sni.SniffSNI(bconn)
 		if str.Dest == "" {
 			// No destination - terminate here
 			// TODO: also if dest hostname == local name or VIP or ID
@@ -295,7 +294,66 @@ func (ug *UGate) handleAcceptedConn(l *Listener, acceptedCon net.Conn) {
 // - SOCKS (5)
 // - H2
 // - TODO: HAproxy
-func (pl *Listener) sniff(br *RawConn) error {
+//func sniff(pl *ugate.Listener, br *stream.RawConn) error {
+//	br.Sniff()
+//	var proto string
+//
+//	for {
+//		_, err := br.Fill()
+//		if err != nil {
+//			return err
+//		}
+//		off := br.end
+//		if off >= 2 {
+//			b0 := br.buf[0]
+//			b1 := br.buf[1]
+//			if b0 == 5 {
+//				proto = ProtoSocks
+//				break
+//			}
+//			// TLS or SNI - based on the hostname we may terminate locally !
+//			if b0 == 22 && b1 == 3 {
+//				// 22 03 01..03
+//				proto = ProtoTLS
+//				break
+//			}
+//		}
+//		if off >= 7 {
+//			if bytes.Equal(br.buf[0:7], []byte("CONNECT")) {
+//				proto = ProtoConnect
+//				break
+//			}
+//		}
+//		if off >= len(h2ClientPreface) {
+//			if bytes.Equal(br.buf[0:len(h2ClientPreface)], h2ClientPreface) {
+//				proto = ProtoH2
+//				break
+//			}
+//		}
+//	}
+//
+//	// All bytes in the buffer will be Read again
+//	br.Reset(0)
+//
+//	switch proto {
+//	case ProtoSocks:
+//		pl.gate.readSocksHeader(br)
+//	case ProtoTLS:
+//		pl.gate.sniffSNI(br)
+//	}
+//	br.Stream.Type = proto
+//
+//	return nil
+//}
+
+var (
+	// ClientPreface is the string that must be sent by new
+	// connections from clients.
+	h2ClientPreface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+)
+
+
+func SniffH2(br *ugate.RawConn) error {
 	br.Sniff()
 	var proto string
 
@@ -304,30 +362,15 @@ func (pl *Listener) sniff(br *RawConn) error {
 		if err != nil {
 			return err
 		}
-		off := br.end
-		if off >= 2 {
-			b0 := br.buf[0]
-			b1 := br.buf[1]
-			if b0 == 5 {
-				proto = ProtoSocks
-				break
-			}
-			// TLS or SNI - based on the hostname we may terminate locally !
-			if b0 == 22 && b1 == 3 {
-				// 22 03 01..03
-				proto = ProtoTLS
-				break
-			}
-		}
-		if off >= 7 {
-			if bytes.Equal(br.buf[0:7], []byte("CONNECT")) {
-				proto = ProtoConnect
+		off := br.End
+		if ix := bytes.IndexByte(br.Buf[0:off], '\n'); ix >=0 {
+			if bytes.Contains(br.Buf[0:off], []byte("HTTP/1.1")) {
 				break
 			}
 		}
 		if off >= len(h2ClientPreface) {
-			if bytes.Equal(br.buf[0:len(h2ClientPreface)], h2ClientPreface) {
-				proto = ProtoH2
+			if bytes.Equal(br.Buf[0:len(h2ClientPreface)], h2ClientPreface) {
+				proto = ugate.ProtoH2
 				break
 			}
 		}
@@ -337,47 +380,10 @@ func (pl *Listener) sniff(br *RawConn) error {
 	br.Reset(0)
 
 	switch proto {
-	case ProtoSocks:
-		pl.gate.readSocksHeader(br)
-	case ProtoTLS:
-		pl.gate.sniffSNI(br)
-	}
-	br.Stream.Type = proto
-
-	return nil
-}
-
-func (pl *Listener) sniffH2(br *RawConn) error {
-	br.Sniff()
-	var proto string
-
-	for {
-		_, err := br.Fill()
-		if err != nil {
-			return err
-		}
-		off := br.end
-		if ix := bytes.IndexByte(br.buf[0:off], '\n'); ix >=0 {
-			if bytes.Contains(br.buf[0:off], []byte("HTTP/1.1")) {
-				break
-			}
-		}
-		if off >= len(h2ClientPreface) {
-			if bytes.Equal(br.buf[0:len(h2ClientPreface)], h2ClientPreface) {
-				proto = ProtoH2
-				break
-			}
-		}
-	}
-
-	// All bytes in the buffer will be Read again
-	br.Reset(0)
-
-	switch proto {
-	case ProtoSocks:
-		pl.gate.readSocksHeader(br)
-	case ProtoTLS:
-		pl.gate.sniffSNI(br)
+	case ugate.ProtoSocks:
+		socks.ReadSocksHeader(br)
+	case ugate.ProtoTLS:
+		sni.SniffSNI(br)
 	}
 	br.Stream.Type = proto
 

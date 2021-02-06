@@ -5,7 +5,9 @@ import (
 	"sync"
 	"time"
 
+	auth2 "github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate"
+	ug "github.com/costinm/ugate/pkg/ugate"
 )
 
 // link local announcements,discovery and messaging
@@ -62,14 +64,14 @@ type LLDiscovery struct {
 	// QUIC link-local listeners will be started on this port or following ports.
 	// Defaults to 6970
 	baseListenPort int
-	gw             *ugate.UGate
+	gw             *ug.UGate
 
 	// Listening on * for signed messages
 	// Source for sent messages and multicasts
 	UDPMsgConn *net.UDPConn
 
 	// My credentials
-	auth *ugate.Auth
+	auth *auth2.Auth
 }
 
 // Track one interface.

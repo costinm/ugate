@@ -4,51 +4,10 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 
 	"encoding/json"
 )
-
-// Helpers for very simple configuration and key loading.
-// Will use json files for config.
-
-type ConfStore interface {
-	// Get a config blob by name
-	Get(name string) ([]byte, error)
-
-	// Save a config blob
-	Set(conf string, data []byte) error
-
-	// List the configs starting with a prefix, of a given type
-	List(name string, tp string) ([]string, error)
-}
-
-func ConfStr(cs ConfStore, name, def string) string {
-	if cs == nil {
-		return def
-	}
-	b, _ := cs.Get(name)
-	if b == nil {
-		return def
-	}
-	return string(b)
-}
-
-func ConfInt(cs ConfStore, name string, def int) int {
-	if cs == nil {
-		return def
-	}
-	b, _ := cs.Get(name)
-	if b == nil {
-		return def
-	}
-	v, err := strconv.Atoi(string(b))
-	if err != nil {
-		return def
-	}
-	return v
-}
 
 // Simple file-based config and secret store.
 //
