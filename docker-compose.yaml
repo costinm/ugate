@@ -1,0 +1,30 @@
+version: '3'
+services:
+  ugate-dbg:
+    build:
+      context: .
+      dockerfile: k8s/Dockerfile.dbg
+    working_dir: /src
+    #command: CompileDaemon -build="echo 1" -command="dlv --listen=:40000 --headless=true --api-version=2 --accept-multiclient --wd /go debug ./cmd/ugate"
+    # dlv --listen 0.0.0.0:40000 --log --headless --api-version=2 attach 1
+    #command: CompileDaemon -build="go build -o /go/bin/ugate ./cmd/ugate" -command="dlv --listen=:40000 --headless=true --api-version=2 --accept-multiclient --wd /go exec /go/bin/ugate"
+    command: CompileDaemon --run-dir /go -build="go build -gcflags='all=-l\" \"-N' -o /go/bin/ugate ./cmd/ugate" -command="/go/bin/ugate"
+    cap_add:
+      - SYS_PTRACE
+      - NET_ADMIN
+    volumes:
+      #- ./:/src:ro
+      - ./:/src
+    ports:
+      - 8080
+      - 40000
+    networks:
+      - ingress
+      - local
+    environment:
+      - foo=bar
+networks:
+  ingress:
+    external: true
+  local:
+    external: true
