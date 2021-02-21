@@ -40,13 +40,13 @@ RUN apk add iptables ip6tables make &&\
     chown -R 1337:1337 /var/lib/istio
 
 WORKDIR /var/lib/istio
-#RUN mkdir -p /etc/certs && \
-#    mkdir -p /etc/istio/proxy && \
-#    mkdir -p /etc/istio/config && \
-#    mkdir -p /var/lib/istio/envoy && \
-#    mkdir -p /var/lib/istio/config && \
-#    mkdir -p /var/lib/istio/proxy && \
-#    chown -R 1337 /etc/certs /etc/istio /var/lib/istio
+RUN mkdir -p /etc/certs && \
+    mkdir -p /etc/istio/proxy && \
+    mkdir -p /etc/istio/config && \
+    mkdir -p /var/lib/istio/envoy && \
+    mkdir -p /var/lib/istio/config && \
+    mkdir -p /var/lib/istio/proxy && \
+    chown -R 1337 /etc/certs /etc/istio /var/lib/istio
 
 EXPOSE 15007
 EXPOSE 8080
