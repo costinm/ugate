@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -510,7 +511,21 @@ func (auth *Auth) NodeIDUInt(pub []byte) uint64 {
 
 var enc = base32.StdEncoding.WithPadding(base32.NoPadding)
 
+// IDFromPublicKey returns the node ID based on the
+// public key of the node.
+//
+// Deprecated: for compat with WebRTC, use IDFromCert
 func IDFromPublicKey(key crypto.PublicKey) string {
+	m := MarshalPublicKey(key)
+	if len(m) > 32 {
+		sha256 := sha256.New()
+		sha256.Write(m)
+		m = sha256.Sum([]byte{}) // 302
+	}
+	return enc.EncodeToString(m)
+}
+
+func IDFromCert(key crypto.PublicKey) string {
 	m := MarshalPublicKey(key)
 	if len(m) > 32 {
 		sha256 := sha256.New()
@@ -825,4 +840,47 @@ func GetMDSIDToken(aud string) string {
 		return ""
 	}
 	return string(rb)
+}
+
+// ReqContext is a context associated with a request.
+// Typically for H2:
+// 	h2ctx := r.Context().Value(mesh.H2Info).(*mesh.ReqContext)
+type ReqContext struct {
+	// Auth role - set if a authorized_keys or other authz is configured
+	Role string
+
+	// SAN list from the certificate, or equivalent auth method.
+	SAN []string
+
+	// Request start time
+	T0 time.Time
+
+	// Public key of the first cert in the chain (similar with SSH)
+	Pub []byte
+
+	// VIP associated with the public key.
+	VIP net.IP
+
+	VAPID *JWT
+}
+
+// ID of the caller, validated based on certs.
+// Currently based on VIP6 for mesh nods.
+func (rc *ReqContext) ID() string {
+	if rc.VIP == nil {
+		return ""
+	}
+	return rc.VIP.String()
+}
+
+type h2Key int
+
+var h2Info = h2Key(1)
+
+func AuthContext(ctx context.Context) *ReqContext {
+	return ctx.Value(h2Info).(*ReqContext)
+}
+
+func ContextWithAuth(ctx context.Context, h2c *ReqContext) context.Context {
+	return context.WithValue(ctx, h2Info, h2c)
 }

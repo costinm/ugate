@@ -1,4 +1,4 @@
-package ugate
+package ugatesvc
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/pkg/msg"
 )
 
 
@@ -64,6 +65,8 @@ type UGate struct {
 
 	m     sync.RWMutex
 	Auth  *auth.Auth
+
+	Msg *msg.Pubsub
 }
 
 func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
@@ -89,6 +92,7 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 		ActiveTcp: map[int]*ugate.Stream{},
 		DefaultListener: &ugate.Listener{
 		},
+		Msg: msg.NewPubsub(),
 	}
 
 
@@ -130,7 +134,7 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	ug.Mux.HandleFunc("/jwks", ug.Auth.HandleJWK)
 	ug.Mux.HandleFunc("/sts", ug.Auth.HandleSTS)
 
-	ug.Mux.HandleFunc("/msg/", ug.HandleMsg)
+	ug.Mux.HandleFunc("/msg/", ug.Msg.HandleMsg)
 
 	ug.DefaultPorts(ug.Config.BasePort)
 

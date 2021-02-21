@@ -1,4 +1,3 @@
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,12 +19,13 @@ spec:
         app: wps
     spec:
       serviceAccountName: default
-
       containers:
         - name: app
           #image: costinm/wps:latest
           #image: localhost:5000/wps:2020-05-24
-          image: wps:latest
+          # For skaffold
+          #image: wps:latest
+          image: gcr.io/dmeshgate/ugate:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 5222
@@ -43,7 +43,7 @@ spec:
               value: "all"
           resources:
             requests:
-              cpu: 100m
+              cpu: 10m
               memory: 256Mi
           volumeMounts:
             # Default 'RO' config source
@@ -101,7 +101,7 @@ spec:
 
           resources:
             requests:
-              cpu: 100m
+              cpu: 10m
               memory: 256Mi
           ports:
             # Creates on each host a port forwarder:

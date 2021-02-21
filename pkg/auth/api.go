@@ -2,11 +2,27 @@ package auth
 
 // Common structures - most based on standards or common formats
 
-// K8S:
-// - no yaml - all files must be converted to JSON.
+// Auth storage is loosely based on K8S kube.config:
+// - no yaml - all files must be converted to JSON ( to avoid dep on yaml lib )
+//   Caller can read yaml and convert before calling this.
 // - default config is kube.json
 // - expects that the first user is the 'default', has client cert
 // - 'context' is the used to locate the URL, cert, user.
+
+// "Clusters" are known nodes.
+// ID can be the public-key based ID, or a hostname or "default"
+//
+// "User" has credentials - "default" is the workload ID.
+//
+// "Context" pairs a Cluster with a User.
+// "default" is the upstream / primary server
+//
+
+// The reasons:
+// - intend to have light integration with K8S port forward
+// - very few other formats allow expressing this info,
+// didn't want to invent a new one.
+
 
 // KubeConfig is the JSON representation of the kube config.
 // The format supports most of the things we need and also allows connection to real k8s clusters.

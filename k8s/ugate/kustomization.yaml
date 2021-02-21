@@ -3,7 +3,7 @@ kind: Kustomization
 
 resources:
   - charts/app.yaml
-  - charts/hpa.yaml
+  - charts/pdb.yaml
+  - charts/service.yaml
   - charts/istio.yaml
-  - ../istio/lb.yaml
 

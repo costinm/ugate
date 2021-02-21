@@ -1,4 +1,4 @@
-package ugate
+package ugatesvc
 
 import (
 	"log"

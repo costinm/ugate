@@ -10,7 +10,7 @@ import (
 	"github.com/costinm/ugate"
 	auth2 "github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/local"
-	ug "github.com/costinm/ugate/pkg/ugate"
+	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 // Minimal TCP over H2 Gateway, defaulting to Istio ports and capture behavior.

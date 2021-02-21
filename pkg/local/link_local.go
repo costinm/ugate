@@ -15,7 +15,7 @@ import (
 
 	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate"
-	ug "github.com/costinm/ugate/pkg/ugate"
+	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 

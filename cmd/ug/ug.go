@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Command line
+// Command line - mostly for debug and tools
 
 var (
 	jwt=flag.String("jwt", "", "JWT to decode")

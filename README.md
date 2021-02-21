@@ -12,8 +12,7 @@ implementation. It is also possible to use a custom listener.
 
 This library started by using cmux to allow a port to be shared and auto-detect protocols. In practice this is important
 for TLS and HTTP/1.1 vs HTTP2 and for auto-detecting HA-PROXY metadata.
-
-Instead the code has been optimized and simplified, with less generic matching but specialized to the supported
+Instead, the code has been optimized and simplified, with less generic matching but specialized to the supported
 protocols.
 
 # Midle boxes - routers
@@ -38,15 +37,10 @@ just routing.
 Splice also helps when the app already encrypts, there is no need for a second encryption. This is handled by
 auto-detecting TLS.
 
-# Wait-less sniffing
-
-One idea to avoid the 'client first' problem in Istio is to open the connection to the dest immediately (if dest is
-known), and detect on the first bytes. This can work with socks/iptables outbound.
-
 # TODO
 
 - UDP
-- P2: TURN/STUN compat - check perf against H2 and SNI
+- P2: (separate repo) WebRTC/TURN/STUN compat - check perf against H2 and SNI routing
 - P2: K8s compat  (konectivity ?), KNative
 - P3: raw H2 implementation - just forward the frames, without decoding or re-encoding.
     - per stream flow control will be end-to-end.
