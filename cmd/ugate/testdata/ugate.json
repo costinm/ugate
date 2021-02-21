@@ -1,0 +1,46 @@
+{
+  "basePort": 15000,
+  "listeners": {
+    ":15101": {
+      "forwardTo": "127.0.0.1:5201"
+    },
+    ":15104": {
+      "forwardTo": "localhost:15101"
+    },
+    ":15108": {
+      "forwardTo": "localhost:8080"
+    },
+    ":15102": {
+      "forwardTo": "localhost:5201",
+      "proto": "tls"
+    },
+    ":15103": {
+      "forwardTo": "localiperf"
+    },
+    ":9080": {
+      "proto": "http"
+    },
+    "-:443": {
+      "proto": "https"
+    },
+    "-:8111": {
+      "forwardTo": "localhost:15007"
+    },
+    "-:8112": {
+      "proto": "https"
+    }
+  },
+  "hosts": {
+    "localiperf": {
+      "addr": "localhost:15102"
+    },
+    "h.webinf.info": {
+      "addr": "h.webinf.info:15007",
+      "id": "B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA"
+    },
+    "c1.webinf.info": {
+      "addr": "c1.webinf.info:15007"
+    }
+  },
+  "remoteAccept": null
+}
