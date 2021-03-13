@@ -14,7 +14,7 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
-	"github.com/costinm/ugate/pkg/msg"
+	"github.com/costinm/ugate/pkg/msgs"
 )
 
 
@@ -66,17 +66,35 @@ type UGate struct {
 	m     sync.RWMutex
 	Auth  *auth.Auth
 
-	Msg *msg.Pubsub
+	Msg *msgs.Pubsub
 }
 
-func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
-	if a == nil {
-		a = auth.NewAuth(nil, "", "cluster.local")
-	}
+func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.ConfStore) *UGate {
 	if cfg == nil {
-		cfg = &ugate.GateCfg{
+		if cs == nil {
+			cfg = &ugate.GateCfg {
+				BasePort: 0,
+				Domain: "h.webinf.info",
+			}
+		} else {
+			bp := ugate.ConfInt(cs, "BASE_PORT", 15000)
 
+			cfg = &ugate.GateCfg{
+				BasePort: bp,
+				Domain:   ugate.ConfStr(cs, "DOMAIN", "h.webinf.info"),
+				H2R: map[string]string{
+					"c1.webinf.info": "",
+				},
+			}
 		}
+	}
+
+	if cs != nil {
+		Get(cs, "ugate", cfg)
+	}
+
+	if a == nil {
+		a = auth.NewAuth(cs, cfg.Name, cfg.Domain)
 	}
 
 	ug := &UGate{
@@ -92,7 +110,7 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 		ActiveTcp: map[int]*ugate.Stream{},
 		DefaultListener: &ugate.Listener{
 		},
-		Msg: msg.NewPubsub(),
+		Msg: msgs.NewPubsub(),
 	}
 
 
@@ -152,7 +170,11 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 //
 //}
 
-// New TLS or TCP connection.
+// DialContext creates  connection to the remote addr.
+// Supports:
+// - tcp - normal tcp address, using the gate dialer.
+// - tls - tls connection, using the gate workload identity.
+// - h2r - h2r connection, suitable for reverse H2.
 func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
 	tcpC, err := ug.Dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -171,6 +193,9 @@ func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, 
 	return tcpC, err
 }
 
+// DialTLS opens a direct TLS connection using the dialer for TCP.
+// No peer verification - the returned stream will have the certs.
+// addr is a real internet address, not a mesh one.
 func (ug *UGate) DialTLS(addr string, alpn []string) (*ugate.Stream, error) {
 	ctx, cf := context.WithTimeout(context.Background(), 5*time.Second)
 	tcpC, err := ug.Dialer.DialContext(ctx, "tcp", addr)

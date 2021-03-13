@@ -33,7 +33,7 @@ func initServer(basePort int, cfg *ugate.GateCfg) *UGate {
 			//},
 		}
 	}
-	ug := NewGate(&net.Dialer{}, nil, cfg)
+	ug := NewGate(&net.Dialer{}, nil, cfg, nil)
 
 	log.Println("Starting server EC", auth.IDFromPublicKey(auth.PublicKey(ug.Auth.EC256Cert.PrivateKey)))
 	//if ug.Auth.ED25519Cert != nil {
@@ -317,7 +317,7 @@ func TestCrypto(t *testing.T) {
 
 func TestUGate(t *testing.T) {
 	td := &net.Dialer{}
-	ug := NewGate(td, nil, nil)
+	ug := NewGate(td, nil, nil, nil)
 
 	basePort := 2900
 	ug.Add(&ugate.Listener{

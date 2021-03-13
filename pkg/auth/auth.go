@@ -93,6 +93,28 @@ type Auth struct {
 
 var certValidityPeriod = 100 * 365 * 24 * time.Hour
 
+// NewVapid constructs a new Vapid generator from EC256 public and private keys,
+// in base64 uncompressed format.
+func NewVapid(publicKey, privateKey string) (v *Auth) {
+	publicUncomp, _ := base64.RawURLEncoding.DecodeString(publicKey)
+	privateUncomp, _ := base64.RawURLEncoding.DecodeString(privateKey)
+
+	x, y := elliptic.Unmarshal(elliptic.P256(), publicUncomp)
+	d := new(big.Int).SetBytes(privateUncomp)
+	pubkey := ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+	pkey := ecdsa.PrivateKey{PublicKey: pubkey, D: d}
+
+	v = &Auth{
+	}
+	v.pub64 = publicKey
+	v.Pub = publicUncomp
+	v.Priv = privateUncomp
+	v.Pub = elliptic.Marshal(elliptic.P256(), pkey.X, pkey.Y)
+	v.Priv = pkey.D.Bytes()
+
+	return
+}
+
 func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 	if name == "" {
 		if os.Getenv("POD_NAME") != "" {
@@ -777,6 +799,40 @@ func getSANExtension(c *x509.Certificate) []byte {
 	}
 	return nil
 }
+
+// http-related auth
+func GetPeerCertBytes(r *http.Request) []byte {
+	if r.TLS != nil {
+		if len(r.TLS.PeerCertificates) > 0 {
+			pke, ok := r.TLS.PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
+			if ok {
+				return elliptic.Marshal(elliptic.P256(), pke.X, pke.Y)
+			}
+			rsap, ok := r.TLS.PeerCertificates[0].PublicKey.(*rsa.PublicKey)
+			if ok {
+				return x509.MarshalPKCS1PublicKey(rsap)
+			}
+		}
+	}
+	return nil
+}
+
+func GetResponseCertBytes(r *http.Response) []byte {
+	if r.TLS != nil {
+		if len(r.TLS.PeerCertificates) > 0 {
+			pke, ok := r.TLS.PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
+			if ok {
+				return elliptic.Marshal(elliptic.P256(), pke.X, pke.Y)
+			}
+			rsap, ok := r.TLS.PeerCertificates[0].PublicKey.(*rsa.PublicKey)
+			if ok {
+				return x509.MarshalPKCS1PublicKey(rsap)
+			}
+		}
+	}
+	return nil
+}
+
 
 func GetSAN(c *x509.Certificate) ([]string, error) {
 	extension := getSANExtension(c)

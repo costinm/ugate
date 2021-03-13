@@ -1,15 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"net"
-
 	_ "net/http/pprof"
 
-	"github.com/costinm/ugate"
-	auth2 "github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/local"
+	"github.com/costinm/ugate/pkg/msgs"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
@@ -30,32 +27,19 @@ import (
 // - SOCKS and PROXY
 //
 func main() {
-	config := ug.NewConf("./")
+	// Load configs from the current dir and var/lib/dmesh, or env variables
+	// Writes to current dir.
+	config := ug.NewConf("./", "./var/lib/dmesh")
+	// Start a Gate. Basic H2 and H2R services enabled.
+	ug := ug.NewGate(&net.Dialer{}, nil, nil, config)
 
-	cfg := &ugate.GateCfg{
-		BasePort: 15000,
-		Domain: "h.webinf.info",
-		H2R: map[string]string{
-			"c1.webinf.info": "",
-		},
-	}
+	msgs.DefaultMux.Auth = ug.Auth
 
-	data, err := config.Get("ugate.json")
-	if err == nil && data != nil {
-		err = json.Unmarshal(data, cfg)
-		if err != nil {
-			log.Println("Error parsing json ", err, string(data))
-		}
-	}
-
-	auth := auth2.NewAuth(config, cfg.Name, cfg.Domain)
-	// By default, pass through using net.Dialer
-	ug := ug.NewGate(&net.Dialer{}, auth, cfg)
-
-	localgw := local.NewLocal(ug, auth)
+	// Discover local nodes using multicast UDP
+	localgw := local.NewLocal(ug, ug.Auth)
 	local.ListenUDP(localgw)
 	ug.Mux.HandleFunc("/dmesh/ll/if", localgw.HttpGetLLIf)
 
-	log.Println("Started: ", auth.ID)
+	log.Println("Started: ", ug.Auth.ID)
 	select {}
 }

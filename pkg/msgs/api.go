@@ -1,4 +1,4 @@
-package msg
+package msgs
 
 import (
 	"context"
@@ -42,6 +42,8 @@ type Sub struct {
 
 	HTTPHandler http.Handler
 }
+
+
 
 func NewPubsub() *Pubsub {
 	return &Pubsub{}

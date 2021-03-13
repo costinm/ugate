@@ -122,7 +122,9 @@ func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.Clie
 	if dmn != nil {
 		rt := dmn.H2r
 		if rt != nil {
-			return rt, nil
+			if rtc, ok := rt.(*http2.ClientConn); ok {
+				return rtc, nil
+			}
 		}
 	}
 

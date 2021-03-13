@@ -1,13 +1,16 @@
 package ugatesvc
 
 import (
+	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/pipe"
 )
 
 // After a Stream ( TCP+meta or HTTP ) is accepted, we need to route it based on
@@ -20,7 +23,6 @@ import (
 //   Can be TCP(incl TLS) or HTTP. Client MUST be local or trusted
 // - Gateway to a non-mesh node - probably should not be supported, subcase
 //  of 'ingress' but using a non-local address.
-
 
 var NotFound = errors.New("not found")
 
@@ -125,4 +127,79 @@ func (ug *UGate) dialOut(str *ugate.Stream) error {
 	}
 
 	return str.ProxyTo(nc)
+}
+
+// OpenConn will make sure there is a secure connection to the node.
+func (ug *UGate) CreateConn(ctx context.Context, dmn *ugate.DMNode) (error) {
+	if dmn.H2r != nil {
+		return nil
+	}
+		// TODO: if we don't have addr, use discovery
+
+		// TODO: if discovery doesn't return an address, use upsteram gate.
+
+		if dmn.Addr == "" {
+			return NotFound
+		}
+
+		addr := dmn.Addr
+
+		// TODO: use discovery to map VIPs or key-based hosts to real addr
+		// TODO: use local announces
+		// TODO: use VPN server for all or for mesh
+
+		nc, err := ug.Dialer.DialContext(ctx, "tcp", addr)
+
+		// TODO: caller must call: str.PostDial(nc, err)
+
+		if err != nil {
+			return  err
+		}
+
+		lconn, err := ug.NewTLSConnOut(ctx, nc, ug.TLSConfig, "",
+			nil)
+		if err != nil {
+			nc.Close()
+			return err
+		}
+
+		cc, err := ug.h2Handler.h2t.NewClientConn(lconn)
+		if err != nil {
+			nc.Close()
+			return  err
+		}
+		dmn.H2r = cc
+
+		return nil
+}
+
+// CreateStream will create a con to the node, if one doesn't exist, and open a multiplexed stream.
+func (ug *UGate) CreateStream(ctx context.Context, dmn *ugate.DMNode, r1 *http.Request) (*ugate.Stream, error) {
+	 err := ug.CreateConn(ctx, dmn)
+
+	// We have an active reverse H2 - filter the headers and create a new request
+	// r1, _ = CreateUpstreamRequest(nil, r1)
+
+	if r1.Method == "" {
+		r1.Method = "POST"
+	}
+	var out io.Writer
+	out = nil
+	if r1.Body == nil {
+		if r1.Method != "GET" && r1.Method != "HEAD" {
+			p := pipe.New()
+			out = p
+			r1.Body = p
+		}
+	}
+
+	r1.URL.Scheme = "https"
+	// RT client - forward the request.
+	res, err := dmn.H2r.RoundTrip(r1)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return ugate.NewStreamRequestOut(r1, out, res, nil), nil
 }

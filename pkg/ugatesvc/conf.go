@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"encoding/json"
+
+	"github.com/costinm/ugate"
 )
 
 // Simple file-based config and secret store.
@@ -35,7 +37,7 @@ func (c *Conf) List(name string, tp string) ([]string, error) {
 	return nil, nil
 }
 
-func Get(h2 *Conf, name string, to interface{}) error {
+func Get(h2 ugate.ConfStore, name string, to interface{}) error {
 	raw, err := h2.Get(name)
 	if err != nil {
 		log.Println("name:", err)

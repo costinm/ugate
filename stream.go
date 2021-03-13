@@ -51,6 +51,9 @@ type Stream struct {
 	//
 	// Normal close sequence is to call CloseWrite on Out, and after reading the full In to call
 	// Close on In.
+	//
+	// Out may be nil, if the remote side is read only ( GET ) or if the creation of the
+	// stream passed a Reader object which is automatically piped to the Out.
 	Out io.Writer `json:"-"`
 
 	// Associated virtual http request.
@@ -173,6 +176,19 @@ func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Stream) *Stre
 		Request: r,
 		In:      r.Body,
 		Out:     w,
+		TLS:     r.TLS,
+		Dest:    r.Host,
+	}
+}
+
+func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *Stream) *Stream {
+	return &Stream{
+		StreamId: int(atomic.AddUint32(&StreamId, 1)),
+		Open:     time.Now(),
+
+		Request: r,
+		In:      w.Body, // Input from remote http
+		Out:     out, //
 		TLS:     r.TLS,
 		Dest:    r.Host,
 	}

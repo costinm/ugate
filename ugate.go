@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"expvar"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
-
-	"golang.org/x/net/http2"
 )
 
 var (
@@ -81,22 +80,45 @@ const (
 	PORT_HTTPS = 7
 )
 
+// Keyed by Hostname:port (if found in dns tables) or IP:port
+type HostStats struct {
+	// First open
+	Open time.Time
+
+	// Last usage
+	Last time.Time
+
+	SentBytes   int
+	RcvdBytes   int
+	SentPackets int
+	RcvdPackets int
+	Count       int
+
+	LastLatency time.Duration
+	LastBPS     int
+}
+
 // Node information, based on registration info or discovery.
+// Used for 'mesh' nodes, where we have a public key and other info.
 type DMNode struct {
-	// VIP is the mesh specific IP6 address. The 'network' identifies the master node, the
-	// link part is the sha of the public key. This is a byte[16].
-	VIP net.IP `json:"vip,omitempty"`
-
-	// Public key. If empty, the VIP should be set.
-	PublicKey []byte `json:"pub,omitempty"`
-
-	// Information from the node - from an announce or message.
-	NodeAnnounce *NodeAnnounce `json:"info,omitempty"`
-
 	// Primary/main address and port of the BTS endpoint.
 	// Can be a DNS name that resolves, or some other node.
 	// Individual IPs (relay, etc) will be in the info.addrs field
 	Addr string `json:"addr,omitempty"`
+
+	// VIP is the mesh specific IP6 address. The 'network' identifies the master node, the
+	// link part is the sha of the public key. This is a byte[16].
+	// If not known, will be populated after the connection.
+	// If set, will be verified and used to locate the node.
+	VIP net.IP `json:"vip,omitempty"`
+
+	// Public key.
+	// If not known, will be populated after the connection.
+	// If set, will be verified and used to locate the node.
+	PublicKey []byte `json:"pub,omitempty"`
+
+	// Information from the node - from an announce or message.
+	NodeAnnounce *NodeAnnounce `json:"info,omitempty"`
 
 	Labels map[string]string `json:"l,omitempty"`
 
@@ -108,17 +130,6 @@ type DMNode struct {
 	// This is not sent in the registration - but extracted from the request
 	// remote address.
 	GW *net.UDPAddr `json:"gw,omitempty"`
-
-	// Set if the gateway has an active incoming connection from this
-	// node, with the node acting as client.
-	// Streams will be forwarded to the node using special 'accept' mode.
-	// This is similar with PUSH in H2.
-	// Deprecated
-	TunSrv MuxedConn `json:"-"`
-
-	// Existing tun to the remote node, previously dialed.
-	// Deprecated
-	TunClient MuxedConn `json:"-"`
 
 	// IP4 address of last announce
 	Last4 *net.UDPAddr `json:"-"`
@@ -149,9 +160,30 @@ type DMNode struct {
 	// Numbers of announces received from that node on the P2P interface
 	AnnouncesFromP2P int `json:"-"`
 
-	H2r *http2.ClientConn `json:"-"`
+	// H2r is a HTTP2 connection to the node.
+	// May be a direct or reverse connection.
+	H2r Muxer `json:"-"`
 
-	Mux http.Handler `json:"-"`
+	// Set if the gateway has an active incoming connection from this
+	// node, with the node acting as client.
+	// Streams will be forwarded to the node using special 'accept' mode.
+	// This is similar with PUSH in H2.
+	// Deprecated - impl in ssh server, use in old wpgate DialMeshLocal
+	TunSrv MuxedConn `json:"-"`
+
+	// Existing tun to the remote node, previously dialed.
+	// Deprecated
+	TunClient MuxedConn `json:"-"`
+}
+
+// Muxer is the interface implemented by a multiplexed connection with metadata
+// http2.ClientConn is the default implementation used.
+type Muxer interface {
+	http.RoundTripper
+
+	io.Closer
+
+	Ping(ctx context.Context) error
 }
 
 const ProtoTLS = "tls"
@@ -266,6 +298,12 @@ type UdpWriter interface {
 	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
 }
 
+type HostResolver interface {
+	// HostByAddr returns the last lookup address for an IP, or the original
+	// address. The IP is expressed as a string ( ip.String() ).
+	HostByAddr(addr string) (string, bool)
+}
+
 // Interface implemented by TCPHandler.
 type UDPHandler interface {
 	HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte)
@@ -320,6 +358,7 @@ type ConfStore interface {
 	List(name string, tp string) ([]string, error)
 }
 
+// ConfInt returns an string setting, with default value, from the ConfStore.
 func ConfStr(cs ConfStore, name, def string) string {
 	if cs == nil {
 		return def
@@ -331,6 +370,7 @@ func ConfStr(cs ConfStore, name, def string) string {
 	return string(b)
 }
 
+// ConfInt returns an int setting, with default value, from the ConfStore.
 func ConfInt(cs ConfStore, name string, def int) int {
 	if cs == nil {
 		return def
@@ -379,6 +419,22 @@ type NodeAnnounce struct {
 	Vpn string `json:"Vpn,omitempty"`
 }
 
+// Transport is creates multiplexed connections.
+//
+// On the server side, MuxedConn are created when a client connects.
+type Transport interface {
+	// Dial one TCP/mux connection to the IP:port.
+	// The destination is a mesh node - port typically 5222, or 22 for 'regular' SSH serves.
+	//
+	// After handshake, an initial message is sent, including informations about the current node.
+	//
+	// The remote can be a trusted VPN, an untrusted AP/Gateway, a peer (link local or with public IP),
+	// or a child. The subsriptions are used to indicate what messages will be forwarded to the server.
+	// Typically VPN will receive all events, AP will receive subset of events related to topology while
+	// child/peer only receive directed messages.
+	DialMUX(addr string, pub []byte, subs []string) (MuxedConn, error)
+}
+
 // A Connection that can multiplex.
 // Will dial a stream, may also accept streams and dispatch them.
 //
@@ -388,13 +444,18 @@ type MuxedConn interface {
 	// a different destination, indicated by stream.
 	// On return, the stream ServerOut and ServerIn will be
 	// populated, and connected to stream Dest.
+	// deprecated:  use CreateStream
 	DialProxy(tp *Stream) error
 
 	// The VIP of the remote host, after authentication.
 	RemoteVIP() net.IP
 
-	// Wait for the stream to finish.
+	// Wait for the conn to finish.
 	Wait() error
+}
+
+type StreamCreator interface {
+	CreateStream(ctx context.Context, n *DMNode, r1 *http.Request) (*Stream, error)
 }
 
 // Textual representation of the node registration data.

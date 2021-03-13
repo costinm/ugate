@@ -43,6 +43,12 @@ run/docker-test:
 	   ${IMAGE}:latest \
 	   /ws/build/run.sh
 
+export KO_DOCKER_REPO=gcr.io/dmeshgate
+#export KO_DOCKER_REPO=costinm
+
+push/ko:
+	ko publish ./cmd/ugate -B
+
 push/docker.ugate: docker push/ugate
 
 push/ugate:
@@ -97,3 +103,11 @@ test/iptables:
 	IN=80,443 OUT=5201,5202 ./cmd/ugate/iptables.sh
 	iptables-save |grep ISTIO > build/iptables_443_5201.out
 	diff build/iptables_443_5201.out cmd/ugate/testdata/iptables/iptables_443_5201.out
+
+
+image/stargz:
+	#go install github.com/google/crfs/stargz/stargzify@latest
+	#stargzify file:/tmp/input.tgz file:out.tgz
+	#stargzify -insecure ubuntu http://registry:5000:/path/ubuntu:stargz
+	#stargzify -flatten ubuntu gcr.io/costinm/path/ubuntu:flatstargz
+	stargzify -upgrade ${IMAGE}
