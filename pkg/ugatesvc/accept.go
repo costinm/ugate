@@ -111,10 +111,6 @@ func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.RawConn) {
 //	return nil
 //}
 
-func (ug *UGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte) {
-
-}
-
 // For BTS/H2 and iptables-in, the config for the actual listen port is virtual.
 // LocalAddr port determines which config to use for routing.
 // RemoteAddr is the (authenticated) remote VIP or the real client IP.

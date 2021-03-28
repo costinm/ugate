@@ -34,6 +34,8 @@ import (
 	"github.com/costinm/ugate"
 )
 
+// TODO: For TUN capture, we can process the UDP packet directly, without going through the stack
+
 // Handles captured UDP packets.
 // DNS is handled using the special package.
 
@@ -87,7 +89,7 @@ import (
 // - o-o.myaddr.l.google.com. [o-o.myaddr.l.google.com.	60	IN	TXT	"73.158.64.15"]
 
 var (
-	DumpUdp = false
+	DumpUdp = true
 )
 
 type UdpRelay struct {
@@ -115,7 +117,10 @@ var (
 )
 
 // Represents on UDP 'nat' connection.
-// Currently full cone, i.e. one local port per NAT.
+//
+// Currently full cone, i.e. one local port per NAT - max 30k
+// This should be sufficient for local capture and small p2p nets.
+// In the mesh, UDP should be encapsulated in WebRTC.
 type UdpNat struct {
 	ugate.Stream
 	// bound to a local port (on the real network).
@@ -128,8 +133,14 @@ type UdpNat struct {
 	LastsRemotePort uint16
 }
 
+type UDPGateConfig struct {
+	DNS ugate.UDPHandler
+	HostResolver ugate.HostResolver
+
+}
 
 type UDPGate struct {
+	cfg *UDPGateConfig
 
 	// NAT
 	udpLock   sync.RWMutex
@@ -139,8 +150,7 @@ type UDPGate struct {
 	// UDP
 	// Capture return - sends packets back to client app.
 	// This is typically a netstack or TProxy
-	UDPWriter ugate.UdpWriter
-
+	TransparentUDPWriter ugate.UdpWriter
 
 	DNS ugate.UDPHandler
 	HostResolver ugate.HostResolver
@@ -225,11 +235,11 @@ func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, upstreamConn 
 		udpN.LastsRemotePort = uint16(srcAddr.Port)
 
 		// TODO: for android dmesh, we may need to take zone into account.
-		if gw.UDPWriter != nil {
+		if gw.TransparentUDPWriter != nil {
 			if DumpUdp {
 				log.Println("UDP Res: ", srcAddr, "->", localAddr)
 			}
-			n, err := gw.UDPWriter.WriteTo(buffer[:size], localAddr, srcAddr)
+			n, err := gw.TransparentUDPWriter.WriteTo(buffer[:size], localAddr, srcAddr)
 			if DumpUdp {
 				log.Println("UDP Res DPME: ", srcAddr, "->", localAddr, n, err)
 			}
@@ -278,7 +288,7 @@ func (gw *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16,
 	src := &net.UDPAddr{Port: int(localPort), IP: localAddr}
 
 	//if gw.Vpn != "" {
-	// TODO: implement UDP-over-H2/QUIC
+	// TODO: implement UDP-over-H2/QUIC/WebRTC
 	//return
 	//}
 

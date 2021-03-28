@@ -293,7 +293,9 @@ func (c ConHandlerF) Handle(conn MetaConn) error {
 // TODO: use same interfaces.
 
 // UdpWriter is the interface implemented by the TunTransport, to send
-// packets back to the virtual interface
+// packets back to the virtual interface. TUN or TProxy raw support this.
+// Required for 'transparent' capture of UDP - otherwise use STUN/TURN/etc.
+// A UDP NAT does not need this interface.
 type UdpWriter interface {
 	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
 }

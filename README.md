@@ -1,23 +1,40 @@
 # ugate
 
-Minimal TCP/UDP gateway, optimized for capturing outbound connections using few common protocols (iptables, SOCKS,
-CONNECT), detecting traffic type and extracting metadata - and forwarding L4 traffic to a destination.
+Minimal TCP/UDP gateway, optimized for capturing outbound connections using 
+few common protocols (iptables, SOCKS,
+CONNECT), detecting traffic type and extracting metadata, and forwarding to a destination. 
+TUN supported using LWIP in the costinm/tungate, used for android.
 
-On the receive side it can optionally process a metadata header, including extracting it from the SNI.
+# Design
 
-Connections will be proxied to a dialed connection The dial, the details are abstracted - IPFS/LibP2P is one possible
-implementation. It is also possible to use a custom listener.
+The uGate can be used in few roles:
 
-# Port mux
+1. Egress sidecar - captures outbound traffic, using SOCKS, iptables or TUN
+2. Ingress sidecar - forwards 'mesh' traffic to local app
+3. Ingress gateway - receives 'regular' traffic, forwards to the mesh
+4. Egress gateway - forwards 'mesh' traffic to the internet.
+5. Legacy egress - forwards mesh traffic to local non-mesh devices.
+6. Message gate - can proxy WebPush messages, typically for control plane.
 
-This library started by using cmux to allow a port to be shared and auto-detect protocols. In practice this is important
-for TLS and HTTP/1.1 vs HTTP2 and for auto-detecting HA-PROXY metadata.
-Instead, the code has been optimized and simplified, with less generic matching but specialized to the supported
-protocols.
+It is intended for small devices - android, OpenWRT-like routers, very small
+containers, so dependencies are minimized. 
 
-# Midle boxes - routers
+It is also optimized for battery operation - control plane 
+interacts with the gate via encrypted Webpush or GCM messages. 
 
-# ReadFrom/splice
+## Mesh protocols
+
+Sidecars send and receive mesh traffic using HTTP/2 or WebRTC.
+For HTTP/2, a custom SNI header is used. 
+
+Gateways use SNI to route, using splice after the header is parsed.
+
+Since uGate is optimized for devices which may be in home nets or in 
+p2p ad-hoc networks, inside the mesh it will support WebRTC communication.
+This is the main external dependency, used in the webrtc/ module.
+
+
+## ReadFrom/splice
 
 By avoiding wrappers and abstractions we can detect if both input and output are TcpConn and use the 'splice' call,
 where the transfer between in and out is done in kernel space.

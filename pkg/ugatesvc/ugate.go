@@ -42,10 +42,6 @@ type UGate struct {
 	// Handlers for egress - source is local. Default is to forward using Dialer.
 	EgressMux *http.ServeMux
 
-	// Used to inject UDP packets into the host with custom source address.
-	// Only set when a TUN or TPROXY are used.
-	TUNUDPWriter ugate.UdpWriter
-
 	// template, used for TLS connections and the host ID
 	TLSConfig *tls.Config
 
