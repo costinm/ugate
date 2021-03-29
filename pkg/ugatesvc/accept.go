@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/iptables"
 	"github.com/costinm/ugate/pkg/sni"
 	"github.com/costinm/ugate/pkg/socks"
 )
@@ -221,13 +220,15 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 	//
 	// First are specific to egress capture.
 	switch cfg.Protocol {
-	case ugate.ProtoIPTablesIn:
-		// iptables is replacing the conn - process before creating the buffer
-		str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
-		cfg = ug.findCfgIptablesIn(bconn)
-	case ugate.ProtoIPTables:
-		str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
-		str.Egress = true
+	// TODO: costin: does not compile on android gomobile, missing syscall.
+	// remove dep, reverse it.
+	//case ugate.ProtoIPTablesIn:
+	//	// iptables is replacing the conn - process before creating the buffer
+	//	str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
+	//	cfg = ug.findCfgIptablesIn(bconn)
+	//case ugate.ProtoIPTables:
+	//	str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
+	//	str.Egress = true
 	case ugate.ProtoSocks:
 		str.Egress = true
 		str.ReadErr = socks.ReadSocksHeader(bconn)

@@ -1,4 +1,4 @@
-package msgs
+package webpush
 
 import (
 	"encoding/base64"

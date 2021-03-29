@@ -1,0 +1,8 @@
+---
+# Various combinations of gateway configs.
+# Gateways are merged by port (share a port listener )
+# and use the host to select the route.
+#
+# The 'host' extracted from HTTP or SNI is the key
+# used to lookup the VirtualService which determines the dest.
+#

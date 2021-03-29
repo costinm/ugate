@@ -6,7 +6,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/costinm/ugate/pkg/local"
-	"github.com/costinm/ugate/pkg/msgs"
+	msgs "github.com/costinm/ugate/webpush"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
@@ -30,15 +30,25 @@ func main() {
 	// Load configs from the current dir and var/lib/dmesh, or env variables
 	// Writes to current dir.
 	config := ug.NewConf("./", "./var/lib/dmesh")
+
+	//
 	// Start a Gate. Basic H2 and H2R services enabled.
 	ug := ug.NewGate(&net.Dialer{}, nil, nil, config)
 
+	// Initialize the messaging.
 	msgs.DefaultMux.Auth = ug.Auth
 
 	// Discover local nodes using multicast UDP
 	localgw := local.NewLocal(ug, ug.Auth)
 	local.ListenUDP(localgw)
 	ug.Mux.HandleFunc("/dmesh/ll/if", localgw.HttpGetLLIf)
+
+	// Init DNS capture and server
+
+	// Init Iptables capture (off by default - android doesn't like it)
+
+	// Init WebRTC port
+
 
 	log.Println("Started: ", ug.Auth.ID)
 	select {}

@@ -67,6 +67,7 @@ type UGate struct {
 
 func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.ConfStore) *UGate {
 	if cfg == nil {
+		// No config storage - test mode.
 		if cs == nil {
 			cfg = &ugate.GateCfg {
 				BasePort: 0,
@@ -244,7 +245,7 @@ func RemoteID(s *ugate.Stream)  string {
 }
 
 
-// Add a real port listener on a port.
+// Add and start a real port listener on a port.
 // Virtual listeners can be added to ug.Conf or the mux.
 func (ug *UGate) Add(cfg *ugate.Listener) (*Listener, net.Addr, error) {
 	ll := &Listener{Listener:*cfg}

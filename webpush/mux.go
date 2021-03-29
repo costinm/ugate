@@ -1,4 +1,4 @@
-package msgs
+package webpush
 
 import (
 	"bytes"
@@ -69,6 +69,10 @@ func NewMux() *Mux {
 }
 
 var DefaultMux = NewMux()
+
+func InitMux(mux *Mux, auth *auth.Auth) {
+	mux.Auth = auth
+}
 
 // Send a message to the default mux. Will serialize the event and save it for debugging.
 //

@@ -1,4 +1,4 @@
-package msgs
+package webpush
 
 import (
 	"net/http"
