@@ -76,7 +76,12 @@ const (
 	PORT_IPTABLES = 1
 	PORT_IPTABLES_IN = 6
 	PORT_SOCKS = 9
+	// SNI and HTTP could share the same port - would also
+	// reduce missconfig risks
+	PORT_HTTP_PROXY = 2
 	PORT_SNI = 3
+
+	// H2, HTTPS, H2R
 	PORT_HTTPS = 7
 )
 

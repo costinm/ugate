@@ -67,6 +67,7 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 }
 
 // UpdateReverseAccept updates the upstream accept connections, based on config.
+// Should be called when the config changes
 func (t *H2Transport) UpdateReverseAccept() {
 	for addr, key := range t.ug.Config.H2R {
 		t.maintainRemoteAccept(addr, key)
@@ -147,6 +148,12 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// HTTP/1.1
+	if r.Method == "CONNECT" {
+		// WS or HTTP Proxy
+	}
+
+
 	//if r.ProtoMajor > 1 {
 		if len(parts) > 2 {
 			if parts[1] == "h2r" {
@@ -179,11 +186,6 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-
-	// HTTP/1.1
-	if r.Method == "CONNECT" {
-		// WS or HTTP Proxy
-	}
 
 	if strings.HasPrefix(r.RequestURI, "/ws") {
 

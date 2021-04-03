@@ -7,6 +7,8 @@ import (
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
+var initHooks []func(gate *ugatesvc.UGate)
+
 // Minimal uGate - not using any optional package.
 // Used to determine the 'base' size and cost of various options.
 //
@@ -25,6 +27,12 @@ func main() {
 	}
 	// Start a Gate. Basic H2 and H2R services enabled.
 	ug := ugatesvc.NewGate(&net.Dialer{}, nil, cfg, config)
+
+	if initHooks != nil {
+		for _, h := range initHooks {
+			h(ug)
+		}
+	}
 
 	// direct TCP connect to local iperf3 and fortio (or HTTP on default port)
 	ug.Add(&ugate.Listener{

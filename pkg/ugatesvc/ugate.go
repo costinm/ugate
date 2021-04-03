@@ -14,7 +14,7 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
-	"github.com/costinm/ugate/pkg/msgs"
+	msgs "github.com/costinm/ugate/webpush"
 )
 
 
@@ -45,7 +45,7 @@ type UGate struct {
 	// template, used for TLS connections and the host ID
 	TLSConfig *tls.Config
 
-	h2Handler *H2Transport
+	H2Handler *H2Transport
 
 	// Direct Nodes by interface address (which is derived from public key). This includes only
 	// directly connected notes - either Wifi on same segment, or VPNs and
@@ -85,9 +85,22 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 			}
 		}
 	}
+	if cfg.H2R == nil {
+		cfg.H2R = map[string]string{}
+	}
+	if cfg.Hosts == nil {
+		cfg.Hosts = map[string]*ugate.DMNode{}
+	}
+	if cfg.Listeners == nil {
+		cfg.Listeners = map[string]*ugate.Listener{}
+	}
 
 	if cs != nil {
 		Get(cs, "ugate", cfg)
+	}
+
+	if d == nil {
+		d = &net.Dialer{}
 	}
 
 	if a == nil {
@@ -137,9 +150,9 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 		//SessionTicketsDisabled: true,
 	}
 
-	ug.h2Handler, _ = NewH2Transport(ug)
+	ug.H2Handler, _ = NewH2Transport(ug)
 
-	go ug.h2Handler.UpdateReverseAccept()
+	go ug.H2Handler.UpdateReverseAccept()
 
 	ug.Mux.Handle("/debug/", http.DefaultServeMux)
 	ug.Mux.HandleFunc("/dmesh/tcpa", ug.HttpTCP)
@@ -158,6 +171,8 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 		t.Address = k
 		ug.Add(t)
 	}
+
+
 
 	return ug
 }
@@ -285,10 +300,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 
 	// Egress: iptables and SOCKS5
 	// Not on localhost - redirect changes the port, keeps IP
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_IPTABLES),
-		Protocol: ugate.ProtoIPTables,
-	})
+
 	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("127.0.0.1:%d", base+ugate.PORT_SOCKS),
 		Protocol: ugate.ProtoSocks,
@@ -296,6 +308,10 @@ func (ug *UGate) DefaultPorts(base int) error {
 	// TODO: add HTTP CONNECT for egress.
 
 	// Ingress: iptables ( capture all incoming )
+	ug.Add(&ugate.Listener{
+		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_IPTABLES),
+		Protocol: ugate.ProtoIPTables,
+	})
 	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_IPTABLES_IN),
 		Protocol: ugate.ProtoIPTablesIn,
@@ -312,7 +328,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_HTTPS),
 		Protocol: ugate.ProtoHTTPS,
-		Handler:  ug.h2Handler,
+		Handler:  ug.H2Handler,
 	})
 	go func() {
 		err := http.ListenAndServe(fmt.Sprintf(":%d", base), ug.Mux)
@@ -324,7 +340,9 @@ func (ug *UGate) DefaultPorts(base int) error {
 	return nil
 }
 
-func (ug *UGate) findCfgIptablesIn(bconn ugate.MetaConn) *ugate.Listener {
+// Based on the port in the Dest, find the Listener config.
+// Used when the dest IP:port is extracted from the metadata
+func (ug *UGate) FindCfgIptablesIn(bconn ugate.MetaConn) *ugate.Listener {
 	m := bconn.Meta()
 	_, p, _ := net.SplitHostPort(m.Dest)
 	l := ug.Config.Listeners["-:"+p]

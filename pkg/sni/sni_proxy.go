@@ -46,6 +46,7 @@ const (
 	extensionServerName uint16 = 0
 )
 
+// Expecting SNI
 func SniffSNI(acc *ugate.RawConn) error {
 	acc.Sniff()
 
@@ -72,6 +73,7 @@ func SniffSNI(acc *ugate.RawConn) error {
 
 	rlen := int(buf[3])<<8 | int(buf[4])
 	if rlen > 4096 {
+		log.Println("RLen ", rlen)
 		return sniErr
 	}
 
@@ -94,6 +96,7 @@ func SniffSNI(acc *ugate.RawConn) error {
 	chLen := end - 5
 
 	if chLen < 38 {
+		log.Println("chLen ", chLen)
 		return sniErr
 	}
 
@@ -104,6 +107,7 @@ func SniffSNI(acc *ugate.RawConn) error {
 
 	sessionIdLen := int(clientHello[38])
 	if sessionIdLen > 32 || chLen < 39+sessionIdLen {
+		log.Println("sLen ", sessionIdLen)
 		return sniErr
 	}
 	m.sessionId = clientHello[39 : 39+sessionIdLen]

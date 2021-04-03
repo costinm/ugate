@@ -197,7 +197,7 @@ func TestSrv(t *testing.T) {
 		// This is a H2 request that is forwarded to a stream.
 		p := pipe.New()
 		r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+"127.0.0.1:6112", p)
-		res, err := ag.h2Handler.RoundTrip(r)
+		res, err := ag.H2Handler.RoundTrip(r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -214,13 +214,13 @@ func TestSrv(t *testing.T) {
 		ag.Config.H2R = map[string]string{
 			"127.0.0.1:6107": "",
 		}
-		ag.h2Handler.UpdateReverseAccept()
+		ag.H2Handler.UpdateReverseAccept()
 		// Connecting to Bob's gateway (from c). Request should go to Alice.
 		//
 		p := pipe.New()
 		r, _ := http.NewRequest("POST",
 			"https://127.0.0.1:6107/dm/"+ag.Auth.ID, p)
-		res, err := cg.h2Handler.RoundTrip(r)
+		res, err := cg.H2Handler.RoundTrip(r)
 
 		if err != nil {
 			t.Fatal(err)
@@ -235,8 +235,8 @@ func TestSrv(t *testing.T) {
 
 		ag.Config.H2R = map[string]string{
 		}
-		ag.h2Handler.UpdateReverseAccept()
-		if len(ag.h2Handler.reverse) > 0 {
+		ag.H2Handler.UpdateReverseAccept()
+		if len(ag.H2Handler.reverse) > 0 {
 			t.Error("Failed to disconnect")
 		}
 	})

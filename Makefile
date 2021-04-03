@@ -54,6 +54,10 @@ push/docker.ugate: docker push/ugate
 push/ugate:
 	docker push ${IMAGE}:latest
 
+build/android:
+	cd android && gomobile bind -a -ldflags '-s -w' -target android -o android/ugate.aar .
+
+
 # Using Intellij plugin: missing manifest features
 # Build with buildpack: 30 sec to deploy
 # Build with docker: 26 sec

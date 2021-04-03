@@ -70,8 +70,11 @@ func NewMux() *Mux {
 
 var DefaultMux = NewMux()
 
-func InitMux(mux *Mux, auth *auth.Auth) {
+func InitMux(mux *Mux, hmux *http.ServeMux, auth *auth.Auth) {
 	mux.Auth = auth
+	hmux.HandleFunc("/push/", DefaultMux.HTTPHandlerWebpush)
+	hmux.HandleFunc("/subscribe", SubscribeHandler)
+	hmux.HandleFunc("/s/", HTTPHandlerSend)
 }
 
 // Send a message to the default mux. Will serialize the event and save it for debugging.

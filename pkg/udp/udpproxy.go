@@ -136,7 +136,6 @@ type UdpNat struct {
 type UDPGateConfig struct {
 	DNS ugate.UDPHandler
 	HostResolver ugate.HostResolver
-
 }
 
 type UDPGate struct {

@@ -20,7 +20,7 @@ import (
 // Called at the end of the connection handling. After this point
 // nothing should use or refer to the connection, both proxy directions
 // should already be closed for write or fully closed.
-func (ug *UGate) onAcceptDone(rc ugate.MetaConn) {
+func (ug *UGate) OnAcceptDone(rc ugate.MetaConn) {
 	str := rc.Meta()
 	ug.m.Lock()
 	delete(ug.ActiveTcp, str.StreamId)
@@ -85,7 +85,7 @@ func (ug *UGate) onAcceptDone(rc ugate.MetaConn) {
 
 // Deferred to connection close, only for the raw accepted connection.
 func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.RawConn) {
-	ug.onAcceptDone(rc)
+	ug.OnAcceptDone(rc)
 	ugate.BufferedConPool.Put(rc)
 }
 
@@ -121,8 +121,8 @@ func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.RawConn) {
 func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
 	bconn := ugate.GetConn(conn)
 	bconn.Meta().Egress = true
-	ug.trackStreamIN(bconn.Meta())
-	defer ug.onAcceptDone(bconn)
+	ug.TrackStreamIN(bconn.Meta())
+	defer ug.OnAcceptDone(bconn)
 
 	ra := conn.RemoteAddr()
 	//la := conn.LocalAddr()
@@ -139,17 +139,18 @@ func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
 	}
 	bconn.Stream.Egress = true
 
+	log.Println("TUN TCP ", bconn.Meta())
 	// TODO: config ? Could be shared with iptables port
-	return ug.handleStream(bconn.Meta())
+	return ug.HandleStream(bconn.Meta())
 }
 
 // Handle a virtual (multiplexed) stream, received over
 // another connection.
 func (ug *UGate) HandleVirtualIN(bconn ugate.MetaConn) error {
-	ug.trackStreamIN(bconn.Meta())
-	defer ug.onAcceptDone(bconn)
+	ug.TrackStreamIN(bconn.Meta())
+	defer ug.OnAcceptDone(bconn)
 
-	return ug.handleStream(bconn.Meta())
+	return ug.HandleStream(bconn.Meta())
 }
 
 // At this point the stream has the metadata:
@@ -158,7 +159,7 @@ func (ug *UGate) HandleVirtualIN(bconn ugate.MetaConn) error {
 // - Headers
 // - TLS context
 // - Dest and Listener are set.
-func (ug *UGate) handleStream(str *ugate.Stream) error {
+func (ug *UGate) HandleStream(str *ugate.Stream) error {
 	if str.Listener == nil {
 		str.Listener = ug.DefaultListener
 	}
@@ -166,7 +167,7 @@ func (ug *UGate) handleStream(str *ugate.Stream) error {
 
 	if cfg.Protocol == ugate.ProtoHTTPS {
 		str.PostDial(str, nil)
-		return ug.h2Handler.Handle(str)
+		return ug.H2Handler.Handle(str)
 	}
 
 	// Config has an in-process handler - not forwarding (or the handler may
@@ -182,7 +183,7 @@ func (ug *UGate) handleStream(str *ugate.Stream) error {
 	return ug.dialOut(str)
 }
 
-func (ug *UGate) trackStreamIN(s *ugate.Stream) {
+func (ug *UGate) TrackStreamIN(s *ugate.Stream) {
 	ug.m.Lock()
 	ug.ActiveTcp[s.StreamId] = s
 	ug.m.Unlock()
@@ -211,8 +212,8 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 	// Get a buffered stream - this is used for sniffing.
 	// Most common case is TLS, we want the SNI.
 	bconn := ugate.GetConn(acceptedCon)
-	ug.trackStreamIN(bconn.Meta())
-	defer ug.onAcceptDone(bconn)
+	ug.TrackStreamIN(bconn.Meta())
+	defer ug.OnAcceptDone(bconn)
 	str := bconn.Meta()
 
 	// Special protocols, muxed on a single port - will extract real
@@ -222,25 +223,24 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 	switch cfg.Protocol {
 	// TODO: costin: does not compile on android gomobile, missing syscall.
 	// remove dep, reverse it.
-	//case ugate.ProtoIPTablesIn:
-	//	// iptables is replacing the conn - process before creating the buffer
-	//	str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
-	//	cfg = ug.findCfgIptablesIn(bconn)
-	//case ugate.ProtoIPTables:
-	//	str.Dest, str.ReadErr = iptables.SniffIptables(str, cfg.Protocol)
-	//	str.Egress = true
 	case ugate.ProtoSocks:
 		str.Egress = true
 		str.ReadErr = socks.ReadSocksHeader(bconn)
 	case ugate.ProtoHTTP:
-		str.ReadErr = ug.h2Handler.handleHTTPListener(l, bconn)
+		str.ReadErr = ug.H2Handler.handleHTTPListener(l, bconn)
 		return
 	case ugate.ProtoHTTPS:
 		tlsTerm = true
 		// Used to present the right cert
 		str.ReadErr = sni.SniffSNI(bconn)
+		if str.ReadErr != nil {
+			log.Println("XXX Failed to snif SNI", str.ReadErr)
+		}
 	case ugate.ProtoTLS:
 		str.ReadErr = sni.SniffSNI(bconn)
+		if str.ReadErr != nil {
+			log.Println("XXX Failed to snif SNI in TLS", str.ReadErr, l.Address, l.Protocol, bconn.Meta())
+		}
 		if str.Dest == "" {
 			// No destination - terminate here
 			// TODO: also if dest hostname == local name or VIP or ID
@@ -280,7 +280,7 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 		tlsOrOrigStr = tc.Meta()
 	}
 
-	str.ReadErr = ug.handleStream(tlsOrOrigStr)
+	str.ReadErr = ug.HandleStream(tlsOrOrigStr)
 }
 
 // Auto-detect protocol on the wire, so routing info can be

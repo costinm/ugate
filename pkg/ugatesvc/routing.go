@@ -13,7 +13,7 @@ import (
 	"github.com/costinm/ugate/pkg/pipe"
 )
 
-// After a Stream ( TCP+meta or HTTP ) is accepted, we need to route it based on
+// After a Stream ( TCP+meta or HTTP ) is accepted/captured, we need to route it based on
 // the config.
 //
 // Use cases:
@@ -26,6 +26,8 @@ import (
 
 var NotFound = errors.New("not found")
 
+// Primary function for egress streams, after metadata has been parsed.
+//
 // Dial the target and proxy to it.
 // - if Dest is a mesh node, use BTS
 // - else use TCP proxy.
@@ -163,7 +165,7 @@ func (ug *UGate) CreateConn(ctx context.Context, dmn *ugate.DMNode) (error) {
 			return err
 		}
 
-		cc, err := ug.h2Handler.h2t.NewClientConn(lconn)
+		cc, err := ug.H2Handler.h2t.NewClientConn(lconn)
 		if err != nil {
 			nc.Close()
 			return  err

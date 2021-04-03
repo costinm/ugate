@@ -135,7 +135,7 @@ func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.Clie
 		return nil, err
 	}
 
-	cc, err := t.ug.h2Handler.h2t.NewClientConn(tc)
+	cc, err := t.ug.H2Handler.h2t.NewClientConn(tc)
 
 	return cc, err
 }

@@ -2,15 +2,74 @@ package iptables
 
 import (
 	"errors"
+	"log"
 	"net"
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 //
+func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
+	// For http proxy we need a dedicated plain HTTP port
+	nl, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Println("Failed to listen", err)
+		return err
+	}
+	for {
+		remoteConn, err := nl.Accept()
+		ugate.VarzAccepted.Add(1)
+		if ne, ok := err.(net.Error); ok {
+			ugate.VarzAcceptErr.Add(1)
+			if ne.Temporary() {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+		}
+		if err != nil {
+			log.Println("Accept error, closing iptables listener ", err)
+			return err
+		}
+		go handleAcceptedConn(ug, remoteConn, in)
+	}
+
+	return nil
+}
+
+// Mirroring handleAcceptedConn in UGate
+func handleAcceptedConn(ug *ugatesvc.UGate, acceptedCon net.Conn, in bool) {
+	bconn := ugate.GetConn(acceptedCon)
+	ug.TrackStreamIN(bconn.Meta())
+	defer ug.OnAcceptDone(bconn)
+	str := bconn.Meta()
+
+	//case ugate.ProtoIPTablesIn:
+	//	// iptables is replacing the conn - process before creating the buffer
+	// DestAddr is also set as a sideeffect
+	str.Dest, str.ReadErr = SniffIptables(str)
+
+	if str.ReadErr != nil {
+		return
+	}
+
+	cfg := ug.FindCfgIptablesIn(bconn)
+	if cfg.ForwardTo != "" {
+		str.Dest = cfg.ForwardTo
+	}
+	str.Listener = cfg
+	str.Type = cfg.Protocol
+
+	if !in {
+		str.Egress = true
+	}
+
+	str.ReadErr = ug.HandleStream(str)
+}
 
 // Status:
 // - TCP capture with redirect works
@@ -27,7 +86,7 @@ import (
 // https://github.com/ryanchapman/go-any-proxy/blob/master/any_proxy.go,
 // and other examples.
 // Based on REDIRECT.
-func SniffIptables(str *ugate.Stream, proto string) (string, error) {
+func SniffIptables(str *ugate.Stream) (string, error) {
 	if _, ok := str.Out.(*net.TCPConn); !ok {
 		return "", errors.New("invalid connection for iptbles")
 	}

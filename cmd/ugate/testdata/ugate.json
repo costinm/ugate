@@ -33,14 +33,10 @@
   "hosts": {
     "localiperf": {
       "addr": "localhost:15102"
-    },
-    "h.webinf.info": {
-      "addr": "h.webinf.info:15007",
-      "id": "B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA"
-    },
-    "c1.webinf.info": {
-      "addr": "c1.webinf.info:15007"
     }
   },
-  "remoteAccept": null
+  "remoteAccept": {
+    "h.webinf.info": "B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA",
+    "c1.webinf.info": ""
+  }
 }

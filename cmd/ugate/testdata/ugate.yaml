@@ -44,19 +44,19 @@ hosts:
     addr: localhost:15102
 
   # Live test server
-  h.webinf.info:
-    addr: h.webinf.info:15007
-    id: B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA
-
-  c1.webinf.info:
-    addr: c1.webinf.info:15007
+#  h.webinf.info:
+#    addr: h.webinf.info:15007
+#    id: B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA
+#
+#  c1.webinf.info:
+#    addr: c1.webinf.info:15007
 
 # Remote accept request (reverse forward, "-R")
 # Will also include relays, stun, etc.
 # TODO: could also be part of the hosts: definition, include a list
 # of ports. This way we don't dup the public key.
 remoteAccept:
-  #h.webinf.info: "B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA"
+  h.webinf.info: "B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA"
 
-  #c1.webinf.info: ""
+  c1.webinf.info: ""
 
