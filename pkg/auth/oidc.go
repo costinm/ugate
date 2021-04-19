@@ -153,8 +153,7 @@ func (a *Auth) HandleDisc(w http.ResponseWriter, r *http.Request) {
 
 // OIDC JWK
 func (a *Auth) HandleJWK(w http.ResponseWriter, r *http.Request) {
-	// Ed25519 - java has some problems
-	pk := a.EC256Cert.PrivateKey.(*ecdsa.PrivateKey)
+	pk := a.Cert.PrivateKey.(*ecdsa.PrivateKey)
 	byteLen := (pk.Params().BitSize + 7) / 8
 	ret := make([]byte, byteLen)
 	pk.X.FillBytes(ret[0: byteLen])

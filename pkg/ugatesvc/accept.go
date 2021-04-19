@@ -1,13 +1,8 @@
 package ugatesvc
 
 import (
-	"bytes"
-	"errors"
-	"io"
 	"log"
 	"net"
-	"runtime/debug"
-	"time"
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/sni"
@@ -15,77 +10,12 @@ import (
 )
 
 // Accepting connections on ports and extracting metadata, including sniffing.
-//
 
-// Called at the end of the connection handling. After this point
-// nothing should use or refer to the connection, both proxy directions
-// should already be closed for write or fully closed.
-func (ug *UGate) OnAcceptDone(rc ugate.MetaConn) {
-	str := rc.Meta()
-	ug.m.Lock()
-	delete(ug.ActiveTcp, str.StreamId)
-	ug.m.Unlock()
-	ugate.TcpConActive.Add(-1)
-	// TODO: track multiplexed streams separately.
-	if str.ReadErr != nil {
-		ugate.VarzSErrRead.Add(1)
-	}
-	if str.WriteErr != nil {
-		ugate.VarzSErrWrite.Add(1)
-	}
-	if str.ProxyReadErr != nil {
-		ugate.VarzCErrRead.Add(1)
-	}
-	if str.ProxyWriteErr != nil {
-		ugate.VarzCErrWrite.Add(1)
-	}
 
-	if r := recover(); r != nil {
-
-		debug.PrintStack()
-
-		// find out exactly what the error was and set err
-		var err error
-
-		switch x := r.(type) {
-		case string:
-			err = errors.New(x)
-		case error:
-			err = x
-		default:
-			err = errors.New("Unknown panic")
-		}
-		log.Println("AC: Recovered in f", r, err)
-	}
-
-	if str.ReadErr != io.EOF && str.ReadErr != nil ||
-		str.WriteErr != nil {
-		log.Println("Err in:", str.ReadErr, str.WriteErr)
-	}
-	if str.ProxyReadErr != nil || str.ProxyWriteErr != nil {
-		log.Println("Err out:", str.ProxyReadErr, str.ProxyWriteErr)
-	}
-	if !str.Closed {
-		str.Close()
-	}
-
-	log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
-		str.StreamId,
-		str.Type, rc.RemoteAddr(),
-		str.Dest,
-		str.RcvdPackets, str.RcvdBytes,
-		str.SentPackets, str.SentBytes,
-		time.Since(str.LastWrite),
-		time.Since(str.LastRead),
-		int64(time.Since(str.Open).Seconds()))
-	if bc, ok := rc.(*ugate.RawConn); ok {
-		ugate.BufferedConPool.Put(bc)
-	}
-}
 
 // Deferred to connection close, only for the raw accepted connection.
-func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.RawConn) {
-	ug.OnAcceptDone(rc)
+func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.BufferedStream) {
+	ug.OnStreamDone(rc)
 	ugate.BufferedConPool.Put(rc)
 }
 
@@ -121,8 +51,8 @@ func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.RawConn) {
 func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
 	bconn := ugate.GetConn(conn)
 	bconn.Meta().Egress = true
-	ug.TrackStreamIN(bconn.Meta())
-	defer ug.OnAcceptDone(bconn)
+	ug.OnStream(bconn.Meta())
+	defer ug.OnStreamDone(bconn)
 
 	ra := conn.RemoteAddr()
 	//la := conn.LocalAddr()
@@ -145,75 +75,30 @@ func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
 }
 
 // Handle a virtual (multiplexed) stream, received over
-// another connection.
+// another connection, for example H2 POST/CONNECT, etc
+// The connection will have metadata, may include identify of the caller.
 func (ug *UGate) HandleVirtualIN(bconn ugate.MetaConn) error {
-	ug.TrackStreamIN(bconn.Meta())
-	defer ug.OnAcceptDone(bconn)
+	ug.OnStream(bconn.Meta())
+	defer ug.OnStreamDone(bconn)
 
 	return ug.HandleStream(bconn.Meta())
 }
 
-// At this point the stream has the metadata:
-// - RequestURI
-// - Host
-// - Headers
-// - TLS context
-// - Dest and Listener are set.
-func (ug *UGate) HandleStream(str *ugate.Stream) error {
-	if str.Listener == nil {
-		str.Listener = ug.DefaultListener
-	}
-	cfg := str.Listener
 
-	if cfg.Protocol == ugate.ProtoHTTPS {
-		str.PostDial(str, nil)
-		return ug.H2Handler.Handle(str)
-	}
-
-	// Config has an in-process handler - not forwarding (or the handler may
-	// forward).
-	if cfg.Handler != nil {
-		// SOCKS and others need to send something back - we don't
-		// have a real connection, faking it.
-		str.PostDial(str, nil)
-		return cfg.Handler.Handle(str)
-	}
-
-	// By default, dial out
-	return ug.dialOut(str)
-}
-
-func (ug *UGate) TrackStreamIN(s *ugate.Stream) {
-	ug.m.Lock()
-	ug.ActiveTcp[s.StreamId] = s
-	ug.m.Unlock()
-
-	ugate.TcpConActive.Add(1)
-	ugate.TcpConTotal.Add(1)
-}
-
-// A real accepted connection. Based on config, sniff and possibly
-// dispatch to a different type.
-//
-// - out / egress: originated from this host
-// - in:  destination is this host.
-// - ingress: terminate TLS, forward to a different host
-// - relay: proxy based on SNI/metadata without change
+// A real accepted connection from port_listener.
+// Based on config, sniff and possibly dispatch to a different type.
 func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 	// Attempt to determine the Listener and target
 	// Ingress mode, forward to an IP
 	cfg := l
-
-	// Get a buffered connection with metadata from the pool.
-	//c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 
 	tlsTerm := false
 
 	// Get a buffered stream - this is used for sniffing.
 	// Most common case is TLS, we want the SNI.
 	bconn := ugate.GetConn(acceptedCon)
-	ug.TrackStreamIN(bconn.Meta())
-	defer ug.OnAcceptDone(bconn)
+	ug.OnStream(bconn.Meta())
+	defer ug.OnStreamDone(bconn)
 	str := bconn.Meta()
 
 	// Special protocols, muxed on a single port - will extract real
@@ -271,7 +156,7 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 	// is configured for termination.
 	// Else it's just a proxied SNI connection.
 	if tlsTerm {
-		tc, err := ug.NewTLSConnIn(str.Context(), bconn, ug.TLSConfig)
+		tc, err := ug.NewTLSConnIn(str.Context(),cfg,  bconn, ug.TLSConfig)
 		if err != nil {
 			str.ReadErr = err
 			log.Println("TLS: ", err)
@@ -291,7 +176,7 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 // - SOCKS (5)
 // - H2
 // - TODO: HAproxy
-//func sniff(pl *ugate.Listener, br *stream.RawConn) error {
+//func sniff(pl *ugate.Listener, br *stream.BufferedStream) error {
 //	br.Sniff()
 //	var proto string
 //
@@ -343,46 +228,3 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 //	return nil
 //}
 
-var (
-	// ClientPreface is the string that must be sent by new
-	// connections from clients.
-	h2ClientPreface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-)
-
-
-func SniffH2(br *ugate.RawConn) error {
-	br.Sniff()
-	var proto string
-
-	for {
-		_, err := br.Fill()
-		if err != nil {
-			return err
-		}
-		off := br.End
-		if ix := bytes.IndexByte(br.Buf[0:off], '\n'); ix >=0 {
-			if bytes.Contains(br.Buf[0:off], []byte("HTTP/1.1")) {
-				break
-			}
-		}
-		if off >= len(h2ClientPreface) {
-			if bytes.Equal(br.Buf[0:len(h2ClientPreface)], h2ClientPreface) {
-				proto = ugate.ProtoH2
-				break
-			}
-		}
-	}
-
-	// All bytes in the buffer will be Read again
-	br.Reset(0)
-
-	switch proto {
-	case ugate.ProtoSocks:
-		socks.ReadSocksHeader(br)
-	case ugate.ProtoTLS:
-		sni.SniffSNI(br)
-	}
-	br.Stream.Type = proto
-
-	return nil
-}

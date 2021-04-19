@@ -22,6 +22,8 @@ import (
 	"log"
 	"strings"
 	"testing"
+
+	"github.com/costinm/ugate/webpush"
 )
 
 var (
@@ -65,7 +67,7 @@ func stubFuncs(salt func() ([]byte, error), key func() ([]byte, []byte, error)) 
 
 
 func TestEncrypt(t *testing.T) {
-	sub, err := SubscriptionFromJSON(subscriptionJSON)
+	sub, err := webpush.SubscriptionFromJSON(subscriptionJSON)
 	if err != nil {
 		t.Error("Couldn't decode JSON subscription")
 	}
@@ -145,7 +147,7 @@ func TestRfcVectors(t *testing.T) {
 		t.Error(err)
 	}
 
-	sub := &Subscription{Auth: auth, Key: key}
+	sub := &webpush.Subscription{Auth: auth, Key: key}
 
 	result, err := Encrypt(sub.Key, sub.Auth, message)
 	if err != nil {
@@ -159,6 +161,16 @@ func TestRfcVectors(t *testing.T) {
 	if !bytes.Equal(result.Ciphertext, expCiphertext) {
 		t.Errorf("Ciphertext was %v, expected %v", result.Ciphertext, expCiphertext)
 	}
+}
+
+func Encrypt(key []byte, auth []byte, m string) (*EncryptionContext, error) {
+	ec := &EncryptionContext{
+		Auth: auth,
+		UAPublic: key,
+	}
+
+	_, err := ec.Encrypt([]byte(m))
+	return ec, err
 }
 
 func TestSharedSecret(t *testing.T) {
@@ -175,28 +187,28 @@ func TestSharedSecret(t *testing.T) {
 }
 
 func BenchmarkEncrypt(b *testing.B) {
-	sub, _ := SubscriptionFromJSON(subscriptionJSON)
+	sub, _ := webpush.SubscriptionFromJSON(subscriptionJSON)
 	for i := 0; i < b.N; i++ {
 		Encrypt(sub.Key, sub.Auth, "Hello world")
 	}
 }
 
-func BenchmarkEncryptWithKey(b *testing.B) {
-	sub, _ := SubscriptionFromJSON(subscriptionJSON)
-	plain := []byte("Hello world")
-	serverPrivateKey, serverPublicKey, _ := randomKey()
-
-	for i := 0; i < b.N; i++ {
-		EncryptWithTempKey(sub.Key, sub.Auth, plain, serverPrivateKey, serverPublicKey)
-	}
-}
+//func BenchmarkEncryptWithKey(b *testing.B) {
+//	sub, _ := webpush.SubscriptionFromJSON(subscriptionJSON)
+//	plain := []byte("Hello world")
+//	serverPrivateKey, serverPublicKey, _ := randomKey()
+//
+//	for i := 0; i < b.N; i++ {
+//		EncryptWithTempKey(sub.Key, sub.Auth, plain, serverPrivateKey, serverPublicKey)
+//	}
+//}
 
 func Test2Way(t *testing.T) {
 	b64 := base64.URLEncoding.WithPadding(base64.NoPadding)
 
 	subPriv, subPub, err := randomKey()
 	auth, err := b64.DecodeString("68zcbmaevQa7MS7aXXRX8Q")
-	sub := &Subscription{
+	sub := &webpush.Subscription{
 		Endpoint: "https://foo.com",
 		Auth:     auth,
 		Key:      subPub,
@@ -264,10 +276,10 @@ func TestWebpush(t *testing.T) {
 	body := "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN"
 	bodyB, _ := base64.RawURLEncoding.DecodeString(body)
 
-	ec := NewContextSend(rv.Pub, authB)
+	ec := NewContextSend(rv.PublicKey, authB)
 	// To reproduce the same output, use the key from the RFC.
 	ec.SendPrivate = sv.Priv
-	ec.SendPublic = sv.Pub
+	ec.SendPublic = sv.PublicKey
 	ec.Salt = saltB
 
 	cipher, err := ec.Encrypt([]byte(plain))
@@ -279,7 +291,7 @@ func TestWebpush(t *testing.T) {
 		t.Error("Failed to encrypt")
 	}
 
-	dc := NewContextUA(rv.Priv, rv.Pub, authB)
+	dc := rv.NewContextUA(authB)
 	plain1, err := dc.Decrypt(cipher)
 	if err != nil {
 		t.Fatal(err)
@@ -289,14 +301,14 @@ func TestWebpush(t *testing.T) {
 		t.Error("Failed to decrypt")
 	}
 
-	ec1 := NewContextSend(rv.Pub, authB)
+	ec1 := NewContextSend(rv.PublicKey, authB)
 	cipher, _ = ec1.Encrypt([]byte{1})
 	if len(cipher) != 104 {
 		t.Error("One byte expecting 104 got ", len(cipher))
 	}
 	log.Printf("Encrypt 1 byte to %d", len(cipher))
 
-	ec2 := NewContextUA(rv.Priv, rv.Pub, authB)
+	ec2 := rv.NewContextUA(authB)
 	plainB, err := ec2.Decrypt(cipher)
 	if err != nil {
 		t.Fatal(err)

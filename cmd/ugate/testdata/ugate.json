@@ -33,6 +33,9 @@
   "hosts": {
     "localiperf": {
       "addr": "localhost:15102"
+    },
+    "h.webinf.info": {
+      "addr": "h.webinf.info:443"
     }
   },
   "remoteAccept": {

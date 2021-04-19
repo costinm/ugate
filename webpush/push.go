@@ -79,7 +79,7 @@ func NewRequest(dest string, key, authK []byte,
 
 	// If there is no payload then we don't actually need encryption
 	if message != "" {
-		ec := auth.EncryptionContext{}
+		ec := auth.NewContextSend(key, authK)
 		payload, err := ec.Encrypt([]byte(message))
 		if err != nil {
 			return nil, err
@@ -98,7 +98,7 @@ func NewRequest(dest string, key, authK []byte,
 
 // SubscriptionFromJSON is a convenience function that takes a JSON encoded
 // PushSubscription object acquired from the browser and returns a pointer to a
-// Subscription
+// node.
 func SubscriptionFromJSON(b []byte) (*Subscription, error) {
 	var sub struct {
 		Endpoint string

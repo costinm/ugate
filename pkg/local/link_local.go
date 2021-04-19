@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/auth"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
@@ -75,10 +75,10 @@ func ListenUDP(gw *LLDiscovery) {
 // Currently used only for Mesh AP chains.
 func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.DMNode, addr *net.UDPAddr, fromMySTA bool) {
 	//now := time.Now()
-	add := &net.UDPAddr{IP: addr.IP, Zone: addr.Zone, Port: 5222}
+	//add := &net.UDPAddr{IP: addr.IP, Zone: addr.Zone, Port: 5222}
 
-	if fromMySTA && node.TunClient == nil {
-		log.Println("TODO: connect to ", add)
+	//if fromMySTA && node.TunClient == nil {
+		//log.Println("TODO: connect to ", add)
 		//sshVpn, err := gw.gw.SSHGate.DialMUX(add.String(), node.PublicKey, nil)
 		//if err != nil {
 		//	log.Println("SSH STA ERR ", add, node.VIP, err)
@@ -94,7 +94,7 @@ func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.DMNode, addr *net.UDPAddr,
 		//	log.Println("SSH STA CLOSE ", add, node.VIP)
 		//
 		//}()
-	}
+	//}
 }
 
 // Format an address + zone + port for use in HTTP request
@@ -262,8 +262,8 @@ func mcMessage(gw *LLDiscovery, i *ActiveInterface, isAck bool) []byte {
 // Sign the message in the buffer.
 func signedMessage(buf *bytes.Buffer, auth *auth.Auth) []byte {
 
-	buf.Write(auth.Pub[1:])
-	buf.Write(auth.Pub[1:]) // to add another 64 bytes
+	buf.Write(auth.PublicKey[1:])
+	buf.Write(auth.PublicKey[1:]) // to add another 64 bytes
 
 	res := buf.Bytes()
 	resLen := len(res)
@@ -403,6 +403,9 @@ func (gw *LLDiscovery) AnnounceMulticast() {
 	ok := []string{}
 	fail := []string{}
 
+
+
+	// Send IPv6 messages
 	for _, a := range gw.ActiveInterfaces {
 		a := a
 
@@ -521,12 +524,13 @@ func unicastReaderThread(gw *LLDiscovery, c net.PacketConn, iface *ActiveInterfa
 			}
 		}
 
-		log.Println("LL: ACK Received:", directNode.VIP, c.LocalAddr(), addr, ann)
+		log.Println("LL: ACK Received:", directNode.ID, c.LocalAddr(), addr, ann)
 
 	}
 }
 
-// Multicast registration server. One for each interface
+// Multicast registration server. One for each interface, the MC must
+// be associated with the interface.
 func (gw *LLDiscovery) multicastReaderThread(c net.PacketConn, iface *ActiveInterface) {
 	defer func() {
 		c.Close()
@@ -613,7 +617,7 @@ func (gw *LLDiscovery) multicastReaderThread(c net.PacketConn, iface *ActiveInte
 
 		gw.OnLocalNetworkFunc(directNode, addr, strings.Contains(addr.Zone, "p2p"))
 
-		log.Println("LL: MC Received:", directNode.VIP, addr, directNode.NodeAnnounce.UA, isAp)
+		log.Println("LL: MC Received:", directNode.ID, addr, directNode.NodeAnnounce.UA, isAp)
 
 		if !ann.Ack {
 			// Send an 'ack' back to the device, including our own ID/sig and info
@@ -714,13 +718,13 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 	node.NodeAnnounce = ann
 	// ???
 
-	node.Announces++
-	if strings.Contains(addr.Zone, "p2p") {
-		node.AnnouncesOnP2P++
-	}
-	if ann.AP {
-		node.AnnouncesFromP2P++
-	}
+	//node.Announces++
+	//if strings.Contains(addr.Zone, "p2p") {
+	//	node.AnnouncesOnP2P++
+	//}
+	//if ann.AP {
+	//	node.AnnouncesFromP2P++
+	//}
 
 	// IP4 addresses don't include zone for some reason...
 	if addr.Zone != "" && iface != nil && iface.Name != addr.Zone {

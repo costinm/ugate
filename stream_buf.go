@@ -35,15 +35,15 @@ var (
 
 var BufferedConPool = sync.Pool{New: func() interface{} {
 	// Should hold a TLS handshake message
-	return &RawConn{
+	return &BufferedStream{
 		Buf:    make([]byte, bufSize),
 		IpBuf:  make([]byte, net.IPv6len),
 		Stream: &Stream{},
 	}
 }}
 
-func GetConn(in net.Conn) *RawConn {
-	br := BufferedConPool.Get().(*RawConn)
+func GetConn(in net.Conn) *BufferedStream {
+	br := BufferedConPool.Get().(*BufferedStream)
 	br.resetStats()
 	br.Out = in
 	br.Out = in
@@ -54,9 +54,7 @@ func GetConn(in net.Conn) *RawConn {
 	return br
 }
 
-// Wraps accepted connections, keeps a buffer and detected metadata.
-//
-// RawConn is an optimized implementation of io.Reader that behaves like
+// BufferedStream is an optimized implementation of io.Reader that behaves like
 // ```
 // io.MultiReader(bytes.NewReader(buffer.Bytes()), io.TeeReader(source, buffer))
 // ```
@@ -65,7 +63,7 @@ func GetConn(in net.Conn) *RawConn {
 // Also similar with bufio.Reader, but with recycling and access to buffer,
 // metadata, stats and for net.Conn.
 // TODO: use net.Buffers ? The net connection likely implements it.
-type RawConn struct {
+type BufferedStream struct {
 	*Stream
 
 	// Typically a *net.TCPConn, implements ReaderFrom.
@@ -94,21 +92,21 @@ type RawConn struct {
 	IpBuf []byte
 }
 
-func (b *RawConn) empty() bool {
+func (b *BufferedStream) empty() bool {
 	return b.off >= b.End
 }
 
-func (b *RawConn) Len() int {
+func (b *BufferedStream) Len() int {
 	//
 	return b.End - b.off
 }
 
 // Return the unread portion of the buffer
-func (b *RawConn) Bytes() []byte {
+func (b *BufferedStream) Bytes() []byte {
 	return b.Buf[b.off:b.End]
 }
 
-func (b *RawConn) ReadByte() (byte, error) {
+func (b *BufferedStream) ReadByte() (byte, error) {
 	if b.empty() {
 		_, err := b.Fill()
 		if err != nil {
@@ -122,7 +120,7 @@ func (b *RawConn) ReadByte() (byte, error) {
 
 // Fill the buffer by doing one Read() from the underlying reader.
 // Calls to Read() will use the buffer.
-func (b *RawConn) Fill() ([]byte, error) {
+func (b *BufferedStream) Fill() ([]byte, error) {
 	if b.empty() && !b.sniffing {
 		b.off = 0
 		b.End = 0
@@ -135,36 +133,36 @@ func (b *RawConn) Fill() ([]byte, error) {
 	return b.Buf[b.off:b.End], nil
 }
 
-func (b *RawConn) Buffer() []byte {
+func (b *BufferedStream) Buffer() []byte {
 	return b.Buf[b.off:b.End]
 }
 
 // Reset will set the bufferRead to off, so Read() will start from there (ignoring
 // bytes from header).
 // Sniffing mode is disabled.
-func (b *RawConn) Reset(off int) {
+func (b *BufferedStream) Reset(off int) {
 	b.sniffing = false
 	b.off = off
 }
 
-func (b *RawConn) Clean() {
+func (b *BufferedStream) Clean() {
 	b.sniffing = false
 	b.off = 0
 	b.End = 0
 }
 
-func (b *RawConn) Sniff() {
+func (b *BufferedStream) Sniff() {
 	b.sniffing = true
 	b.off = 0
 	b.End = 0
 }
 
-func (b *RawConn) resetStats() {
+func (b *BufferedStream) resetStats() {
 	b.Stream = NewStream()
 	//b.Meta.Reset()
 }
 
-func (b *RawConn) Read(p []byte) (int, error) {
+func (b *BufferedStream) Read(p []byte) (int, error) {
 	if b.End > b.off {
 		// If we have already read something from the buffer before, we return the
 		// same data and the last error if any. We need to immediately return,
@@ -214,7 +212,7 @@ func CanSplice(in io.Reader, out io.Writer) bool {
 }
 
 // WriteTo implements the interface, using the read buffer.
-func (b *RawConn) WriteTo(w io.Writer) (n int64, err error) {
+func (b *BufferedStream) WriteTo(w io.Writer) (n int64, err error) {
 	// Finish up the buffer first
 	if !b.empty() {
 		bn, err := w.Write(b.Buf[b.off:b.End])

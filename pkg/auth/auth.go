@@ -39,10 +39,14 @@ import (
 // An IPv6 address is derived from the public key.
 //
 type Auth struct {
-	// DNS-friendly public key-based ID, used as base hostname.
-	ID string
+	// Public part of the Auth info
+	ugate.DMNode
 
-	// Primary VIP, Created from the Pub key, will be included in the self-signed cert.
+	// Primary certificate and private key. Loaded or generated.
+	// Currently EC256 - may also support ED in future.
+	Cert *tls.Certificate
+
+	// Primary VIP, Created from the PublicKey key, will be included in the self-signed cert.
 	VIP6 net.IP
 
 	// Same as VIP6, but as uint64
@@ -57,12 +61,6 @@ type Auth struct {
 	// User friendly name - not trusted
 	Name string
 
-	// Primary public key of the node.
-	// EC256: 65 bytes, uncompressed format
-	// RSA: DER
-	// ED25519: 32B
-	Pub []byte
-
 	// base64URL encoding of the primary public key.
 	// Will be used in JWT header.
 	pub64 string
@@ -73,16 +71,11 @@ type Auth struct {
 	// RSA: DER
 	Priv []byte
 
-	// Certificates associated with this node. The first certificate is the workload
-	// id, primary cert.
-	TlsCerts []tls.Certificate
-
-	EC256Cert *tls.Certificate
 	//// Secondary private keys.
 	//RSACert     *tls.Certificate
 	//ED25519Cert *tls.Certificate
 
-	Cert *x509.Certificate
+	//Cert *x509.Certificate
 
 	Authorized map[string]string
 	cfg        *KubeConfig
@@ -95,24 +88,28 @@ var certValidityPeriod = 100 * 365 * 24 * time.Hour
 
 // NewVapid constructs a new Vapid generator from EC256 public and private keys,
 // in base64 uncompressed format.
-func NewVapid(publicKey, privateKey string) (v *Auth) {
-	publicUncomp, _ := base64.RawURLEncoding.DecodeString(publicKey)
-	privateUncomp, _ := base64.RawURLEncoding.DecodeString(privateKey)
+func NewVapid(publicKey64, privateKey64 string)  *Auth {
+	publicUncomp, _ := base64.RawURLEncoding.DecodeString(publicKey64)
+	privateUncomp, _ := base64.RawURLEncoding.DecodeString(privateKey64)
 
 	x, y := elliptic.Unmarshal(elliptic.P256(), publicUncomp)
 	d := new(big.Int).SetBytes(privateUncomp)
 	pubkey := ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 	pkey := ecdsa.PrivateKey{PublicKey: pubkey, D: d}
 
-	v = &Auth{
+	v := &Auth{
 	}
-	v.pub64 = publicKey
-	v.Pub = publicUncomp
+	v.pub64 = publicKey64
+	v.PublicKey = publicUncomp
 	v.Priv = privateUncomp
-	v.Pub = elliptic.Marshal(elliptic.P256(), pkey.X, pkey.Y)
+	v.PublicKey = elliptic.Marshal(elliptic.P256(), pkey.X, pkey.Y)
 	v.Priv = pkey.D.Bytes()
 
-	return
+	tlsCert, _, _ := v.generateSelfSigned("ec256", &pkey, "TODO")
+	// Required now
+	v.Cert = &tlsCert
+
+	return v
 }
 
 func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
@@ -143,24 +140,28 @@ func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 	//auth.generateCert()
 	//auth.tlsCerts = append(auth.tlsCerts, *auth.EC256Cert)
 
-	c0 := auth.TlsCerts[0]
+	c0 := auth.Cert
 	pk := c0.PrivateKey
 
+	var pubkey crypto.PublicKey
 	if priv, ok := pk.(*ecdsa.PrivateKey); ok {
 		auth.Priv = priv.D.Bytes()
-		auth.Pub = elliptic.Marshal(elliptic.P256(), priv.X, priv.Y) // starts with 0x04 == uncompressed curve
+		auth.PublicKey = elliptic.Marshal(elliptic.P256(), priv.X, priv.Y) // starts with 0x04 == uncompressed curve
+		pubkey = priv.Public()
 	} else if priv, ok := pk.(*ed25519.PrivateKey); ok {
 		auth.Priv = *priv
 		edpub := PublicKey(priv)
-		auth.Pub = edpub.(ed25519.PublicKey)
+		auth.PublicKey = edpub.(ed25519.PublicKey)
+		pubkey = edpub
 	}
 
-	auth.VIP6 = Pub2VIP(auth.Pub)
-	auth.VIP64 = auth.NodeIDUInt(auth.Pub)
+	auth.VIP6 = Pub2VIP(auth.PublicKey)
+	auth.VIP64 = auth.NodeIDUInt(auth.PublicKey)
 	// Based on the primary EC256 key
-	auth.pub64 = base64.RawURLEncoding.EncodeToString(auth.Pub)
-	auth.ID = IDFromPublicKey(auth.Pub)
-
+	auth.pub64 = base64.RawURLEncoding.EncodeToString(auth.PublicKey)
+	if auth.ID == "" {
+		auth.ID = IDFromPublicKey(pubkey)
+	}
 	auth.CertMap = auth.GetCerts()
 
 	return auth
@@ -173,7 +174,7 @@ func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 func (auth *Auth) GenerateTLSConfigServer() *tls.Config {
 	var crt *tls.Certificate
 
-	crt = &auth.TlsCerts[0]
+	crt = auth.Cert
 
 	certs := []tls.Certificate{*crt}
 
@@ -255,7 +256,7 @@ func (auth *Auth) Sign(data []byte, sig []byte) {
 	hasher.Write(data) //[0:64]) // only public key, for debug
 	hash := hasher.Sum(nil)
 
-	c0 := auth.TlsCerts[0]
+	c0 := auth.Cert
 	if ec, ok := c0.PrivateKey.(*ecdsa.PrivateKey); ok {
 		r, s, _ := ecdsa.Sign(rand.Reader, ec, hash)
 		copy(sig, r.Bytes())
@@ -307,40 +308,40 @@ func (auth *Auth) GenerateTLSConfigClient() *tls.Config {
 		// VerifyPeerCertificate used instead
 		InsecureSkipVerify: true,
 
-		Certificates: auth.TlsCerts,
+		Certificates: []tls.Certificate{*auth.Cert},
 		// not set on client !! Setting it also disables Auth !
 		//NextProtos: nextProtosH2,
 	}
 }
 
 // WIP: Attempt to get a signed certificate, using Istio protocol.
-func (auth *Auth) GetSignedCert(url string) error {
-	if _, err := os.Stat("./etc/certs/key.pem"); !os.IsNotExist(err) {
-		crt, err := tls.LoadX509KeyPair("./etc/certs/cert-chain.pem", "./etc/certs/key.pem")
-		if err != nil {
-			log.Println("Failed to load system istio certs", err)
-		} else {
-			//auth.RSACert = &crt
-			auth.TlsCerts = append(auth.TlsCerts, crt)
-			if crt.Leaf != nil {
-				log.Println("Loaded istio cert ", crt.Leaf.URIs)
-			}
-		}
-	}
-
-	// Get token
-	// Serialize the proto (raw varint)
-	// Call the grpc ( raw, avoid dep), with token and mTLS
-	// Save it as 'primary' cert.
-
-	return nil
-}
+//func (auth *Auth) GetSignedCert(url string) error {
+//	if _, err := os.Stat("./etc/certs/key.pem"); !os.IsNotExist(err) {
+//		crt, err := tls.LoadX509KeyPair("./etc/certs/cert-chain.pem", "./etc/certs/key.pem")
+//		if err != nil {
+//			log.Println("Failed to load system istio certs", err)
+//		} else {
+//			//auth.RSACert = &crt
+//			auth.TlsCerts = append(auth.TlsCerts, crt)
+//			if crt.Leaf != nil {
+//				log.Println("Loaded istio cert ", crt.Leaf.URIs)
+//			}
+//		}
+//	}
+//
+//	// Get token
+//	// Serialize the proto (raw varint)
+//	// Call the grpc ( raw, avoid dep), with token and mTLS
+//	// Save it as 'primary' cert.
+//
+//	return nil
+//}
 
 var useED = false
 
 func (auth *Auth) initCert() {
 	auth.loadAuthCfg()
-	if len(auth.TlsCerts) > 0 {
+	if auth.Cert != nil {
 		return // got a cert
 	}
 	var keyPEM, certPEM []byte
@@ -349,13 +350,12 @@ func (auth *Auth) initCert() {
 		_, edpk, _ := ed25519.GenerateKey(rand.Reader)
 		auth.ID = IDFromPublicKey(PublicKey(edpk))
 		tlsCert, keyPEM, certPEM = auth.generateSelfSigned("ed25519", edpk, auth.Name+"."+auth.Domain)
-		auth.TlsCerts = []tls.Certificate{tlsCert}
+		auth.Cert = &tlsCert
 	} else {
 		privk, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		auth.ID = IDFromPublicKey(PublicKey(privk))
 		tlsCert, keyPEM, certPEM = auth.generateSelfSigned("ec256", privk, auth.Name+"."+auth.Domain)
-		auth.TlsCerts = []tls.Certificate{tlsCert}
-		auth.EC256Cert = &tlsCert
+		auth.Cert = &tlsCert
 	}
 
 	kc := &KubeConfig{
@@ -387,6 +387,10 @@ func (auth *Auth) initCert() {
 	auth.cfg = kc
 }
 
+// loadAuthCfg will attempt to find this node secrets in the store.
+// Will try:
+// - ./kube.json
+// - ./secret/[NAME].[DOMAIN]
 func (auth *Auth) loadAuthCfg() {
 	if auth.Config == nil {
 		return
@@ -394,6 +398,9 @@ func (auth *Auth) loadAuthCfg() {
 	// Single file - more convenient for upload
 	// Java supports PKCS12 ( p12, pfx)
 	kcfg, _ := auth.Config.Get("kube.json")
+	if kcfg == nil {
+		kcfg, _ = auth.Config.Get("secret/" + auth.Name + "." + auth.Domain)
+	}
 	if kcfg == nil {
 		return
 	}
@@ -420,8 +427,8 @@ func (auth *Auth) loadAuthCfg() {
 	// TODO: default context or context env
 
 	auth.cfg = kube
-	auth.TlsCerts = []tls.Certificate{tlsCert}
-	auth.EC256Cert = &tlsCert
+	//auth.TlsCerts = []tls.Certificate{tlsCert}
+	auth.Cert = &tlsCert
 }
 
 // Load the primary cert - expects a PEM key file
@@ -469,9 +476,9 @@ func (auth *Auth) loadCert() error {
 	return nil
 }
 
-// generateCert will generate the keys and populate the Pub/Priv fields.
-// Will set privateKey, Priv, Pub
-// Pub, Priv should be saved
+// generateCert will generate the keys and populate the PublicKey/Priv fields.
+// Will set privateKey, Priv, PublicKey
+// PublicKey, Priv should be saved
 func (auth *Auth) generateCert() {
 	//var keyPEM []byte
 	//var certPEM []byte
@@ -533,10 +540,8 @@ func (auth *Auth) NodeIDUInt(pub []byte) uint64 {
 
 var enc = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// IDFromPublicKey returns the node ID based on the
-// public key of the node.
-//
-// Deprecated: for compat with WebRTC, use IDFromCert
+// IDFromPublicKey returns a node ID based on the
+// public key of the node - 52 bytes base32.
 func IDFromPublicKey(key crypto.PublicKey) string {
 	m := MarshalPublicKey(key)
 	if len(m) > 32 {
@@ -547,7 +552,11 @@ func IDFromPublicKey(key crypto.PublicKey) string {
 	return enc.EncodeToString(m)
 }
 
-func IDFromCert(key crypto.PublicKey) string {
+func IDFromCert(c []*x509.Certificate) string {
+	if c == nil || len(c) == 0 {
+		return ""
+	}
+	key := c[0].PublicKey
 	m := MarshalPublicKey(key)
 	if len(m) > 32 {
 		sha256 := sha256.New()
@@ -664,7 +673,7 @@ func (auth *Auth) SignCSR(csrBytes []byte, org string, sans ...string) ([]byte, 
 		return nil, fmt.Errorf("failed to parse X.509 certificate signing request")
 	}
 
-	certDER := auth.signCertDER(csr.PublicKey, auth.TlsCerts[0].PrivateKey, sans...)
+	certDER := auth.signCertDER(csr.PublicKey, auth.Cert.PrivateKey, sans...)
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
 	return certPEM, nil
@@ -741,6 +750,11 @@ func MarshalPublicKey(key crypto.PublicKey) []byte {
 	if k, ok := key.(*rsa.PublicKey); ok {
 		bk := x509.MarshalPKCS1PublicKey(k)
 		return bk
+	}
+	if k, ok := key.([]byte); ok {
+		if len(k) == 64 || len(k) == 32 {
+			return k
+		}
 	}
 
 	return nil

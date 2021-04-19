@@ -2,8 +2,12 @@ package webpush
 
 import (
 	"encoding/json"
-	"fmt"
 )
+
+// Deprecated: switching to http.Request to represent message.
+// - no deps
+// - more compatible with 'webhook/pubsub-push/cncf' models
+// - simpler
 
 // Wrapper around 'pubsub' or event based systems.
 
@@ -95,10 +99,7 @@ func NewMessage(cmdS string, meta map[string]string) *Message {
 
 	ev.Id = meta["id"]
 	if ev.Id == "" {
-		mutex.Lock()
-		ev.Id = fmt.Sprintf("%d", id)
-		id++
-		mutex.Unlock()
+		ev.Id = nextId()
 	}
 
 	return ev

@@ -3,7 +3,7 @@ services:
   ugate-dbg:
     build:
       context: .
-      dockerfile: k8s/Dockerfile.dbg
+      dockerfile: manifests/Dockerfile.dbg
     working_dir: /src
     #command: CompileDaemon -build="echo 1" -command="dlv --listen=:40000 --headless=true --api-version=2 --accept-multiclient --wd /go debug ./cmd/ugate"
     # dlv --listen 0.0.0.0:40000 --log --headless --api-version=2 attach 1

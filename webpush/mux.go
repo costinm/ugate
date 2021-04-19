@@ -32,6 +32,11 @@ func (f HandlerCallbackFunc) HandleMessage(ctx context.Context, cmdS string, met
 	f(ctx, cmdS, meta, data)
 }
 
+var (
+	id    int
+	mutex sync.Mutex
+)
+
 // Mux handles processing messages for this node, and sending messages from
 // local code.
 type Mux struct {
@@ -43,7 +48,6 @@ type Mux struct {
 
 	// Handlers by path, for processing incoming messages to this node or local messages.
 	handlers     map[string]MessageHandler
-	handlerRoles map[string][]string
 
 	// Allows regular HTTP Handlers to process messages.
 	// A message is mapped to a request. Like CloudEvents, response from the
@@ -52,17 +56,12 @@ type Mux struct {
 
 	// Auth holds the private key and Id of this node. Used to encrypt and decrypt.
 	Auth *auth.Auth
-
-	OnMessageForNode []OnMessage
 }
-
-type OnMessage func(*Message)
 
 func NewMux() *Mux {
 	mux := &Mux{
 		connections:  map[string]*MsgConnection{},
 		handlers:     map[string]MessageHandler{},
-		handlerRoles: map[string][]string{},
 	}
 
 	return mux
@@ -70,21 +69,28 @@ func NewMux() *Mux {
 
 var DefaultMux = NewMux()
 
+func nextId() string {
+	mutex.Lock()
+	defer mutex.Unlock()
+	id++
+	return fmt.Sprintf("%d", id)
+}
+
+// Init a mux with a http.Mux
+// Normlly there is a single mux in a server - multiple mux
+// are used for testing.
 func InitMux(mux *Mux, hmux *http.ServeMux, auth *auth.Auth) {
 	mux.Auth = auth
-	hmux.HandleFunc("/push/", DefaultMux.HTTPHandlerWebpush)
-	hmux.HandleFunc("/subscribe", SubscribeHandler)
-	hmux.HandleFunc("/s/", HTTPHandlerSend)
+	hmux.HandleFunc("/push/", mux.HTTPHandlerWebpush)
+	hmux.HandleFunc("/subscribe", mux.SubscribeHandler)
+	hmux.HandleFunc("/s/", mux.HTTPHandlerSend)
 }
+
 
 // Send a message to the default mux. Will serialize the event and save it for debugging.
 //
 // Local handlers and debug tools/admin can subscribe.
-func Send(msgType string, meta ...string) {
-	DefaultMux.Send(msgType, nil, meta...)
-}
-
-//
+// Calls the internal SendMessage method.
 func (mux *Mux) Send(msgType string, data interface{}, meta ...string) error {
 	ev := &Message{
 		MessageData: MessageData {
@@ -99,27 +105,102 @@ func (mux *Mux) Send(msgType string, data interface{}, meta ...string) error {
 	return mux.SendMessage(ev)
 }
 
-var (
-	id    int
-	mutex sync.Mutex
-)
+// Send a message to the default mux. Will serialize the event and save it for debugging.
+//
+// Local handlers and debug tools/admin can subscribe.
+// Calls the internal SendMessage method.
+func (mux *Mux) SendMeta(msgType string, meta map[string]string, data interface{}) error {
+	ev := &Message{
+		MessageData: MessageData {
+			To: msgType,
+			Meta: meta,
+		},
+		Data: data,
+	}
+	return mux.SendMessage(ev)
+}
 
-// Publish a message. Will be distributed to remote listeners.
+// Publish a message. Will be distributed to local and remote listeners.
+//
 // TODO: routing for directed messages (to specific destination)
 // TODO: up/down indication for multicast, subscription
 func (mux *Mux) SendMessage(ev *Message) error {
 	_ = context.Background()
+
 	// Local handlers first
 	if ev.Id == "" {
-		mutex.Lock()
-		ev.Id = fmt.Sprintf("%d", id)
-		id++
-		mutex.Unlock()
+		ev.Id = nextId()
 	}
+
+	parts := strings.Split(ev.To, "/")
+
 	mux.HandleMessageForNode(ev)
 
-	return mux.SendMsg(ev)
+	switch parts[0] {
+		case ".":
+			return nil
+		case "*":
+
+  	default:
+  		 h := parts[0]
+			if h != "" {
+				ch := mux.connections[h]
+				if ch != nil {
+					ch.SendMessageToRemote(ev)
+				} else {
+					// TODO: return err or send to 'master'
+				}
+			}
+	}
+
+	if parts[0] == "." {
+		return nil
+	}
+	if len(parts) < 2 {
+		return nil
+	}
+
+	for k, ms := range mux.connections {
+		if k == ev.From { // Exclude the connection where this was received on.
+			continue
+		}
+		log.Println("/mux/SendFWD", ev.To, k)
+		ms.maybeSend(parts, ev, k)
+	}
+	// Send upstream
+	return nil
 }
+
+
+func (ms *MsgConnection) maybeSend(parts []string, ev *Message, k string) {
+	// TODO: check the path !
+	if parts[0] != "" {
+		// TODO: send if the peer ID matches, or if peer has sent a (signed) event message that the node
+		// is connected
+	}
+
+	if ms.SubscriptionsToSend == nil {
+		return
+	}
+	//if Debug {
+	//	log.Println("MSG: fwd to connection ", ev.To, k, ms.Name)
+	//}
+	topic := parts[1]
+	hasSub := false
+	for _, s := range ms.SubscriptionsToSend {
+		if topic == s || s == "*" {
+			hasSub = true
+			break
+		}
+	}
+	if !hasSub {
+		return
+	}
+
+	ms.SendMessageToRemote(ev)
+	log.Println("/mux/Remote", ev.To, ms.Name)
+}
+
 
 // Called for local events (host==. or empty).
 // Called when a message is received from one of the local streams ( UDS, etc ), if
@@ -127,15 +208,14 @@ func (mux *Mux) SendMessage(ev *Message) error {
 //
 // Message will be passed to one or more of the local handlers, based on type.
 //
-// TODO: authorization (based on identity of the caller)
 func (mux *Mux) HandleMessageForNode(ev *Message) error {
 	if ev.Time== 0 {
 		ev.Time = time.Now().Unix()
 	}
 
-	for _, cb := range mux.OnMessageForNode {
-		cb(ev)
-	}
+	//for _, cb := range mux.OnMessageForNode {
+	//	cb(ev)
+	//}
 
 	//log.Println("EV: ", ev.To, ev.From)
 	if ev.To == "" {
@@ -159,9 +239,6 @@ func (mux *Mux) HandleMessageForNode(ev *Message) error {
 	payload := ev.Binary()
 	log.Println("MSG: ", argv, ev.Meta, ev.From, ev.Data, len(payload))
 
-	if r := mux.handlerRoles[topic]; r != nil {
-		// Check From
-	}
 
 	if h, f := mux.handlers["*"]; f {
 		h.HandleMessage(context.Background(), ev.To, ev.Meta, payload)
@@ -226,49 +303,27 @@ func (r *rw) WriteHeader(statusCode int) {
 // Special topics: *, /open, /close
 func (mux *Mux) AddHandler(path string, cp MessageHandler) {
 	mux.mutex.Lock()
-	mux.handlers[path] = cp
-	mux.mutex.Unlock()
-}
-
-// Add a handler that checks the role
-func (mux *Mux) AddHandlerRole(path string, role ...string) {
-	mux.mutex.Lock()
-	mux.handlerRoles[path] = role
-	mux.mutex.Unlock()
-}
-
-type ChannelHandler struct {
-	MsgChan chan *Message
-}
-
-func NewChannelHandler() *ChannelHandler {
-	return &ChannelHandler{MsgChan: make(chan *Message, 100)}
-}
-
-func (u *ChannelHandler) HandleMessage(ctx context.Context, cmdS string, meta map[string]string, data []byte) {
-	log.Println("MSG: ", cmdS)
-	m := NewMessage(cmdS, meta).SetDataJSON(data)
-	//m.Connection = replyTo
-	u.MsgChan <- m
-}
-
-func (u *ChannelHandler) WaitEvent(name string) *Message {
-	tmax := time.After(8 * time.Second)
-
-	for {
-		select {
-		case <-tmax:
-			return nil
-		case e := <-u.MsgChan:
-			if e.To == name {
-				return e
-			}
-			if strings.HasPrefix(e.To, name) {
-				return e
-			}
-			log.Println("EVENT", e)
+	old := mux.handlers[path]
+	if old == nil {
+		mux.handlers[path] = cp
+	} else {
+		if os, ok := old.(handlerSlice); ok {
+			os = append(os, cp)
+			mux.handlers[path] = os
+		} else {
+			hs := []MessageHandler{old, cp}
+			mux.handlers[path] = handlerSlice(hs)
 		}
 	}
-
-	return nil
+	log.Println("AddHandler", path, mux.handlers[path])
+	mux.mutex.Unlock()
 }
+
+type handlerSlice []MessageHandler
+
+func (hs handlerSlice) HandleMessage(ctx context.Context, cmdS string, meta map[string]string, data []byte) {
+	for _,x := range hs {
+		x.HandleMessage(ctx, cmdS, meta, data)
+	}
+}
+

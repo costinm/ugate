@@ -135,11 +135,20 @@ func NewContextSend(uapub, auth []byte) *EncryptionContext {
 	}
 }
 
+// Deprecated, test only
 func NewContextUA(uapriv, uapub, auth []byte) *EncryptionContext {
 	return &EncryptionContext{
 		Auth:      auth,
 		UAPublic:  uapub,
 		UAPrivate: uapriv,
+	}
+}
+
+func (a *Auth) NewContextUA(auth []byte) *EncryptionContext {
+	return &EncryptionContext{
+		Auth:      auth,
+		UAPublic:  a.PublicKey,
+		UAPrivate: a.Priv,
 	}
 }
 

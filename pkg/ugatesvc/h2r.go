@@ -1,16 +1,22 @@
 package ugatesvc
 
 import (
-	"errors"
+	"context"
+	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"time"
 
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/pipe"
 	"golang.org/x/net/http2"
 )
 
+// Original prototype - dropped due to lack of forward connection.
+// Instead, h2r will be used to indicate the other end supports a modified
+// H2 stack that simply allows server to originate requests, like Quic and
+// WebRTC. For H2 we will us a POST to channel the reverse direction.
+//
 // H2R implements a transport using reverse HTTP/2, similar with 'ssh -R'.
 // In this mode the 'client' A create a connection to the server 'B'.
 // - If the ALPN negotiation result is 'h2r', B will initiate a HTTP/2 conn
@@ -26,151 +32,177 @@ import (
 // Authentication/Authorization are not included, a separate middleware or
 // policy is required to verify A is authorized to reverse forward [ID].
 //
-type H2R struct {
+// Original code:
+// end := make(chan int)
+//		str.ReadCloser = func() {
+//			end <- 1
+//		}
+//
+//		go func() {
+//			log.Println("H2R-Client: Reverse accept start ", str.RemoteAddr(), str.LocalAddr(), RemoteID(str))
+//			ug.H2Handler.h2Server.ServeConn(
+//				str,
+//				&http2.ServeConnOpts{
+//					Handler: ug.H2Handler, // Also plain text, needs to be upgraded
+//					Context: str.Context(),
+//
+//					//Context: // can be used to cancel, pass meta.
+//					// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
+//				})
+//			log.Println("H2R-Client: Reverse accept closed")
+//		}()
+//		go func() {
+//			<-end
+//			log.Println("H2R-Client: Read Context done")
+//		}()
 
+// Connect creates one connection to a mesh node, using one of the
+// supported multiplex protocols.
+func (ug *UGate) Connect(ctx context.Context, dm *ugate.DMNode, ev chan string) error {
+	// TODO: try all published addresses, including all protos
+	addr := dm.Addr
+	t := ug.H2Handler
+
+	str, err := ug.dialTLS(ctx, addr, []string{/*"h2r", */"h2"})
+	if err != nil {
+		log.Println("Failed to connect ", addr, err)
+		return err
+	}
+
+	// Callback when the stream is closed, notify end.
+	str.ReadCloser = func() {
+		log.Println("H2R-Upstream closed")
+	}
+
+
+	proto := str.TLS.NegotiatedProtocol
+	if proto == "h2r" {
+		// Future extension, no need for the reverse.
+	}
+	//
+
+	// Forward connection to the node.
+	cc, err := t.ug.H2Handler.h2t.NewClientConn(str)
+	if err != nil {
+		log.Println("Failed to initiate h2 conn")
+		return err
+	}
+
+	//go func() {
+	//	for {
+	//		time.Sleep(50 * time.Second)
+	//		r0, _ := http.NewRequest("GET", "http://localhost/_dm/id/UPSTREAM", nil)
+	//		_, err := cc.RoundTrip(r0)
+	//		if err != nil {
+	//			log.Println("H2R upstream ", err)
+	//			return
+	//		}
+	//		//err := cc.Ping(context.Background())
+	//		//if err != nil {
+	//		//	log.Println("Ping err")
+	//		//}
+	//	}
+	//
+	//}()
+
+	t.m.Lock()
+	t.Reverse[dm.ID] = str
+	t.m.Unlock()
+
+	// Set the mux, for future connections.
+	dm.Muxer = cc
+
+	// Initial message on the connection is to setup the reverse pipe.
+	// This in turn will call this node, to validate the connection.
+	p := pipe.New()
+	postR, _ := http.NewRequest("POST", "https://localhost/h2r/", p)
+	res, err := cc.RoundTrip(postR)
+	if err != nil {
+		return err
+	}
+
+	str = ugate.NewStreamRequestOut(postR, p, res, nil)
+
+	log.Println("H2R-Client: POST Reverse accept start ",
+		str.RemoteAddr(), str.LocalAddr(), RemoteID(str))
+
+	if ev != nil {
+		select {
+			case ev <- "":
+			default:
+		}
+	}
+
+	t.h2Server.ServeConn(
+		str,
+		&http2.ServeConnOpts{
+			Handler: t, // Also plain text, needs to be upgraded
+			Context: str.Context(),
+
+			//Context: // can be used to cancel, pass meta.
+			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
+		})
+	log.Println("H2R-Client: Reverse accept closed")
+	dm.Muxer = nil
+	return nil
 }
 
 // Reverse Accept dials a connection to addr, and registers a H2 SERVER
 // conn on it. The other end will register a H2 client, and create streams.
 // The client cert will be used to associate incoming streams, based on config or direct mapping.
 // TODO: break it in 2 for tests to know when accept is in effect.
-func (t *H2Transport) maintainRemoteAccept(host, key string) error {
-	if _, f := t.ug.Config.H2R[host]; !f {
-		return errors.New("not configured")
+func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string)  {
+	// maintain while the host is in the 'pinned' list
+	if _, f := t.ug.Config.H2R[dm.ID]; !f {
+		return
 	}
+
+	ctx := context.Background()
+	backoff := 3000 * time.Millisecond
 
 	//ctx := context.Background()
 	//ctx, ctxCancel = context.WithTimeout(ctx, 5*time.Second)
 
-	var addr string
-
-	// addr is a hostname
-	dm := t.ug.GetNode(host)
-	if dm != nil {
-		addr = dm.Addr
+	// Blocking
+	err := t.ug.Connect(ctx, dm, ev)
+	if err != nil {
+		if backoff < 15 * time.Minute {
+			backoff = 2 * backoff
+		}
 	} else {
-		if key == "" {
-			addr = net.JoinHostPort(host, "443")
-		} else {
-			addr = net.JoinHostPort(host, "15007")
-		}
+		backoff = 3000 * time.Millisecond
 	}
+	time.AfterFunc(backoff, func() {
+		t.maintainPinnedConnection(dm, ev)
+	})
 
-	str, err := t.ug.DialTLS(addr, []string{"h2r", "h2"})
-	if err != nil {
-		// TODO: backoff
-		log.Println("Failed to connect ", addr, err)
-		time.AfterFunc(10000*time.Millisecond, func() {
-			t.maintainRemoteAccept(host, key)
-		})
-		return err
-	}
-
-	p := str.TLS.NegotiatedProtocol
-	if p == "h2r" {
-		t.reverse[host] = str
-
-		end := make(chan int)
-		str.ReadCloser = func() {
-			end <- 1
-		}
-
-		go func() {
-			log.Println("H2R-Client: Reverse accept start ", str.RemoteAddr(), str.LocalAddr(), RemoteID(str))
-			t.h2Server.ServeConn(
-				str,
-				&http2.ServeConnOpts{
-					Handler: t, // Also plain text, needs to be upgraded
-					Context: str.Context(),
-
-					//Context: // can be used to cancel, pass meta.
-					// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
-				})
-			log.Println("H2R-Client: Reverse accept closed")
-			time.AfterFunc(500*time.Millisecond, func() {
-				t.maintainRemoteAccept(host, key)
-			})
-		}()
-		go func() {
-			<-end
-			log.Println("H2R-Client: Read Context done")
-		}()
-
-		// TODO: Wait for a 'hello' message
-	} else if p == "h2" {
-
-	}
-
-	// TODO: H2, WS
-
-	return nil
+	// p := str.TLS.NegotiatedProtocol
+	//if p == "h2r" {
+	//	// Old code used the 'raw' TLS connection to create a  server connection
+	//	t.h2Server.ServeConn(
+	//		str,
+	//		&http2.ServeConnOpts{
+	//			Handler: t, // Also plain text, needs to be upgraded
+	//			Context: str.Context(),
+	//
+	//			//Context: // can be used to cancel, pass meta.
+	//			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
+	//		})
+	//}
 }
 
-// TODO: implement H2 ClientConnPool
-
-// Get a H2 client connection for connecting to a mesh host.
+// HandleH2R takes a stream ( handshaked over TLS or in a POST/CONNECT),
+// and uses it to create a H2 RoundTripper, i.e. a client connection.
+// Typically str is associated with the /h2r/ URL
 //
-func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.ClientConn, error) {
-	// The h2 Transport has support for dialing TLS, with the std handshake.
-	// It is possible to replace Transport.DialTLS, used in clientConnPool
-	// which tracks active connections. Or specify a custom conn pool.
-
-	// addr is either based on req.Host or the resolved IP, in which case Host must be used for TLS verification.
-
-	nid := t.ug.Auth.Host2ID(addr)
-	dmn := t.ug.GetNode(nid)
-	if dmn != nil {
-		rt := dmn.H2r
-		if rt != nil {
-			if rtc, ok := rt.(*http2.ClientConn); ok {
-				return rtc, nil
-			}
-		}
-	}
-
-	// TODO: reuse connection or use egress server
-	// TODO: track it by addr
-	tc, err := t.ug.DialTLS(addr, []string{"h2"})
-	if err != nil {
-		return nil, err
-	}
-
-	cc, err := t.ug.H2Handler.h2t.NewClientConn(tc)
-
-	return cc, err
-}
-
-func (t *H2Transport) MarkDead(h2c *http2.ClientConn) {
-	log.Println("Dead", h2c)
-}
-
-// HTTP round-trip using the mesh connections. Will use H2 and the mesh
-// auth protocol, on the BTS port.
-func (t *H2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	cc, err := t.GetClientConn(req, req.Host)
-	if err != nil {
-		return nil, err
-	}
-	return cc.RoundTrip(req)
-}
-
-// WIP: can be registered using handlers-by-ALPN
-// May not be needed if H2R works well.
-//func (t *H2Transport) HandleSPDY(c MetaConn) error {
-//	sc, err := h2raw.NewSPDY(c, true)
-//	if err != nil {
-//		return err
-//	}
-//	sc.serve()
-//	return nil
-//}
-
-// Handle a raw reverse H2 connection, negotiated at TLS handshake level.
-// The connection was accepted, but we act as client.
+// The connection was accepted/received, but we act as client.
+// Blocks until str.Close().
 func (t *H2Transport) HandleH2R(str *ugate.Stream) error {
 	// This is the H2 in reverse - start a TLS client conn, and keep  track of it
 	// for forwarding to the dest.
 	end := make(chan int)
+
+	// Callback when the stream is closed, notify end.
 	str.ReadCloser = func() {
 		end <- 1
 	}
@@ -180,20 +212,48 @@ func (t *H2Transport) HandleH2R(str *ugate.Stream) error {
 		return err
 	}
 
-	k := RemoteID(str)
+	k := RemoteID(str) // mesh ID based on client cert.
+
 	n := t.ug.GetOrAddNode(k)
-	n.H2r = cc
-	t.H2R[k] = cc
+
+	log.Println("Setting H2R on ", n.ID(), "for", t.ug.Auth.VIP6)
+	n.Muxer = cc
 
 	ra := str.RemoteAddr()
 	// TODO: remember the IP, use it for the node ? Explicit registration may be better.
 
-	log.Println("Accepted reverse conn ", ra, k)
+	// TODO: use new URL
+	r0, _ := http.NewRequest("GET", "http://localhost/_dm/id/U/" + t.ug.Auth.ID, nil)
+	res0, err := cc.RoundTrip(r0)
+	if err != nil {
+		log.Println("Reverse accept id ", err, ra, k)
+		return err
+	}
+	upData, _ := ioutil.ReadAll(res0.Body)
+	res0.Body.Close()
+	log.Println("H2R-UP start ", k, ra, t.ug.Auth.ID, " -> ", string(upData))
+
+	//go func() {
+	//	for {
+	//		time.Sleep(20 * time.Second)
+	//		r0, _ := http.NewRequest("GET", "http://localhost/_dm/id/H2RS", nil)
+	//		_, err := cc.RoundTrip(r0)
+	//		if err != nil {
+	//			log.Println("Reverse accept id ", err, ra, k)
+	//			return
+	//		}
+	//		//err := cc.Ping(context.Background())
+	//		//if err != nil {
+	//		//	log.Println("Ping err")
+	//		//}
+	//	}
+	//
+	//}()
+
 	// Wait until t.MarkDead is called - or the con is closed
 	<-end
-	log.Println("H2R done", k)
-	delete(t.H2R, k)
-	n.H2r = nil
+	log.Println("H2R-UP end", k, ra, t.ug.Auth.ID)
+
+	n.Muxer = nil
 	return nil
 }
-

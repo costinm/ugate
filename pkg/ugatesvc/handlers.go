@@ -3,12 +3,9 @@ package ugatesvc
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/costinm/ugate"
@@ -33,32 +30,12 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	eh.handle(str, false)
 }
 
-type StreamInfo struct {
-	LocalAddr  net.Addr
-	RemoteAddr net.Addr
-	Meta       http.Header
-
-	RemoteID string
-	ALPN     string
-
-	Dest string
-	Type string
-}
 
 func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	d := make([]byte, 2048)
-
-	si := &StreamInfo{
-		LocalAddr:  str.LocalAddr(),
-		RemoteAddr: str.RemoteAddr(),
-		Meta:       str.HTTPRequest().Header,
-		RemoteID:   RemoteID(str),
-		Dest:       str.Dest,
-		Type:       str.Type,
-	}
-	if str.TLS != nil {
-		si.ALPN = str.TLS.NegotiatedProtocol
-	}
+	select {}
+	si := str.StreamInfo()
+	si.RemoteID=   RemoteID(str)
 	b1, _ := json.Marshal(si)
 	b := &bytes.Buffer{}
 	b.Write(b1)
@@ -89,98 +66,85 @@ func (eh *EchoHandler) Handle(ac ugate.MetaConn) error {
 	return eh.handle(ac.Meta(), false)
 }
 
-// WIP: Adapter to HTTP handlers
-// Requests are mapped using IPFS-style, using metadata if available.
-type HTTPHandler struct {
-}
-
-func (*HTTPHandler) Handle(ac ugate.MetaConn) error {
-	//u, _ := url.Parse("https://localhost/")
-	r := ac.Meta().HTTPRequest()
-	w := ac.(http.ResponseWriter)
-	http.DefaultServeMux.ServeHTTP(w, r)
-	return nil
-}
-
-func (h2p *H2P) InitPush(mux http.ServeMux) {
-	mux.Handle("/push/*", h2p)
-}
-
-type H2P struct {
-	// Key is peer ID.
-	// TODO: multiple monitors per peer ?
-	mons map[string]*Pusher
-
-	// Active pushed connections.
-	// Key is peerID / stream ID
-	active map[string]*net.Conn
-}
-
-// Single Pusher - one for each monitor
-type Pusher struct {
-	ch chan string
-}
-
-func NewPusher() *Pusher {
-	return &Pusher{
-		ch: make(chan string, 10),
-	}
-}
-
-func (h2p *H2P) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if strings.HasPrefix(req.URL.Path, "/push/mon/") {
-		h2p.HTTPHandlerPushPromise(w, req)
-		return
-	}
-	if strings.HasPrefix(req.URL.Path, "/push/up/") {
-		h2p.HTTPHandlerPost(w, req)
-		return
-	}
-
-	h2p.HTTPHandlerPush(w, req)
-}
-
-// Should be mapped to /push/*
-// If Method is GET ( standard stack ), only send the content of the con, expect
-// a separate connection for the POST side.
-func (h2p *H2P) HTTPHandlerPush(w http.ResponseWriter, req *http.Request) {
-	w.WriteHeader(200)
-	w.Write([]byte{1})
-	io.Copy(w, req.Body)
-}
-
-func (h2p *H2P) HTTPHandlerPost(w http.ResponseWriter, req *http.Request) {
-	w.WriteHeader(200)
-	w.Write([]byte{1})
-	io.Copy(w, req.Body)
-}
-
-// Hanging - will send push frames, corresponding HTTPHandlerPush will be called to service
-// the stream. When used with the 'standard' h2 stack only GET is supported.
-func (h2p *H2P) HTTPHandlerPushPromise(w http.ResponseWriter, req *http.Request) {
-	w.WriteHeader(200)
-
-	p := NewPusher()
-
-	ctx := req.Context()
-	for {
-		select {
-		case ev := <-p.ch:
-			opt := &http.PushOptions{
-				Header: http.Header{
-					"User-Agent": {"foo"},
-				},
-			}
-			// This will result in a separate handler to get the message
-			if err := w.(http.Pusher).Push("/push/"+ev, opt); err != nil {
-				fmt.Println("error pushing", err)
-				return
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
-}
+//func (h2p *H2P) InitPush(mux http.ServeMux) {
+//	mux.Handle("/push/*", h2p)
+//}
+//
+//type H2P struct {
+//	// Key is peer ID.
+//	// TODO: multiple monitors per peer ?
+//	mons map[string]*Pusher
+//
+//	// Active pushed connections.
+//	// Key is peerID / stream ID
+//	active map[string]*net.Conn
+//}
+//
+//// Single Pusher - one for each monitor
+//type Pusher struct {
+//	ch chan string
+//}
+//
+//func NewPusher() *Pusher {
+//	return &Pusher{
+//		ch: make(chan string, 10),
+//	}
+//}
+//
+//func (h2p *H2P) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+//	if strings.HasPrefix(req.URL.Path, "/push/mon/") {
+//		h2p.HTTPHandlerPushPromise(w, req)
+//		return
+//	}
+//	if strings.HasPrefix(req.URL.Path, "/push/up/") {
+//		h2p.HTTPHandlerPost(w, req)
+//		return
+//	}
+//
+//	h2p.HTTPHandlerPush(w, req)
+//}
+//
+//// Should be mapped to /push/*
+//// If Method is GET ( standard stack ), only send the content of the con, expect
+//// a separate connection for the POST side.
+//func (h2p *H2P) HTTPHandlerPush(w http.ResponseWriter, req *http.Request) {
+//	w.WriteHeader(200)
+//	w.Write([]byte{1})
+//	io.Copy(w, req.Body)
+//}
+//
+//func (h2p *H2P) HTTPHandlerPost(w http.ResponseWriter, req *http.Request) {
+//	w.WriteHeader(200)
+//	w.Write([]byte{1})
+//	io.Copy(w, req.Body)
+//}
+//
+//// Hanging - will send push frames, corresponding HTTPHandlerPush will be called to service
+//// the stream. When used with the 'standard' h2 stack only GET is supported.
+//func (h2p *H2P) HTTPHandlerPushPromise(w http.ResponseWriter, req *http.Request) {
+//	w.WriteHeader(200)
+//
+//	p := NewPusher()
+//
+//	ctx := req.Context()
+//	for {
+//		select {
+//		case ev := <-p.ch:
+//			opt := &http.PushOptions{
+//				Header: http.Header{
+//					"User-Agent": {"foo"},
+//				},
+//			}
+//			// This will result in a separate handler to get the message
+//			if err := w.(http.Pusher).Push("/push/"+ev, opt); err != nil {
+//				fmt.Println("error pushing", err)
+//				return
+//			}
+//		case <-ctx.Done():
+//			return
+//		}
+//	}
+//}
 
 // Debug handlers - on default mux, on 15000
 
@@ -229,10 +193,10 @@ func (gw *UGate) HttpH2R(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(gw.ActiveTcp)
 }
 
-// WIP: Istio-style signing
-func (gw *UGate) SignCert(w http.ResponseWriter, r *http.Request) {
-	// TODO: json and raw proto
-	// use a list of 'authorized' OIDC and roots ( starting with loaded istio and k8s pub )
-	// get the csr and sign
-}
-
+//// WIP: Istio-style signing
+//func (gw *UGate) SignCert(w http.ResponseWriter, r *http.Request) {
+//	// TODO: json and raw proto
+//	// use a list of 'authorized' OIDC and roots ( starting with loaded istio and k8s pub )
+//	// get the csr and sign
+//}
+//

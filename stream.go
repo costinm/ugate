@@ -30,7 +30,8 @@ import (
 //
 // Metrics are maintained.
 //
-// Implements net.Conn
+// Implements net.Conn - but does not implement ConnectionState(), so the
+// stream can be used with H2 library.
 type Stream struct {
 
 	// Counter
@@ -38,8 +39,10 @@ type Stream struct {
 	StreamId int
 
 	// In - data from remote.
+	// Can be a TCP or TLS net.Conn, a http request or response Body, or
+	// some other ReadCloser.
 	//
-	// Closing without fully reading will result in RST.
+	// Closing without fully reading may result in RST.
 	In io.ReadCloser `json:"-"`
 
 	// Out - send to remote.
@@ -47,16 +50,21 @@ type Stream struct {
 	// Normally an instance of net.Conn or tls.Conn - both implementing CloseWrite and Close
 	//
 	// Not WriterCloser because it can be an http.ResponseWriter, which implements
-	// CloseWrite instead, but not Close.
+	// CloseWrite instead, but not Close. This is used in 'incoming HTTP' cases, using
+	// normal H2 API.
 	//
 	// Normal close sequence is to call CloseWrite on Out, and after reading the full In to call
 	// Close on In.
 	//
 	// Out may be nil, if the remote side is read only ( GET ) or if the creation of the
-	// stream passed a Reader object which is automatically piped to the Out.
+	// stream passed a Reader object which is automatically piped to the Out, for example
+	// when a HTTP request is used.
 	Out io.Writer `json:"-"`
 
-	// Associated virtual http request.
+	// Request associated with the stream. Will be set if the stream is
+	// received over H2/H3 (real or over another virtual connection),
+	// or if the stream is originated locally and sent to a H2/H3 dest.
+	// Headers will be passed to any proxied egress, according to http rules.
 	Request *http.Request `json:"-"`
 
 	// Set if the connection finished a TLS handshake.
@@ -65,7 +73,15 @@ type Stream struct {
 
 	// Metadata to send on response. Stream implements http.ResponseWriter.
 	// For streams without metadata - will be ignored.
-	ResponseHeader http.Header
+	// Incoming metadata is set in Request.
+	ResponseHeader http.Header `json:"-"`
+
+	// Remote mesh ID, if authenticated. Base32(SHA256(CERT))
+	// This can be used in DNS names, URLs, etc.
+	RemoteID string
+
+	// Remote VIP, last 8 bytes of the SHA256(Cert).
+	RemoteVIP net.IP
 
 	// Original dest - hostname or IP, including port. Parameter of the original Dial from the captured egress stream.
 	// May be a mesh IP6, host, etc. If original address was captured by IP, destIP will also be set.
@@ -81,10 +97,14 @@ type Stream struct {
 	DestAddr *net.TCPAddr
 
 	// Hostname of the destination, based on DNS cache and interception.
-	// Used as a key in the 'per host' stats.
+	// Used as a key in the 'per host' stats - port not included.
+	// Empty if the dest was an IP and DNS interception can't resolve it.
+	// Not accurate if DNS interception populated it.
+	// TODO: remove or separate the dns-interception based usage.
 	DestDNS string
 
-	// Set to the localAddr from the connection, for HTTP requests only
+	// Set to the localAddr from the real connection, for http only
+	//
 	localAddr net.Addr
 
 	// Client type - original capture and all transport hops.
@@ -129,7 +149,10 @@ type Stream struct {
 	ReadErr  error `json:"-"`
 	WriteErr error `json:"-"`
 
+	// Context and cancel funciton for this stream.
 	ctx       context.Context `json:"-"`
+
+	// Close will invoke this method if set, and cancel the context.
 	ctxCancel context.CancelFunc `json:"-"`
 
 	// Set for accepted connections, with the config associated with the listener.
@@ -142,6 +165,13 @@ type Stream struct {
 	// True if the Stream is originated from local machine, i.e.
 	// SOCKS/iptables/TUN capture or dialed from local process
 	Egress bool
+
+	// If the stream is multiplexed, this is the Mux.
+	Parent *Stream `json:"-"`
+
+	// If this stream is a 'mux connection', this is the Muxer interface.
+	// Streams to the same node will use this stream.
+	Muxer Muxer `json:"-"`
 
 	// ---------------------------------------------------------
 
@@ -185,7 +215,7 @@ func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *
 	return &Stream{
 		StreamId: int(atomic.AddUint32(&StreamId, 1)),
 		Open:     time.Now(),
-
+		ResponseHeader:  w.Header,
 		Request: r,
 		In:      w.Body, // Input from remote http
 		Out:     out, //
@@ -227,19 +257,28 @@ func (s *Stream) HTTPResponse() http.ResponseWriter {
 
 const ContextKey = "ugate.stream"
 
-// Used by H2 server to populate TLS in accepted requests.
-// For 'fake' TLS (raw HTTP) it must be populated.
-func (s *Stream) ConnectionState() tls.ConnectionState {
-	if s.TLS == nil {
-		return tls.ConnectionState{Version: tls.VersionTLS12}
-	}
-	return *s.TLS
-}
+// DO NOT IMPLEMENT: H2 will use the ConnectionStater interface to
+// detect TLS, and do checks. Would break plain text streams.
+// Also auth is more flexibile then mTLS.
+//// Used by H2 server to populate TLS in accepted requests.
+//// For 'fake' TLS (raw HTTP) it must be populated.
+//func (s *Stream) ConnectionState() tls.ConnectionState {
+//	if s.TLS == nil {
+//		return tls.ConnectionState{Version: tls.VersionTLS12}
+//	}
+//	return *s.TLS
+//}
 
+// Context of the stream. It has a value 'ugate.stream' that
+// points back to the stream, so it can be passed in various
+// methods that only take context.
+//
+// This is NOT associated with the context of the original H2 request,
+// there is a lot of complexity and strange behaviors in the stack.
 func (s *Stream) Context() context.Context {
-	if s.Request != nil {
-		return s.Request.Context()
-	}
+	//if s.Request != nil {
+	//	return s.Request.Context()
+	//}
 	if s.ctx == nil {
 		s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 		s.ctx = context.WithValue(s.ctx, ContextKey, s)
@@ -302,6 +341,10 @@ func (s *Stream) Close() error {
 	if s.ctxCancel != nil {
 		s.ctxCancel()
 	}
+	rw := s.HTTPResponse()
+	if rw != nil {
+		rw.Header().Set("X-Close", "1")
+	}
 	if c, ok := s.Out.(io.Closer); ok {
 		return c.Close()
 	} else {
@@ -323,7 +366,12 @@ func (s *Stream) CloseWrite() error {
 			log.Println("ServerOut is not CloseWriter - closing full connection")
 			return c.Close()
 		} else {
-			log.Println("Server out not Closer nor CloseWriter")
+			rw := s.HTTPResponse()
+			if rw != nil {
+				rw.Header().Set("X-Close", "0")
+			} else {
+				log.Println("Server out not Closer nor CloseWriter")
+			}
 		}
 	}
 	return nil
@@ -475,7 +523,7 @@ func (s *Stream) RemoteAddr() net.Addr {
 
 	// Only for dialed connections - first 2 cases should happen most of the
 	// time for accepted connections.
-	log.Println("RemoteAddr fallback", s)
+	//log.Println("RemoteAddr fallback", s)
 	if s.DestAddr != nil {
 		return s.DestAddr
 	}
@@ -562,6 +610,7 @@ func (s *Stream) ProxyTo(nc net.Conn) error {
 	go s.proxyFromClient(nc, errCh)
 	// Blocking, returns when all data is read from In, or error
 	err1 := s.proxyToClient(nc, errCh)
+	log.Println("proxyToClient finish ", err1)
 
 	// Wait for data to be read from nc and sent to Out, or error
 	remoteErr := <-errCh
@@ -653,6 +702,9 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 		// May return err but still have few bytes
 		if sErr != nil {
 			s.ReadErr = sErr
+			if strings.HasPrefix(s.Request.RequestURI, "/dm/") {
+				log.Println("proxyToClient from H2 err", sErr)
+			}
 			return n, sErr
 		}
 	}
@@ -661,7 +713,7 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 // proxyFromClient writes to the net.Conn. Should be in a go routine.
 func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error) {
 	_, err := s.ReadFrom(cin)
-
+	log.Println("proxyFromClient finish ", err)
 	// At this point cin either returned an EOF (FIN), or error (RST from remote, or error writing)
 	if s.ProxyReadErr != nil || s.WriteErr != nil {
 		// May send RST
@@ -685,4 +737,35 @@ func (na nameAddress) Network() string {
 }
 func (na nameAddress) String() string {
 	return string(na)
+}
+
+// StreamInfo tracks informations about one stream.
+type StreamInfo struct {
+	LocalAddr  net.Addr
+	RemoteAddr net.Addr
+
+	Meta       http.Header
+
+	RemoteID string
+
+	ALPN     string
+
+	Dest string
+
+	Type string
+}
+
+func (str *Stream) StreamInfo() *StreamInfo {
+	si := &StreamInfo{
+		LocalAddr:  str.LocalAddr(),
+		RemoteAddr: str.RemoteAddr(),
+		Meta:       str.HTTPRequest().Header,
+		Dest:       str.Dest,
+		Type:       str.Type,
+	}
+	if str.TLS != nil {
+		si.ALPN = str.TLS.NegotiatedProtocol
+	}
+
+	return si
 }

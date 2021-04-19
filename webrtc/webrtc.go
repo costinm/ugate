@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/pion/sctp"
 	"github.com/pion/webrtc/v3"
@@ -42,7 +43,6 @@ func (rtc *RTC) RTCDirectHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("IN: ", string(off))
 	ans, err := DialWebRTC(&offer)
 
-
 	if err != nil {
 		log.Println(err)
 		w.WriteHeader(501)
@@ -57,6 +57,7 @@ func (rtc *RTC) RTCDirectHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(ansb)
 }
 
+//
 func DialWebRTC(inOffer *webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
@@ -159,13 +160,19 @@ func DialWebRTC(inOffer *webrtc.SessionDescription) (*webrtc.SessionDescription,
 
 // Create a 'server' peer connection, return the address descriptor.
 // - uses pion/ice.Agent
-// - DTLS cert fingerprint (SHA-256), self-generated
+// - DTLS cert fingerprint (SHA-256)
 // - session descriptor:
 //
 // TODO:
 // - session.URI
 //
-func InitWebRTCS() (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
+func InitWebRTCS(ug *ugatesvc.UGate, auth *auth.Auth) (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
+	rtcg := &RTC{
+		UGate: ug,
+	}
+
+	ug.Mux.HandleFunc("/wrtc/direct/", rtcg.RTCDirectHandler)
+
 	/* Example:
 	sessid, sessversion, sha,
 
@@ -201,6 +208,10 @@ func InitWebRTCS() (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
 	if err != nil {
 		return nil, nil,  err
 	}
+
+	ug.Mux.HandleFunc("/.dm/webrtc/local", func(w http.ResponseWriter, request *http.Request) {
+		w.Write([]byte(peerConnection.LocalDescription().SDP))
+	})
 
 	// Set the handler for ICE connection state
 	// This will notify you when the peer has connected/disconnected
@@ -250,6 +261,9 @@ func InitWebRTCS() (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
 
 
 	offer, err := peerConnection.CreateOffer(nil)
+	ug.Mux.HandleFunc("/.dm/webrtc/offer", func(w http.ResponseWriter, request *http.Request) {
+		w.Write([]byte(offer.SDP))
+	})
 
 	// Sets the LocalDescription, and starts our UDP listeners
 	if err = peerConnection.SetLocalDescription(offer); err != nil {
@@ -264,10 +278,7 @@ func InitWebRTCS() (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
 	// in a production application you should exchange ICE Candidates via OnICECandidate
 	<-gatherComplete
 
-	log.Println(peerConnection.LocalDescription())
-
-	log.Println(offer)
-
+	log.Println("Offer gather complete")
 	return peerConnection, &offer, nil
 }
 

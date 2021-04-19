@@ -1,17 +1,13 @@
 package webpush
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
-	"fmt"
 	"log"
 	"net"
-	"strings"
-	"time"
-
-	"github.com/costinm/ugate/pkg/auth"
 )
+
+// Deprecated: old style and experimental connections and delivery.
 
 // One connection - incoming or outgoing. Can send messages to the remote end, which may
 // in turn forward messages for other nodes.
@@ -67,17 +63,6 @@ func (mux *Mux) AddConnection(id string, cp *MsgConnection) {
 	log.Println("/mux/AddConnection", id, cp.VIP, cp.SubscriptionsToSend)
 }
 
-func (cp *MsgConnection) send(message *Message) {
-	if cp.SendMessageToRemote != nil {
-		cp.SendMessageToRemote(message)
-	}
-	if cp.Conn != nil {
-		ba := message.MarshalJSON()
-		cp.Conn.Write(ba)
-		cp.Conn.Write([]byte{'\n'})
-	}
-}
-
 func (mux *Mux) RemoveConnection(id string, cp *MsgConnection) {
 	mux.mutex.Lock()
 	delete(mux.connections, id)
@@ -93,212 +78,155 @@ func (mc *MsgConnection) Close() {
 	mc.gate.RemoveConnection(mc.Name, mc)
 }
 
-func (mux *Mux) Id() string {
-	mutex.Lock()
-	defer mutex.Unlock()
-	id++
-	return fmt.Sprintf("%d", id)
-}
 
-// Message from a remote, will be forwarded to subscribed connections.
-func (mux *Mux) OnRemoteMessage(ev *Message, connName string) error {
-	// Local handlers first
-	if ev.Time == 0 {
-		ev.Time = time.Now().Unix()
-	}
-	if ev.Id == "" {
-		ev.Id = mux.Id()
-	}
-	parts := strings.Split(ev.To, "/")
-
-	if len(parts) < 2 {
-		return nil
-	}
-
-	to := parts[0]
-	if to == mux.Auth.Self() || to == "" {
-		mux.HandleMessageForNode(ev)
-		log.Println("/mux/OnRemoteMessageLocal", ev.To)
-		return nil
-	}
-
-	ev.Path = append(ev.Path, mux.Auth.VIP6.String())
-	for k, ms := range mux.connections {
-		if k == ev.From || k == connName {
-			continue
-		}
-		for _, a := range ev.Path {
-			if a == ms.VIP {
-				log.Println("/mux/OnRemoteMessageFWD - LOOP ", ev.To, ms.VIP, ms.Name)
-				continue
-			}
-		}
-		ms.maybeSend(parts, ev, k)
-		log.Println("/mux/OnRemoteMessageFWD", parts[0], ev.To, ms.VIP, ms.Name)
-	}
-	return nil
-}
-
-// Send a message to one or more connections.
-func (mux *Mux) SendMsg(ev *Message) error {
-	parts := strings.Split(ev.To, "/")
-
-	if parts[0] == "." {
-		return nil
-	}
-	if len(parts) < 2 {
-		return nil
-	}
-
-	for k, ms := range mux.connections {
-		if k == ev.From { // Exclude the connection where this was received on.
-			continue
-		}
-		log.Println("/mux/SendFWD", ev.To, k)
-		ms.maybeSend(parts, ev, k)
-	}
-	return nil
-
-}
-
-func (ms *MsgConnection) maybeSend(parts []string, ev *Message, k string) {
-	// TODO: check the path !
-	if parts[0] != "" {
-		// TODO: send if the peer ID matches, or if peer has sent a (signed) event message that the node
-		// is connected
-	}
-
-	if ms.SubscriptionsToSend == nil {
-		return
-	}
-	//if Debug {
-	//	log.Println("MSG: fwd to connection ", ev.To, k, ms.Name)
-	//}
-	topic := parts[1]
-	hasSub := false
-	for _, s := range ms.SubscriptionsToSend {
-		if topic == s || s == "*" {
-			hasSub = true
-			break
-		}
-	}
-	if !hasSub {
-		return
-	}
-
-	ms.SendMessageToRemote(ev)
-	log.Println("/mux/Remote", ev.To, ms.Name)
-}
-
-// ProcessMessage parses an incoming message, from a remote connection.
-// Message is further processed using one of the methods.
-func (mux *Mux) ProcessMessage(line []byte, ctx *auth.ReqContext) *Message {
-	if len(line) == 0 {
-		return nil
-	}
-	var ev *Message
-	var from string
-	if ctx != nil {
-		from = ctx.ID()
-	}
-
-	if line[0] == '{' {
-		ev = ParseJSON(line)
-
-		ev.From = from
-
-		parts := strings.Split(ev.To, "/")
-		if len(parts) < 2 {
-			log.Println("Invalid To", parts)
-			return nil
-		}
-		top := parts[1]
-		ev.Topic = top
-
-		ev.Path = append(ev.Path, from)
-	} else {
-		parts := strings.Split(string(line), " ")
-		meta := map[string]string{}
-		if len(parts) > 1 {
-			for _, kv := range parts[1:] {
-				kvp := strings.SplitN(kv, "=", 2)
-				if len(kvp) == 2 {
-					meta[kvp[0]] = kvp[1]
-				} else {
-					meta[kvp[0]] = ""
-				}
-			}
-		}
-		ev = NewMessage(parts[0], meta)
-	}
-
-	return ev
-}
-
-// Messages received from remote.
+//// ProcessMessage parses an incoming message, from a remote connection.
+//// Message is further processed using one of the methods.
+//func (mux *Mux) ProcessMessage(line []byte, ctx *auth.ReqContext) *Message {
+//	if len(line) == 0 {
+//		return nil
+//	}
+//	var ev *Message
+//	var from string
+//	if ctx != nil {
+//		from = ctx.ID()
+//	}
 //
-// from is the authenticated VIP of the sender.
-// self is my own VIP
+//	if line[0] == '{' {
+//		ev = ParseJSON(line)
 //
-func (mconn *MsgConnection) HandleMessageStream(cb func(message *Message), br *bufio.Reader, from string) {
-	for {
-		line, _, err := br.ReadLine()
-		if err != nil {
-			log.Println("Error reading stream ", mconn.VIP, err)
-			break
-		}
-		//if role == ROLE_GUEST {
-		//	continue
-		//}
-		if len(line) > 0 && line[0] == '{' {
-			ev := ParseJSON(line)
+//		ev.From = from
+//
+//		parts := strings.Split(ev.To, "/")
+//		if len(parts) < 2 {
+//			log.Println("Invalid To", parts)
+//			return nil
+//		}
+//		top := parts[1]
+//		ev.Topic = top
+//
+//		ev.Path = append(ev.Path, from)
+//	} else {
+//		parts := strings.Split(string(line), " ")
+//		meta := map[string]string{}
+//		if len(parts) > 1 {
+//			for _, kv := range parts[1:] {
+//				kvp := strings.SplitN(kv, "=", 2)
+//				if len(kvp) == 2 {
+//					meta[kvp[0]] = kvp[1]
+//				} else {
+//					meta[kvp[0]] = ""
+//				}
+//			}
+//		}
+//		ev = NewMessage(parts[0], meta)
+//	}
+//
+//	return ev
+//}
 
-			// TODO: if a JWT is present and encrypted or signed binary - use the original from.
-
-			if ev.Time == 0 {
-				ev.Time = time.Now().Unix()
-			}
-			if ev.From == "" {
-				ev.From = from
-			}
-
-			parts := strings.Split(ev.To, "/")
-			if len(parts) < 2 {
-				log.Println("Invalid To", parts)
-				continue
-			}
-			top := parts[1]
-			ev.Topic = top
-			if top == "sub" {
-				mconn.SubscriptionsToSend = append(mconn.SubscriptionsToSend, parts[2])
-				continue
-			}
-
-			// TODO: forwarded 'endpoint' messages, for children and peers
-
-			loop := false
-			for _, s := range ev.Path {
-				if s == mconn.gate.Auth.Self() {
-					loop = true
-					break
-				}
-				if s == ev.From {
-					loop = true
-					break
-				}
-			}
-			if loop {
-				continue
-			}
-			ev.Path = append(ev.Path, ev.From)
-			ev.Connection = mconn
-
-			// For each message
-			if cb != nil {
-				cb(ev)
-			}
-			mconn.gate.OnRemoteMessage(ev, mconn.Name)
-		}
-	}
-
-}
+//// Messages received from remote.
+////
+//// from is the authenticated VIP of the sender.
+//// self is my own VIP
+////
+//func (mconn *MsgConnection) HandleMessageStream(cb func(message *Message), br *bufio.Reader, from string) {
+//	for {
+//		line, _, err := br.ReadLine()
+//		if err != nil {
+//			log.Println("Error reading stream ", mconn.VIP, err)
+//			break
+//		}
+//		//if role == ROLE_GUEST {
+//		//	continue
+//		//}
+//		if len(line) > 0 && line[0] == '{' {
+//			ev := ParseJSON(line)
+//
+//			// TODO: if a JWT is present and encrypted or signed binary - use the original from.
+//
+//			if ev.Time == 0 {
+//				ev.Time = time.Now().Unix()
+//			}
+//			if ev.From == "" {
+//				ev.From = from
+//			}
+//
+//			parts := strings.Split(ev.To, "/")
+//			if len(parts) < 2 {
+//				log.Println("Invalid To", parts)
+//				continue
+//			}
+//			top := parts[1]
+//			ev.Topic = top
+//			if top == "sub" {
+//				mconn.SubscriptionsToSend = append(mconn.SubscriptionsToSend, parts[2])
+//				continue
+//			}
+//
+//			// TODO: forwarded 'endpoint' messages, for children and peers
+//
+//			loop := false
+//			for _, s := range ev.Path {
+//				if s == mconn.gate.Auth.Self() {
+//					loop = true
+//					break
+//				}
+//				if s == ev.From {
+//					loop = true
+//					break
+//				}
+//			}
+//			if loop {
+//				continue
+//			}
+//			ev.Path = append(ev.Path, ev.From)
+//			ev.Connection = mconn
+//
+//			// For each message
+//			if cb != nil {
+//				cb(ev)
+//			}
+//			mconn.gate.onRemoteMessage(ev, mconn.Name)
+//		}
+//	}
+//
+//}
+//
+//// Message from a remote, will be forwarded to subscribed connections.
+//func (mux *Mux) onRemoteMessage(ev *Message, connName string) error {
+//	// Local handlers first
+//	if ev.Time == 0 {
+//		ev.Time = time.Now().Unix()
+//	}
+//	if ev.Id == "" {
+//		ev.Id = mux.Id()
+//	}
+//	parts := strings.Split(ev.To, "/")
+//
+//	if len(parts) < 2 {
+//		return nil
+//	}
+//
+//	to := parts[0]
+//	if to == mux.Auth.Self() || to == "" {
+//		mux.HandleMessageForNode(ev)
+//		log.Println("/mux/OnRemoteMessageLocal", ev.To)
+//		return nil
+//	}
+//
+//	ev.Path = append(ev.Path, mux.Auth.VIP6.String())
+//	for k, ms := range mux.connections {
+//		if k == ev.From || k == connName {
+//			continue
+//		}
+//		for _, a := range ev.Path {
+//			if a == ms.VIP {
+//				log.Println("/mux/OnRemoteMessageFWD - LOOP ", ev.To, ms.VIP, ms.Name)
+//				continue
+//			}
+//		}
+//		ms.maybeSend(parts, ev, k)
+//		log.Println("/mux/OnRemoteMessageFWD", parts[0], ev.To, ms.VIP, ms.Name)
+//	}
+//	return nil
+//}

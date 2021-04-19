@@ -47,7 +47,7 @@ const (
 )
 
 // Expecting SNI
-func SniffSNI(acc *ugate.RawConn) error {
+func SniffSNI(acc *ugate.BufferedStream) error {
 	acc.Sniff()
 
 	buf := acc.Buf

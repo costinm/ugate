@@ -1,0 +1,14 @@
+{
+  "domain": "svc.cluster.local",
+  "basePort": 6000,
+  "listeners": {
+  },
+  "hosts": {
+    "bob": {
+      "addr": "127.0.0.1:6107"
+    }
+  },
+  "remoteAccept": {
+    "bob": ""
+  }
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/dns"
+	"github.com/costinm/ugate/pkg/http_proxy"
 	"github.com/costinm/ugate/pkg/udp"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
@@ -39,9 +40,13 @@ func main() {
 	// Load configs from the current dir and var/lib/dmesh, or env variables
 	// Writes to current dir.
 	config := ugatesvc.NewConf("./", "./var/lib/dmesh")
+	Run(config, nil)
+	select {}
+}
 
+func Run(config ugate.ConfStore, g *ugate.GateCfg) (*ugatesvc.UGate, error){
 	// Start a Gate. Basic H2 and H2R services enabled.
-	ug := ugatesvc.NewGate(&net.Dialer{}, nil, nil, config)
+	ug := ugatesvc.NewGate(&net.Dialer{}, nil, g, config)
 
 	sf := []startFunc{}
 	if initHooks != nil {
@@ -63,10 +68,9 @@ func main() {
 	udpNat  := udp.NewUDPGate(dnss, dnss)
 	udpNat.InitMux(ug.Mux)
 
-	hproxy := ugatesvc.NewHTTPProxy(ug)
+	hproxy := http_proxy.NewHTTPProxy(ug)
 	hproxy.HttpProxyCapture(fmt.Sprintf("127.0.0.1:%d", ug.Config.BasePort+ugate.PORT_HTTP_PROXY))
 
-	// Init WebRTC port
 
 	go dnss.Serve()
 
@@ -75,5 +79,5 @@ func main() {
 	}
 
 	log.Println("Started: ", ug.Auth.ID)
-	select {}
+	return ug, nil
 }

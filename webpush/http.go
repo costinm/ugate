@@ -19,18 +19,18 @@ type Backoff interface {
 
 var ReceiveBaseUrl = "https://127.0.0.1:5228/"
 
-// Used to push a message from a remote sender.
+// HTTPHandlerSend can send regular messages.
+// Can be exposed without auth on 127.0.0.1, or use normal
+// auth.
 //
-// Mapped to /s/[DESTID]?...
-// Local
+// Mapped to /s/[DESTID]/topic?...
 //
 // q or path can be used to pass command. Body and query string are sent.
 // TODO: compatibility with cloud events and webpush
 // TODO: RBAC (including admin check for system notifications)
 //
-func HTTPHandlerSend(w http.ResponseWriter, r *http.Request) {
-	//transport.GetPeerCertBytes(r)
-
+func (mux *Mux) HTTPHandlerSend(w http.ResponseWriter, r *http.Request) {
+	//transport.GetPeerCertBytes(r) or auth context
 	r.ParseForm()
 
 	var cmd string
@@ -61,13 +61,19 @@ func HTTPHandlerSend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	DefaultMux.HandleMessageForNode(NewMessage(cmd, params).SetDataJSON(body))
-	w.WriteHeader(200)
+	msg := NewMessage(cmd, params).SetDataJSON(body)
+	err = mux.SendMessage(msg)
+	if err == nil {
+		w.WriteHeader(200)
+		return
+	}
+	w.WriteHeader(500)
+	w.Write([]byte(err.Error()))
 }
 
 var SharedWPAuth = []byte{1}
 
-// Webpush handler - on /push[/VIP], on the HTTPS handler
+// Webpush handler - on /push[/VIP]/topic[?params], on the HTTPS handler
 //
 // Auth: VAPID or client cert - results in VIP of sender
 func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +91,7 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 
 	dest := parts[2]
 	if dest == "" || dest == mux.Auth.Name || dest == mux.Auth.Self() {
-		ec := auth.NewContextUA(mux.Auth.Priv, mux.Auth.Pub, SharedWPAuth)
+		ec := mux.Auth.NewContextUA(SharedWPAuth)
 		b, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -101,7 +107,14 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		ev := mux.ProcessMessage(msgb, rctx)
+		params := map[string]string{}
+		for k, v := range r.Form {
+			params[k] = v[0]
+		}
+
+		ev := NewMessage("." + strings.Join(parts[3:], "/"), params).SetDataJSON(msgb)
+
+		//ev := mux.ProcessMessage(msgb, rctx)
 		log.Println("GOT WEBPUSH: ", rctx.ID(), string(msgb), ev)
 
 		if ev == nil {
@@ -119,6 +132,7 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("Unauthorized"))
 			return
 		}
+		ev.From = rctx.ID()
 
 		mux.HandleMessageForNode(ev)
 	} else {
@@ -129,52 +143,6 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(201)
 }
 
-// Currently mapped to /dmesh/uds - sends a message to a specific connection, defaults to the UDS connection
-// to the android or root dmwifi app.
-func (mux *Mux) HTTPUDS(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-
-	var cmd string
-	var parts []string
-	q := r.Form.Get("q")
-	h := r.Form.Get("h")
-	if h == "" {
-		h = "dmesh"
-	}
-
-	if q != "" {
-		parts = strings.Split(q, " ")
-		cmd = q
-	} else {
-		parts = strings.Split(r.URL.Path, "/")
-		parts = parts[3:]
-		cmd = strings.Join(parts, " ")
-
-		log.Println("UDS: ", parts, "--", cmd)
-	}
-
-	params := map[string]string{}
-	for k, v := range r.Form {
-		params[k] = v[0]
-	}
-	var err error
-	var body []byte
-	if r.Method == "POST" {
-		body, err = ioutil.ReadAll(r.Body)
-		if err != nil {
-			return
-		}
-	}
-
-	ch := mux.connections[h]
-	if ch != nil {
-		ch.SendMessageToRemote(NewMessage(cmd, params).SetDataJSON(body))
-		w.WriteHeader(200)
-	} else {
-		w.WriteHeader(404)
-		return
-	}
-}
 
 // MonitorEvents will connect to a mesh address and monitor the messages.
 //
@@ -235,7 +203,6 @@ type Subscription struct {
 	Location string
 }
 
-
 // Create a subscription, using the Webpush standard protocol.
 //
 // URL is "/subscribe", no header required ( but passing a VAPID or mtls),
@@ -260,13 +227,12 @@ func (ua *UA) Subscribe() (sub *Subscription, err error) {
 	}
 
 	// generate encryption key and authenticator
-
 	return
 }
 
 // Subscribe creates a subscription. Initial version is just a
 // random - some interface will be added later, to allow sets.
-func SubscribeHandler(res http.ResponseWriter, req *http.Request) {
+func (mux *Mux) SubscribeHandler(res http.ResponseWriter, req *http.Request) {
 	// For simple testing we ignore sender auth, as well as subscription sets
 	token := make([]byte, 16)
 	rand.Read(token)

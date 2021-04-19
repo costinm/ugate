@@ -13,8 +13,7 @@ import (
 
 func (ht *H2Transport) ForwardHTTP(w http.ResponseWriter, r *http.Request, pathH string) {
 	r.Host = pathH
-	r1, cancel := CreateUpstreamRequest(w, r)
-	defer cancel()
+	r1 := CreateUpstreamRequest(w, r)
 
 	r1.URL.Scheme = "http"
 
@@ -26,7 +25,7 @@ func (ht *H2Transport) ForwardHTTP(w http.ResponseWriter, r *http.Request, pathH
 
 	// This uses the BTS/H2 protocol or reverse path.
 	// Forward to regular sites not supported.
-	res, err := ht.RoundTrip(r1)
+	res, err := ht.ug.RoundTrip(r1)
 	SendBackResponse(w, r, res, err)
 }
 // Used by both ForwardHTTP and ForwardMesh, after RoundTrip is done.
@@ -63,29 +62,35 @@ func SendBackResponse(w http.ResponseWriter, r *http.Request,
 //
 // Derived from reverseproxy.go in the standard Go httputil package.
 // Derived from caddy
-func CreateUpstreamRequest(rw http.ResponseWriter, r *http.Request) (*http.Request, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(r.Context())
-	if cn, ok := rw.(http.CloseNotifier); ok {
-		// H2 and HTTP implement this - called when the stream FIN or RST is received.
-		// H2 also creates a context.WithCancel based on the connection's baseCtx
-		// The cancelCtx is called after the handler finishes or on RST.
-		notifyChan := cn.CloseNotify()
-		go func() {
-			select {
-			case <-notifyChan:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-	}
+func CreateUpstreamRequest(rw http.ResponseWriter, r *http.Request) *http.Request {
+	//ctx := r.Context()
+	//if cn, ok := rw.(http.CloseNotifier); ok {
+	//	var cancel context.CancelFunc
+	//	ctx, cancel = context.WithCancel(ctx)
+	//	defer cancel()
+	//	notifyChan := cn.CloseNotify()
+	//	go func() {
+	//		select {
+	//		case <-notifyChan:
+	//			cancel()
+	//		case <-ctx.Done():
+	//		}
+	//	}()
+	//}
+	ctx := context.Background()
 
-	outreq := r.WithContext(ctx) // includes shallow copies of maps, but okay
+	// URL, Form, TransferEncoding, Header, Trailer, URL
+	outreq := r.Clone(ctx)
 
 	// We should set body to nil explicitly if request body is empty.
 	// For DmDns requests the Request Body is always non-nil.
 	if r.ContentLength == 0 {
 		outreq.Body = nil
 	}
+	if outreq.Header == nil {
+		outreq.Header = make(http.Header) // Issue 33142: historical behavior was to always allocate
+	}
+	outreq.Close = false
 
 	// We are modifying the same underlying map from req (shallow
 	// copied above) so we only copy it if necessary.
@@ -130,7 +135,7 @@ func CreateUpstreamRequest(rw http.ResponseWriter, r *http.Request) (*http.Reque
 		outreq.Header.Set("X-Forwarded-For", clientIP)
 	}
 
-	return outreq, cancel
+	return outreq
 }
 
 // Hop-by-hop headers. These are removed when sent to the backend in createUpstreamRequest

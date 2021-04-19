@@ -49,7 +49,13 @@ type GateCfg struct {
 	Name string `json:"name,omitempty"`
 
 	// Domain name, also default control plane and gateway.
+	// If not set, the test/open domain is used, expect poor behavior
+	// (c1.webinf.info). If set to "-", no parent control plane.
+	// This also acts as 'trust domain' and 'mesh id'.
 	Domain string `json:"domain,omitempty"`
+
+	// TODO: other trusted domains/meshes (federation, migration, etc)
+	//DomainAliases []string `json:"domainAliases,omitempty"`
 
 	// Additional port listeners.
 	// Egress: listen on 127.0.0.1:port
@@ -60,29 +66,38 @@ type GateCfg struct {
 	Listeners map[string]*Listener `json:"listeners,omitempty"`
 
 	// Configured hosts, key is a domain name without port.
+	// This includes public keys, active addresses. Discovery and on-demand
+	// are also used to load this info.
+	// TODO: move to separate files:
+	// [namespace]/Node/[ID]
+	// ID can be 32B SHA256(cert), 16 or 8B (VIP6) or 'trusted' IP (if infra is
+	// secure - Wireguard or IPsec equivalent).
 	Hosts map[string]*DMNode `json:"hosts,omitempty"`
 
 	// Egress gateways for reverse H2 - key is the domain name, value is the
 	// pubkey or root CA. If empty, public certificates are required.
-	H2R map[string]string `json:"remoteAccept,omitempty"`
+	H2R  map[string]string `json:"remoteAccept,omitempty"`
+
+	// ALPN to announce on the main BTS port
+	ALPN []string
 }
 
 const (
 	// Offsets from BasePort for the default ports.
 
-	// Used for local UDP messages and multicast.
-	PORT_UDP = 8
-
 	PORT_IPTABLES = 1
 	PORT_IPTABLES_IN = 6
-	PORT_SOCKS = 9
+	PORT_SOCKS = 5
 	// SNI and HTTP could share the same port - would also
 	// reduce missconfig risks
 	PORT_HTTP_PROXY = 2
 	PORT_SNI = 3
 
+	// TLS/SNI, HTTPS (no client certs)
+	PORT_HTTPS = 4
+
 	// H2, HTTPS, H2R
-	PORT_HTTPS = 7
+	PORT_BTS = 7
 )
 
 // Keyed by Hostname:port (if found in dns tables) or IP:port
@@ -104,23 +119,52 @@ type HostStats struct {
 }
 
 // Node information, based on registration info or discovery.
+//
 // Used for 'mesh' nodes, where we have a public key and other info.
+//
 type DMNode struct {
+	// ID is the primary id of the node. Format is:
+	//    base32(SHA256(EC_256_pub)) - 32 bytes binary, 52 bytes encoded
+	//    base32(ED_pub) - same size, for nodes with ED keys.
+	//
+	// For non-mesh nodes, it is a real domain name or IP if unknown.
+	//
+	// TODO: To support captured traffic, the IP6 format is also supported.
+	//
+	ID string `json:"id,omitempty"`
+
+	// IDCert is the sha256(cert) - used for WebRTC.
+	// Alternative: []Certs
+	//IDCert []byte `json:"idcert,omitempty"`
+
+	Groups []string `json:"groups,omitempty"`
+
+	// TODO: rename to node ID - use truncated or full form.
+
+	// TODO: print Hex form as well, make sure the 8 bytes of the VIP are visible
+
+	//// VIP is the mesh specific IP6 address. The 'network' identifies the master node, the
+	//// link part is the sha of the public key. This is a byte[16].
+	//// If not known, will be populated after the connection.
+	//// If set, will be verified and used to locate the node.
+	//VIP net.IP `json:"vip,omitempty"`
+
 	// Primary/main address and port of the BTS endpoint.
 	// Can be a DNS name that resolves, or some other node.
 	// Individual IPs (relay, etc) will be in the info.addrs field
+	// May also be a URL (webpush endpoint).
 	Addr string `json:"addr,omitempty"`
 
-	// VIP is the mesh specific IP6 address. The 'network' identifies the master node, the
-	// link part is the sha of the public key. This is a byte[16].
+	// Primary public key of the node.
+	// EC256: 65 bytes, uncompressed format
+	// RSA: DER
+	// ED25519: 32B
+	// Used for sending encryted webpush message
 	// If not known, will be populated after the connection.
-	// If set, will be verified and used to locate the node.
-	VIP net.IP `json:"vip,omitempty"`
-
-	// Public key.
-	// If not known, will be populated after the connection.
-	// If set, will be verified and used to locate the node.
 	PublicKey []byte `json:"pub,omitempty"`
+
+	// Auth for webpush.
+	Auth []byte `json:"auth,omitempty"`
 
 	// Information from the node - from an announce or message.
 	NodeAnnounce *NodeAnnounce `json:"info,omitempty"`
@@ -129,17 +173,10 @@ type DMNode struct {
 
 	Bacokff time.Duration `json:"-"`
 
-	// Last LL GW address used by the peer.
-	// Public IP addresses are stored in Reg.IPs.
-	// If set, returned as the first address in GWs, which is used to connect.
-	// This is not sent in the registration - but extracted from the request
-	// remote address.
-	GW *net.UDPAddr `json:"gw,omitempty"`
-
-	// IP4 address of last announce
+	// IP4 address of last announce (link local) or connection
 	Last4 *net.UDPAddr `json:"-"`
 
-	// IP6 address of last announce
+	// IP6 address of last announce or connection.
 	Last6 *net.UDPAddr `json:"-"`
 
 	FirstSeen time.Time
@@ -157,29 +194,37 @@ type DMNode struct {
 	LastSeen6 time.Time `json:"-"`
 
 	// Number of multicast received
-	Announces int `json:"-"`
+	//Announces int `json:"-"`
 
-	// Numbers of announces received from that node on the P2P interface
-	AnnouncesOnP2P int `json:"-"`
+	//// Numbers of announces received from that node on the P2P interface
+	//AnnouncesOnP2P int `json:"-"`
+	//
+	//// Numbers of announces received from that node on the P2P interface
+	//AnnouncesFromP2P int `json:"-"`
 
-	// Numbers of announces received from that node on the P2P interface
-	AnnouncesFromP2P int `json:"-"`
-
-	// H2r is a HTTP2 connection to the node.
+	// Muxer is a HTTP2-like connection to the node.
+	// Implements RoundTrip, with the semantics of CONNECT (no buffering)
 	// May be a direct or reverse connection.
-	H2r Muxer `json:"-"`
+	Muxer Muxer `json:"-"`
 
 	// Set if the gateway has an active incoming connection from this
 	// node, with the node acting as client.
 	// Streams will be forwarded to the node using special 'accept' mode.
 	// This is similar with PUSH in H2.
 	// Deprecated - impl in ssh server, use in old wpgate DialMeshLocal
-	TunSrv MuxedConn `json:"-"`
+	//TunSrv MuxedConn `json:"-"`
 
 	// Existing tun to the remote node, previously dialed.
 	// Deprecated
-	TunClient MuxedConn `json:"-"`
+	//TunClient MuxedConn `json:"-"`
 }
+
+//func (dmn *DMNode) ID() string {
+//	if dmn.VIP != nil {
+//		return dmn.VIP.String()
+//	}
+//	return dmn.FQDN
+//}
 
 // Muxer is the interface implemented by a multiplexed connection with metadata
 // http2.ClientConn is the default implementation used.
@@ -204,7 +249,6 @@ const ProtoHAProxy = "haproxy"
 const ProtoSocks = "socks5"
 const ProtoIPTables = "iptables"
 const ProtoIPTablesIn = "iptables-in"
-const ProtoConnect = "connect"
 
 // Listener represents the configuration for an acceptor on a port.
 //
@@ -251,7 +295,9 @@ type Listener struct {
 	// Must block until the connection is fully handled !
 	Handler ConHandler `json:-`
 
-//	gate *UGate `json:-`
+	// ALPN to announce
+	ALPN []string
+	//	gate *UGate `json:-`
 }
 
 // Mapping to Istio:
@@ -277,16 +323,50 @@ type Listener struct {
 // WithClientTrace(ctx, trace) Context
 // ContextClientTrace(ctx) -> *ClientTrace
 
-// Defined in x.net.proxy
-// Used to create the actual connection to an address.
+// ContextDialer is same with x.net.proxy.ContextDialer
+// Used to create the actual connection to an address using the mesh.
+// The result may have metadata, and be an instance of ugate.Stream.
+//
+// A uGate implements this interface, it is the primary interface
+// for creating streams where the caller does not want to pass custom
+// metadata. Based on net and addr and handshake, if destination is
+// capable we will upgrade to BTS and pass metadata. This may also
+// be sent via an egress gateway.
+//
+// For compatibility, 'net' can be "tcp" and addr a mangled hostname:port
+// Mesh addresses can be identified by the hostname or IP6 address.
+// External addresses will create direct connections if possible, or
+// use egress server.
+//
+// TODO: also support 'url' scheme
 type ContextDialer interface {
 	DialContext(ctx context.Context, net, addr string) (net.Conn, error)
 }
 
-// Alternative to http.Handler
+type MsgCon interface {
+
+	// SendMessage sends a message as a datagram.
+	SendMessage([]byte) error
+
+	// ReceiveMessage gets a message received in a datagram.
+	ReceiveMessage() ([]byte, error)
+
+}
+
+// MuxConPool tracks multiplexed 'connections'('associations','sessions').
+// Each Mux needs to be able to dial back. The ConHandler interface is used
+// for accepting streams.
+type MuxConPool interface {
+	OnConnect(c ContextDialer, id string)
+	OnDisconnect(c ContextDialer, id string)
+}
+
+// ConHandler is a handler for net.Conn with metadata.
+// Lighter alternative to http.Handler
 type ConHandler interface {
 	Handle(conn MetaConn) error
 }
+
 
 type ConHandlerF func(conn MetaConn) error
 
@@ -334,7 +414,6 @@ type TCPHandler interface {
 
 type MetaConn interface {
 	net.Conn
-	//http.ResponseWriter
 
 	// Returns request metadata. This is a subset of
 	// http.Request. An adapter exists to convert this into
@@ -342,6 +421,7 @@ type MetaConn interface {
 	// RoundTrip.
 	Meta() *Stream
 }
+
 type CloseWriter interface {
 	CloseWrite() error
 }
@@ -352,8 +432,12 @@ type CloseReader interface {
 
 
 
-// Helpers for very simple configuration and key loading.
-// Will use json files for config.
+// Interface for very simple configuration and key loading.
+// Can have a simple in-memory, fs implementation, as well
+// as K8S, XDS or database backends.
+//
+// The name is hierachical, in case of K8S or Istio corresponds
+// to the type, including namespace.
 type ConfStore interface {
 	// Get a config blob by name
 	Get(name string) ([]byte, error)
@@ -426,44 +510,48 @@ type NodeAnnounce struct {
 	Vpn string `json:"Vpn,omitempty"`
 }
 
-// Transport is creates multiplexed connections.
+//// Transport is creates multiplexed connections.
+////
+//// On the server side, MuxedConn are created when a client connects.
+//type Transport interface {
+//	// Dial one TCP/mux connection to the IP:port.
+//	// The destination is a mesh node - port typically 5222, or 22 for 'regular' SSH serves.
+//	//
+//	// After handshake, an initial message is sent, including informations about the current node.
+//	//
+//	// The remote can be a trusted VPN, an untrusted AP/Gateway, a peer (link local or with public IP),
+//	// or a child. The subsriptions are used to indicate what messages will be forwarded to the server.
+//	// Typically VPN will receive all events, AP will receive subset of events related to topology while
+//	// child/peer only receive directed messages.
+//	DialMUX(addr string, pub []byte, subs []string) (MuxedConn, error)
+//}
+
+//// A Connection that can multiplex.
+//// Will dial a stream, may also accept streams and dispatch them.
+////
+//// For example SSHClient, SSHServer, Quic can support this.
+//type MuxedConn interface {
+//	// DialProxy will use the remote gateway to jump to
+//	// a different destination, indicated by stream.
+//	// On return, the stream ServerOut and ServerIn will be
+//	// populated, and connected to stream Dest.
+//	// deprecated:  use CreateStream
+//	DialProxy(tp *Stream) error
 //
-// On the server side, MuxedConn are created when a client connects.
-type Transport interface {
-	// Dial one TCP/mux connection to the IP:port.
-	// The destination is a mesh node - port typically 5222, or 22 for 'regular' SSH serves.
-	//
-	// After handshake, an initial message is sent, including informations about the current node.
-	//
-	// The remote can be a trusted VPN, an untrusted AP/Gateway, a peer (link local or with public IP),
-	// or a child. The subsriptions are used to indicate what messages will be forwarded to the server.
-	// Typically VPN will receive all events, AP will receive subset of events related to topology while
-	// child/peer only receive directed messages.
-	DialMUX(addr string, pub []byte, subs []string) (MuxedConn, error)
-}
-
-// A Connection that can multiplex.
-// Will dial a stream, may also accept streams and dispatch them.
+//	// The VIP of the remote host, after authentication.
+//	RemoteVIP() net.IP
 //
-// For example SSHClient, SSHServer, Quic can support this.
-type MuxedConn interface {
-	// DialProxy will use the remote gateway to jump to
-	// a different destination, indicated by stream.
-	// On return, the stream ServerOut and ServerIn will be
-	// populated, and connected to stream Dest.
-	// deprecated:  use CreateStream
-	DialProxy(tp *Stream) error
+//	// Wait for the conn to finish.
+//	Wait() error
+//}
+//
 
-	// The VIP of the remote host, after authentication.
-	RemoteVIP() net.IP
-
-	// Wait for the conn to finish.
-	Wait() error
-}
 
 type StreamCreator interface {
 	CreateStream(ctx context.Context, n *DMNode, r1 *http.Request) (*Stream, error)
 }
+
+
 
 // Textual representation of the node registration data.
 func (n *DMNode) String() string {
@@ -475,9 +563,6 @@ func (n *DMNode) String() string {
 func (n *DMNode) GWs() []*net.UDPAddr {
 	res := []*net.UDPAddr{}
 
-	if n.GW != nil {
-		res = append(res, n.GW)
-	}
 	if n.Last4 != nil {
 		res = append(res, n.Last4)
 	}
@@ -487,16 +572,6 @@ func (n *DMNode) GWs() []*net.UDPAddr {
 	return res
 }
 
-// Called when receiving a registration or regular valid message via a different gateway.
-// - HandleRegistrationRequest - after validating the VIP
-//
-//
-// For VPN, the srcPort is assigned by the NAT, can be anything
-// For direct, the port will be 5228 or 5229
-func (n *DMNode) UpdateGWDirect(addr net.IP, zone string, srcPort int, onRes bool) {
-	n.LastSeen = time.Now()
-	n.GW = &net.UDPAddr{IP: addr, Port: srcPort, Zone: zone}
-}
 func (n *DMNode) BackoffReset() {
 	n.Bacokff = 0
 }

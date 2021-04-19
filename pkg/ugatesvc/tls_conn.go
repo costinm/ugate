@@ -12,7 +12,7 @@ import (
 	"github.com/costinm/ugate/pkg/auth"
 )
 
-// TLSConn extens tls.Conn with extra metadata.
+// TLSConn extends tls.Conn with extra metadata.
 // Adds the Proxy() method, implements ReadFrom and WriteTo using recycled buffers.
 type TLSConn struct {
 	// Raw TCP connection, for remote address and stats
@@ -59,9 +59,13 @@ func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config
 // SecureInbound runs the TLS handshake as a server.
 // Accepts connections without client certificate - alternate form of auth will be used, either
 // an inner TLS connection or JWT in metadata.
-func (ug *UGate) NewTLSConnIn(ctx context.Context, nc net.Conn, cfg *tls.Config) (*TLSConn, error) {
+func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*TLSConn, error) {
 	config, keyCh := ConfigForPeer(ug.Auth, cfg, "")
-	config.NextProtos = []string{"h2r", "h2"}
+	if l.ALPN == nil {
+		config.NextProtos = []string{"h2r", "h2"}
+	} else {
+		config.NextProtos = l.ALPN
+	}
 
 	tc := &TLSConn{}
 	tc.Stream = ugate.NewStream()
@@ -109,6 +113,7 @@ func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Con
 		}
 
 		pubKey, err := auth.PubKeyFromCertChain(chain)
+		//pubKeyPeerID := auth.IDFromCert(chain)
 		pubKeyPeerID := auth.IDFromPublicKey(pubKey)
 		if err != nil {
 			return err

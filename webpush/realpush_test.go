@@ -22,7 +22,8 @@ func TestChrome(t *testing.T) {
 
 }
 
-func TestFirefox(t *testing.T) {
+// No longer valid, needs new URL/subscription
+func xTestFirefox(t *testing.T) {
 	send(t, `{"endpoint":"https://updates.push.services.mozilla.com/push/v1/gAAAAABXPLrsYo31tV6tu1Uel7DX1chKCXMoAfMPL8QTEUohyiboXrqvQB28HG_2pVGLMA81xo4NL-x3Sk8pJ_x0vaeW1b7iy7GGiksF8kirhhdwEwM9a24E5kfZGIv8n8fzXLXJWUkE","keys":{"auth":"v5PkWe77dsf8WM45-RZB-g","p256dh":"BJdj267lZztFo5bRUcIybOKCkoWRLLas9Mriv4ibYi3S5cWYsHHPd6fzYXtSji0iq3c20LsfCOpPguBPXkocxMY"}}`)
 	send(t, `{"endpoint":"https://updates.push.services.mozilla.com/push/v1/gAAAAABXMRmjsxpU7aqwHIKnC41PvQDkn5dqAL2S0Geq-2DtG7H6W6Geql1YMpihJ6GeHtg-SNfUCX4lLfxAyMLu7JVZRFH_4bXL_MhgXIqWWIQcGGx5YnGdvvtOaf82EmyOpoWvlf0E","keys":{"auth":"S0DdWigLjQ-5j4Ug9McYgQ","p256dh":"BIRCXK5p71SKDo7Gy8gaXLnLsvJRjSyoxim9MVEQgL2Mb5YCXUdbjJXcU_sdhmwSm6T5NWTfJ1hwmn8cph8Jw98"}}`)
 }
@@ -41,14 +42,18 @@ func send(t *testing.T, epjson string) {
 	req, err := NewRequest(sub.Endpoint, sub.Key, sub.Auth, message, 0, vapid)
 	res, err := http.DefaultClient.Do(req)
 
+	dmpReq, err := httputil.DumpRequest(req, true)
+	t.Log(string(dmpReq))
+
+	dmp, err := httputil.DumpResponse(res, true)
+	t.Log(string(dmp))
+
 	if err != nil || res.StatusCode != 201 {
-		dmpReq, err := httputil.DumpRequest(req, true)
-		t.Log(string(dmpReq))
 		t.Error(err)
 		if res != nil {
-			dmp, err := httputil.DumpResponse(res, true)
-			t.Log(string(dmp))
 			t.Fatal("Failed to send ", err, res.StatusCode)
 		}
 	}
+
+	// TODO: check Location: is present (the receipt)
 }

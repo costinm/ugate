@@ -1,7 +1,6 @@
-package ugatesvc
+package ugatesvc_test
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -10,9 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -22,109 +19,15 @@ import (
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/pipe"
+	"github.com/costinm/ugate/pkg/ugatesvc"
+	"github.com/costinm/ugate/test"
 )
 
-func initServer(basePort int, cfg *ugate.GateCfg) *UGate {
-	if cfg == nil {
-		cfg = &ugate.GateCfg{
-			BasePort: basePort,
-			//H2R: map[string]string{
-			//	"127.0.0.1:15007": "",
-			//},
-		}
-	}
-	ug := NewGate(&net.Dialer{}, nil, cfg, nil)
 
-	log.Println("Starting server EC", auth.IDFromPublicKey(auth.PublicKey(ug.Auth.EC256Cert.PrivateKey)))
-	//if ug.Auth.ED25519Cert != nil {
-	//	log.Println("Starting server ED", auth.IDFromPublicKey(auth.PublicKey(ug.Auth.ED25519Cert.PrivateKey)))
-	//}
-	//if ug.Auth.RSACert != nil {
-	//	log.Println("Starting server RSA", auth.IDFromPublicKey(auth.PublicKey(ug.Auth.RSACert.PrivateKey)))
-	//}
-
-	// Echo - TCP
-	_, _, _ = ug.Add(&ugate.Listener{
-		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+11),
-		Protocol:  "tls",
-		Handler:   &EchoHandler{},
-	})
-	_, _, _ = ug.Add(&ugate.Listener{
-		Address: fmt.Sprintf("0.0.0.0:%d", basePort+12),
-		Handler: &EchoHandler{},
-	})
-	ug.Mux.Handle("/", &EchoHandler{})
-	return ug
-}
-
-var chunk1 = []byte("Hello world")
-var chunk2 = []byte("chunk2")
-
-func checkEcho(in io.Reader, out io.Writer) (string, error) {
-	d := make([]byte, 2048)
-	// Start with a write - client send first (echo will wait, to verify that body is not cached)
-	_, err := out.Write(chunk1)
-	if err != nil {
-		return "", err
-	}
-
-	//ab.SetDeadline(time.Now().Add(5 * time.Second))
-	n, err := in.Read(d)
-	if err != nil {
-		return "", err
-	}
-
-	idx := bytes.IndexByte(d[0:n], '\n')
-	if idx < 0 {
-		return string(d[0:n]), errors.New("missing header")
-	}
-	js := string(d[0:idx])
-
-	// Server writes 2 chunkes - the header and what we wrote
-	n, err = in.Read(d)
-	if err != nil {
-		return "", err
-	}
-
-	if !bytes.Equal(chunk1, d[0:n]) {
-		return js, errors.New("miss-matched result " + string(d[0:n]))
-	}
-
-	_, err = out.Write(chunk2)
-	if err != nil {
-		return "", err
-	}
-
-	n, err = in.Read(d)
-	if err != nil {
-		return "", err
-	}
-
-	if !bytes.Equal(chunk2, d[0:n]) {
-		return js, errors.New("miss-matched result " + string(d[0:n]))
-	}
-
-	/*	_, err = out.Write([]byte("close\n"))
-		if err != nil {
-			return "", err
-		}
-	*/
-	if cw, ok := out.(ugate.CloseWriter); ok {
-		cw.CloseWrite()
-	} else {
-		out.(io.Closer).Close()
-	}
-	n, err = in.Read(d)
-	if err != io.EOF {
-		log.Println("unexpected ", err)
-	}
-
-	return js, nil
-}
 
 func xTestLive(t *testing.T) {
 	m := "10.1.10.228:15007"
-	ag := initServer(6300, &ugate.GateCfg{
+	ag := test.InitTestServer("", &ugate.GateCfg{
 		BasePort: 6300,
 		H2R: map[string]string{
 			//"h.webinf.info:15007": "",
@@ -133,7 +36,7 @@ func xTestLive(t *testing.T) {
 	})
 	//ag.h2Handler.UpdateReverseAccept()
 
-	//err := ag.h2Handler.maintainRemoteAccept("h.webinf.info:15007", "")
+	//err := ag.h2Handler.maintainPinnedConnection("h.webinf.info:15007", "")
 	//if err != nil {
 	//	t.Fatal("Failed to RA", err)
 	//}
@@ -147,7 +50,7 @@ func xTestLive(t *testing.T) {
 	//	t.Fatal(err)
 	//}
 	//
-	//res1, err := checkEcho(res.Body, p)
+	//res1, err := CheckEcho(res.Body, p)
 	//if err != nil {
 	//	t.Fatal(err)
 	//}
@@ -158,23 +61,48 @@ func xTestLive(t *testing.T) {
 }
 
 func TestSrv(t *testing.T) {
-	ag := initServer(6000, nil)
-	bg := initServer(6100, nil)
-	cg := initServer(6200, nil)
+	// Bob accepts POST and H2R tunnels
+	// Bob connected to Carol
+	bg := test.InitTestServer(test.BOB_KEYS, &ugate.GateCfg{
+		BasePort: 6100,
+		Name: "bob",
+	})
+
+	// Alice connected to Bob
+	ag := test.InitTestServer(test.ALICE_KEYS, &ugate.GateCfg{
+		BasePort: 6000,
+		Name: "alice",
+		H2R: map[string]string{
+			"bob": "-",
+		},
+		Hosts: map[string] *ugate.DMNode {
+			"bob": &ugate.DMNode{
+				Addr: "127.0.0.1:6107",
+			},
+		},
+	})
+
+
+	// Carol accepts only POST tunnels
+	cg := test.InitTestServer(test.CAROL_KEYS, &ugate.GateCfg{
+		BasePort: 6200,
+		Name: "carol",
+	})
 
 	//http2.DebugGoroutines = true
+
 	t.Run("Echo-tcp", func(t *testing.T) {
-		// Can also use net.Dial
 		ab, err := ag.DialContext(context.Background(), "tcp",
 			fmt.Sprintf("127.0.0.1:%d", 6112))
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, err := checkEcho(ab, ab)
+		res, err := test.CheckEcho(ab, ab)
 		if err != nil {
 			t.Fatal(err)
 		}
 		log.Println("Result ", res)
+
 	})
 
 	// TLS Echo server, on 6111
@@ -184,7 +112,8 @@ func TestSrv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, err := checkEcho(ab, ab)
+		// TODO: verify the identity, cert, etc
+		res, err := test.CheckEcho(ab, ab)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,16 +122,20 @@ func TestSrv(t *testing.T) {
 		log.Println("Result ", res, meta)
 	})
 
+	// This is a H2 (BTS) request that is forwarded to a TCP stream handler.
+	// Alice -BTS-> Bob -TCP-> Carol
 	t.Run("H2-egress", func(t *testing.T) {
-		// This is a H2 request that is forwarded to a stream.
 		p := pipe.New()
+		// xx07 -> BTS port
+		// xx12 -> plain text echo
+		// "/dm/" -> POST-based tunnel ( more portable than CONNECT )
 		r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+"127.0.0.1:6112", p)
-		res, err := ag.H2Handler.RoundTrip(r)
+		res, err := ag.RoundTrip(r)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		res1, err := checkEcho(res.Body, p)
+		res1, err := test.CheckEcho(res.Body, p)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -210,33 +143,31 @@ func TestSrv(t *testing.T) {
 		log.Println(res1, ag, bg)
 	})
 
+	// TODO: perm checks for egress
+	// TODO: same test for ingress ( localhost:port ) and internal listeners
+
+	// Alice -- reverse tunnel --> Bob
+	// Carol --> Bob -- via H2R --> Alice
 	t.Run("H2R", func(t *testing.T) {
-		ag.Config.H2R = map[string]string{
-			"127.0.0.1:6107": "",
-		}
 		ag.H2Handler.UpdateReverseAccept()
 		// Connecting to Bob's gateway (from c). Request should go to Alice.
 		//
-		p := pipe.New()
-		r, _ := http.NewRequest("POST",
-			"https://127.0.0.1:6107/dm/"+ag.Auth.ID, p)
-		res, err := cg.H2Handler.RoundTrip(r)
-
+		nc, err := cg.DialContext(context.Background(), "url",
+			"https://127.0.0.1:6107/dm/"+ag.Auth.ID + "/dm/127.0.0.1:6112")
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		res1, err := checkEcho(res.Body, p)
+		res1, err := test.CheckEcho(nc, nc)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		log.Println(res1, ag, bg)
 
-		ag.Config.H2R = map[string]string{
-		}
-		ag.H2Handler.UpdateReverseAccept()
-		if len(ag.H2Handler.reverse) > 0 {
+		//ag.Config.H2R = map[string]string{
+		//}
+		//ag.H2Handler.UpdateReverseAccept()
+		if len(ag.H2Handler.Reverse) > 0 {
 			t.Error("Failed to disconnect")
 		}
 	})
@@ -290,7 +221,7 @@ func TestCrypto(t *testing.T) {
 		//if a.RSACert == nil {
 		//	t.Error("Missing RSA")
 		//}
-		if a.EC256Cert == nil {
+		if a.Cert == nil {
 			t.Error("Missing EC")
 		}
 		//if a.ED25519Cert == nil {
@@ -306,18 +237,18 @@ func TestCrypto(t *testing.T) {
 		//	b.RSACert.PrivateKey) {
 		//	t.Error("Error loading")
 		//}
-		if !a.EC256Cert.PrivateKey.(*ecdsa.PrivateKey).Equal(b.EC256Cert.PrivateKey) {
+		if !a.Cert.PrivateKey.(*ecdsa.PrivateKey).Equal(b.Cert.PrivateKey) {
 			t.Error("Error loading")
 		}
 		//testKey(a.ED25519Cert.PrivateKey, t)
 		//testKey(a.RSACert.PrivateKey, t)
-		testKey(a.EC256Cert, t)
+		testKey(a.Cert, t)
 	})
 }
 
 func TestUGate(t *testing.T) {
 	td := &net.Dialer{}
-	ug := NewGate(td, nil, nil, nil)
+	ug := ugatesvc.NewGate(td, nil, nil, nil)
 
 	basePort := 2900
 	ug.Add(&ugate.Listener{
@@ -347,7 +278,7 @@ func TestUGate(t *testing.T) {
 
 	ug.Add(&ugate.Listener{
 		Address: fmt.Sprintf("0.0.0.0:%d", basePort+106),
-		Handler: &EchoHandler{},
+		Handler: &ugatesvc.EchoHandler{},
 	})
 
 }
@@ -393,7 +324,7 @@ var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
 
 func xTestKube(t *testing.T) {
 	d, _ := ioutil.ReadFile("testdata/kube.json")
-	kube := &ugate.KubeConfig{}
+	kube := &auth.KubeConfig{}
 	err := json.Unmarshal(d, kube)
 	if err != nil {
 		t.Fatal("Invalid kube config ", err)

@@ -1,6 +1,6 @@
 basePort: 15000
 
-##
+## Port-based listeners.
 # - 'whitebox' egress - listen on 127.0.0.1, forwardTo
 # - forward: listen on :port, forwardTo dest
 # - 'input': listen on :port, forwardTo localhost or empty
@@ -38,14 +38,16 @@ listeners:
   "-:8112":
     proto: https
 
-# This includes simplified 'clusters'.
+# Hosts represents pre-configured nodes.
+# Key is the DNS name or VIP.
+# If a host is not found here, discovery will be used ( DNS, control plane)
 hosts:
   localiperf:
     addr: localhost:15102
 
   # Live test server
-#  h.webinf.info:
-#    addr: h.webinf.info:15007
+  h.webinf.info:
+    addr: h.webinf.info:443
 #    id: B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA
 #
 #  c1.webinf.info:

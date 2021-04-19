@@ -9,7 +9,7 @@ import (
 	"crypto/tls"
 	"flag"
 
-	"github.com/costinm/ugate/pkg/msgs"
+	msgs "github.com/costinm/ugate/webpush"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"

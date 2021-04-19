@@ -15,7 +15,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/costinm/ugate/pkg/msgs"
+	"github.com/costinm/ugate"
+	msgs "github.com/costinm/ugate/webpush"
 )
 
 // uds provides helpers for passing credentials and files over UDS streams, and basic
@@ -482,6 +483,16 @@ func (uds *UdsConn) File() *os.File {
 	nf := []*os.File{}
 	uds.Files = append(nf, uds.Files[1:]...)
 	return fd
+}
+
+func processUnixConn(bc *ugate.BufferedStream) error {
+	uc, ok := bc.Out.(*net.UnixConn)
+	if !ok {
+		return errors.New("Unexpected con")
+	}
+	enableUnixCredentials(uc)
+
+	return nil
 }
 
 // Enable reception of PID/UID/GID

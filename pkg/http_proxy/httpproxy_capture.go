@@ -1,4 +1,4 @@
-package ugatesvc
+package http_proxy
 
 import (
 	"io"
@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 // Used for HTTP_PROXY=localhost:port, to intercept outbound traffic using http proxy protocol.
@@ -18,10 +19,10 @@ import (
 // HTTPGate handles HTTP requests
 type HTTPGate struct {
 	//Auth *auth.Auth
-	gw *UGate
+	gw *ugatesvc.UGate
 }
 
-func NewHTTPProxy(gw *UGate) *HTTPGate {
+func NewHTTPProxy(gw *ugatesvc.UGate) *HTTPGate {
 	return &HTTPGate{
 		gw: gw,
 	}
@@ -98,7 +99,7 @@ func (gw *HTTPGate) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Reques
 	}
 	origBody := resp.Body
 	defer origBody.Close()
-	CopyResponseHeaders(w.Header(), resp.Header)
+	ugatesvc.CopyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 
@@ -133,8 +134,8 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	//ra := proxyClient.RemoteAddr().(*net.TCPAddr)
 	str := ugate.GetConn(proxyClient)
-	defer gw.gw.OnAcceptDone(str)
-	gw.gw.TrackStreamIN(str.Meta())
+	defer gw.gw.OnStreamDone(str)
+	gw.gw.OnStream(str.Meta())
 
 	str.Stream.Dest = host
 	str.Stream.Egress = true
@@ -148,5 +149,5 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// TODO: add sniffing on the outbound
 
-	gw.gw.dialOut(str.Meta())
+	gw.gw.DialAndProxy(str.Meta())
 }

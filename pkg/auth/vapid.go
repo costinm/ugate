@@ -97,7 +97,7 @@ func (auth *Auth) VAPIDSign(t []byte) string {
 	// Base64URL for the content of the token
 	t64 := make([]byte, enc.EncodedLen(len(t)))
 	enc.Encode(t64, t)
-	c0 := auth.TlsCerts[0]
+	c0 := *auth.Cert
 
 	token := make([]byte, len(t)+len(vapidPrefix)+100)
 	if _, ok := c0.PrivateKey.(*ecdsa.PrivateKey); ok {

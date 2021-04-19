@@ -80,7 +80,7 @@ const (
 
 // Extract the target from the SOCKS header, consume it, and register a post-dial
 // hook.
-func  ReadSocksHeader(acceptedCon *ugate.RawConn) error {
+func  ReadSocksHeader(acceptedCon *ugate.BufferedStream) error {
 	head := acceptedCon.Buf
 	str := acceptedCon.Meta()
 

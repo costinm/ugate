@@ -1,0 +1,13 @@
+{
+  "basePort": 14200,
+  "listeners": {
+    ":15101": {
+      "forwardTo": "localhost:5201"
+    },
+    ":15108": {},
+    ":15102": {}
+  },
+  "accept": {
+    "h.webinf.info:15007": ""
+  }
+}

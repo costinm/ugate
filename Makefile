@@ -1,4 +1,4 @@
-OUT=build
+OUT=${PWD}/build
 
 #include ${HOME}/.hosts.mk
 ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
@@ -11,7 +11,7 @@ run/c1:
 
 # Must have a $HOME/ugate dir
 run:
-	CGO_ENABLED=0 go build -o ${OUT}/ugate ./cmd/ugate
+	(cd ./cmd/ugate; CGO_ENABLED=0 go build -o ${OUT}/ugate .)
 	ssh ${HOST} pkill ugate || true
 	scp ${OUT}/ugate ${HOST}:/x/ugate
 	ssh  ${HOST} "cd /x/ugate; HOME=/x/ugate /x/ugate/ugate"

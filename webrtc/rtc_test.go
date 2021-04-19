@@ -3,14 +3,22 @@ package webrtc
 import (
 	"testing"
 	"time"
+
+	"github.com/costinm/ugate/test"
 )
 
 func TestRTC(t *testing.T) {
 
-	pc1, off1, err := InitWebRTCS()
+	alice := test.InitTestServer(test.ALICE_KEYS, nil)
+	// Enable RTC for alice
+	pc1, off1, err := InitWebRTCS(alice, alice.Auth)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	bob := test.InitTestServer(test.BOB_KEYS, nil)
+	InitWebRTCS(bob, bob.Auth)
+
 
 	res, err := DialWebRTC(off1)
 	if err != nil {

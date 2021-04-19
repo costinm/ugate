@@ -1,6 +1,7 @@
 package ugatesvc
 
 import (
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/costinm/ugate"
@@ -17,41 +19,46 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// HTTP2 based transport, using the standard library in a custom mode.
+// HTTP2 based transport, using the standard library.
+// This handles the main https port (BTS), as well as QUIC/H3
+// Will authenticate the request if possible ( JWT or mTLS ).
 
 // It also implements http.Handler, and can be registered with a HTTP/2 or HTTP/1 server.
 // For HTTP/1 it will use websocket, with standard TLS and SPDY for crypto or mux.
 // For HTTP/2 it will the normal connection if mTLS was negotiated.
 // Otherwise will do a TLS+SPDY handshake for the POST method.
 type H2Transport struct {
-	ug     *UGate
-	Prefix string
+	ug *UGate
 
+	// the 'listener' object accepting
 	httpListener *listener
-	h2t          *http2.Transport
-	h2Server     *http2.Server
 
-	ALPNHandlers map[string]ugate.ConHandler
+	// Transport object for http2 library
+	h2t      *http2.Transport
+	h2Server *http2.Server
 
-	// Key is a Host:, as it would show in SOCKS and SNI
-	H2R map[string]*http2.ClientConn
+	// Client streams connected to 'upstream' servers.
+	// Connections will be maintained, with exp. backoff.
+	Reverse map[string]*ugate.Stream
 
-	reverse map[string]*ugate.Stream
-	fs      http.Handler
+	// Included file server, for UI.
+	fs    http.Handler
+	conns map[*http2.ClientConn]*ugate.DMNode
+
+	m sync.RWMutex
 }
 
 func NewH2Transport(ug *UGate) (*H2Transport, error) {
 	h2 := &H2Transport{
 		ug:           ug,
 		httpListener: newListener(),
+		conns: map[*http2.ClientConn]*ugate.DMNode{},
 		h2t: &http2.Transport{
-			ReadIdleTimeout: 10 * time.Second,
+			ReadIdleTimeout: 10000 * time.Second,
+			StrictMaxConcurrentStreams: false,
+			AllowHTTP: true,
 		},
-		reverse: map[string]*ugate.Stream{},
-		ALPNHandlers: map[string]ugate.ConHandler{
-
-		},
-		H2R: map[string]*http2.ClientConn{},
+		Reverse: map[string]*ugate.Stream{},
 	}
 	h2.h2Server = &http2.Server{}
 
@@ -69,19 +76,48 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 // UpdateReverseAccept updates the upstream accept connections, based on config.
 // Should be called when the config changes
 func (t *H2Transport) UpdateReverseAccept() {
+	ev := make(chan string)
 	for addr, key := range t.ug.Config.H2R {
-		t.maintainRemoteAccept(addr, key)
+		// addr is a hostname
+		dm := t.ug.GetOrAddNode(addr)
+		if dm.Addr == "" {
+			if key == "" {
+				dm.Addr = net.JoinHostPort(addr, "443")
+			} else {
+				dm.Addr = net.JoinHostPort(addr, "15007")
+			}
+		}
+
+		go t.maintainPinnedConnection(dm, ev)
 	}
-	for addr, str := range t.reverse {
+	<- ev
+	log.Println("maintainPinned connected for ", t.ug.Auth.VIP6)
+
+	// We can also let them die
+	for addr, str := range t.Reverse {
 		if _, f := t.ug.Config.H2R[addr]; !f {
 			log.Println("Closing removed upstream ", addr)
 			str.Close()
-			delete(t.reverse, addr)
+			t.m.Lock()
+			delete(t.Reverse, addr)
+			t.m.Unlock()
 		}
 	}
 }
 
 // Common entry point for H1, H2 - both plain and tls
+// Will do the 'common' operations - authn, authz, logging, metrics for all BTS and regular HTTP.
+//
+// Important:
+// When using for BTS we need to work around golang http stack implementation.
+// This should be used as fallback - QUIC and WebRTC have proper mux and TUN support.
+// In particular, while H2 POST and CONNECT allow req/res Body to act as TCP stream,
+// the closing (FIN/RST) are very tricky:
+// - ResponseWriter (in BTS server) does not have a 'Close' method, it is closed after
+//   the method returns. That means we can't signal the TCP FIN or RST, which breaks some
+//   protocols.
+// - The request must be fully consumed before the method returns.
+//
 func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t0 := time.Now()
 	var Pub []byte
@@ -122,15 +158,24 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		pk1 := r.TLS.PeerCertificates[0].PublicKey
+	tls := r.TLS
+	us := r.Context().Value("ugate.stream")
+	if ugs, ok := us.(*ugate.Stream); ok {
+		tls = ugs.TLS
+		r.TLS = tls
+	}
+
+	if tls != nil && len(tls.PeerCertificates) > 0 {
+		pk1 := tls.PeerCertificates[0].PublicKey
 		Pub = auth.PublicKeyBytesRaw(pk1)
 		// TODO: Istio-style, signed by a trusted CA. This is also for SSH-with-cert
-		sans, _ := auth.GetSAN(r.TLS.PeerCertificates[0])
+		sans, _ := auth.GetSAN(tls.PeerCertificates[0])
 		if len(sans) > 0 {
 			SAN = sans[0]
 		}
 	}
+
+	log.Println("Received ", r.RequestURI)
 
 	// TODO: authz for each case !!!!
 
@@ -148,7 +193,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HTTP/1.1
+	// HTTP/1.1 ?
 	if r.Method == "CONNECT" {
 		// WS or HTTP Proxy
 	}
@@ -156,15 +201,28 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	//if r.ProtoMajor > 1 {
 		if len(parts) > 2 {
-			if parts[1] == "h2r" {
+			if parts[1] == "_dm" {
+				w.WriteHeader(201)
+				w.Write([]byte(l.ug.Auth.ID))
+				return
+			} else 	if parts[1] == "h2r" {
 				// Regular H2 request, the ALPN negotiation failed due to infrastructure.
 				// Like WS, use one or more H2 forward streams to do the reverse H2.
 				// WIP:
-			} else if parts[1] == "dm" {
-				r.Host = parts[2]
-				r.URL.Scheme = "https"
-				r.URL.Path = strings.Join(parts[3:], "/")
 				str := ugate.NewStreamRequest(r, w, nil)
+				str.TLS = r.TLS // TODO: also get the ID from JWT
+				l.HandleH2R(str)
+				log.Println("H2R closed ")
+				return
+			} else if parts[1] == "dm" {
+				r1 := CreateUpstreamRequest(w, r)
+				r1.Host = parts[2]
+				r1.URL.Scheme = "https"
+				r1.URL.Host = r1.Host
+				r1.URL.Path = "/" + strings.Join(parts[3:], "/")
+
+				str := ugate.NewStreamRequest(r1, w, nil)
+				str.Dest = parts[2]
 				str.PostDialHandler = func(conn net.Conn, err error) {
 					if err != nil {
 						w.Header().Add("Error", err.Error())
@@ -172,12 +230,14 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						w.(http.Flusher).Flush()
 						return
 					}
+					w.Header().Set("Trailer", "X-Close")
 					w.WriteHeader(200)
 					w.(http.Flusher).Flush()
 				}
 				str.Dest = parts[2]
 
 				l.ug.HandleVirtualIN(str)
+				log.Println("TUN DONE ", parts)
 				return
 			} else if parts[1] == "tcp" {
 				// Will use r.Host to find the destination - not sure if this is right.
@@ -200,10 +260,10 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Handle accepted connection on a port declared as "http"
-// Will sniff H2 and use the right handler.
+// Will sniff H2 and http/1.1 and use the right handler.
 //
 // Ex: curl localhost:9080/debug/vars --http2-prior-knowledge
-func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, bconn *ugate.RawConn) error {
+func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, bconn *ugate.BufferedStream) error {
 	err := SniffH2(bconn)
 	if err != nil {
 		return err
@@ -236,9 +296,50 @@ func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, bconn *ugate.RawCon
 	return nil
 }
 
-// Implements the Handle connection interface for uGate.
+var (
+	// ClientPreface is the string that must be sent by new
+	// connections from clients.
+	h2ClientPreface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+)
+
+
+func SniffH2(br *ugate.BufferedStream) error {
+	br.Sniff()
+	var proto string
+
+	for {
+		_, err := br.Fill()
+		if err != nil {
+			return err
+		}
+		off := br.End
+		if ix := bytes.IndexByte(br.Buf[0:off], '\n'); ix >=0 {
+			if bytes.Contains(br.Buf[0:off], []byte("HTTP/1.1")) {
+				proto = ugate.ProtoHTTP
+				break
+			}
+		}
+		if off >= len(h2ClientPreface) {
+			if bytes.Equal(br.Buf[0:len(h2ClientPreface)], h2ClientPreface) {
+				proto = ugate.ProtoH2
+				break
+			}
+		}
+	}
+
+	// All bytes in the buffer will be Read again
+	br.Reset(0)
+	br.Stream.Type = proto
+
+	return nil
+}
+
+
+// Handle implements the connection interface for uGate, for HTTPS
+// listeners.
 //
-func (t *H2Transport) Handle(c ugate.MetaConn) error {
+// Blocking.
+func (t *H2Transport) HandleHTTPS(c ugate.MetaConn) error {
 	// http2 and http expect a net.Listener, and do their own accept()
 	str := c.Meta()
 	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2r" {
@@ -257,11 +358,10 @@ func (t *H2Transport) Handle(c ugate.MetaConn) error {
 		return nil
 	}
 
-	if str.Type == ugate.ProtoConnect {
-		t.httpListener.incoming <- c
-		// TODO: wait for connection to be closed.
-		<-str.Context().Done()
-	}
+	// Else: HTTP/1.1
+	t.httpListener.incoming <- c
+	// TODO: wait for connection to be closed.
+	<-str.Context().Done()
 
 	return nil
 }

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/costinm/ugate/pkg/msgs"
+	msgs "github.com/costinm/ugate/webpush"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"

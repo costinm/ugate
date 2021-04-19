@@ -1,16 +1,11 @@
 package webrtc
 
 import (
-	"io"
 	"log"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 
-	"github.com/pion/datachannel"
-	"github.com/pion/logging"
-	"github.com/pion/sctp"
 	"github.com/pion/turn/v2"
 )
 // Add:
@@ -29,24 +24,6 @@ import (
 // - ZRTP/6189 and MIKEY for master key
 //
 
-
-// DialDTLS uses low-level dtls.
-func DialDTLS(dest string) (io.ReadWriteCloser, error){
-	a1, err := sctp.Client(sctp.Config{})
-	if err != nil {
-		return nil, err
-	}
-	return datachannel.Dial(a1, 1, &datachannel.Config{})
-}
-
-// DialSCTP uses low-level SCTP to connect to an address.
-func DialSCTP() (io.ReadWriteCloser, error){
-	a1, err := sctp.Client(sctp.Config{})
-	if err != nil {
-		return nil, err
-	}
-	return datachannel.Dial(a1, 1, &datachannel.Config{})
-}
 
 // InitTURN creates a TURN server for the connected mesh nodes.
 // By default, it will only forward to the mesh.
@@ -116,124 +93,124 @@ func InitTURN(publicIP string) error {
 
 	return nil
 }
-
-// Blocking server.
-// Issue: NetConn for a server needs to 'latch' to a port, to emulate a connection. Yet we want to use
-// the same port on server side.
-func (r *RTC) InitSCTPS(port int) error {
-	addr := net.UDPAddr{
-		IP:   net.IPv4(0, 0, 0, 0),
-		Port: port,
-	}
-
-	conn, err := net.ListenUDP("udp", &addr)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	config := sctp.Config{
-		NetConn:       &disconnectedPacketConn{pConn: conn},
-		LoggerFactory: logging.NewDefaultLoggerFactory(),
-	}
-	a, err := sctp.Server(config)
-	if err != nil {
-		return err
-	}
-
-	s, err := a.AcceptStream()
-
-	s.SetReliabilityParams(true, sctp.ReliabilityTypeTimed, 10)
-
-	s.WriteSCTP([]byte("hi"), sctp.PayloadTypeWebRTCBinary)
-	s.Write([]byte{1})
-	return nil
-}
-
-func (r *RTC) InitSCTP(addr string) error {
-	conn, err := net.Dial("udp", "127.0.0.1:5678")
-	if err != nil {
-		log.Panic(err)
-	}
-	defer conn.Close()
-
-	config := sctp.Config{
-		NetConn:       conn,
-		LoggerFactory: logging.NewDefaultLoggerFactory(),
-	}
-	a, err := sctp.Client(config)
-	if err != nil {
-		return err
-	}
-
-	s, err := a.OpenStream(0, sctp.PayloadTypeWebRTCBinary)
-
-	s.SetReliabilityParams(true, sctp.ReliabilityTypeTimed, 10)
-
-	s.WriteSCTP([]byte("hi"), sctp.PayloadTypeWebRTCBinary)
-	s.Write([]byte{1})
-	return nil
-}
-
-
-
-
-type disconnectedPacketConn struct { // nolint: unused
-	mu    sync.RWMutex
-	rAddr net.Addr
-	pConn net.PacketConn
-}
-
-// Read
-func (c *disconnectedPacketConn) Read(p []byte) (int, error) {
-	i, rAddr, err := c.pConn.ReadFrom(p)
-	if err != nil {
-		return 0, err
-	}
-
-	c.mu.Lock()
-	c.rAddr = rAddr
-	c.mu.Unlock()
-
-	return i, err
-}
-
-// Write writes len(p) bytes from p to the DTLS connection
-func (c *disconnectedPacketConn) Write(p []byte) (n int, err error) {
-	return c.pConn.WriteTo(p, c.RemoteAddr())
-}
-
-// Close closes the conn and releases any Read calls
-func (c *disconnectedPacketConn) Close() error {
-	return c.pConn.Close()
-}
-
-// LocalAddr is a stub
-func (c *disconnectedPacketConn) LocalAddr() net.Addr {
-	if c.pConn != nil {
-		return c.pConn.LocalAddr()
-	}
-	return nil
-}
-
-// RemoteAddr is a stub
-func (c *disconnectedPacketConn) RemoteAddr() net.Addr {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.rAddr
-}
-
-// SetDeadline is a stub
-func (c *disconnectedPacketConn) SetDeadline(t time.Time) error {
-	return nil
-}
-
-// SetReadDeadline is a stub
-func (c *disconnectedPacketConn) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-// SetWriteDeadline is a stub
-func (c *disconnectedPacketConn) SetWriteDeadline(t time.Time) error {
-	return nil
-}
+//
+//// Blocking server.
+//// Issue: NetConn for a server needs to 'latch' to a port, to emulate a connection. Yet we want to use
+//// the same port on server side.
+//func (r *RTC) InitSCTPS(port int) error {
+//	addr := net.UDPAddr{
+//		IP:   net.IPv4(0, 0, 0, 0),
+//		Port: port,
+//	}
+//
+//	conn, err := net.ListenUDP("udp", &addr)
+//	if err != nil {
+//		return err
+//	}
+//	defer conn.Close()
+//
+//	config := sctp.Config{
+//		NetConn:       &disconnectedPacketConn{pConn: conn},
+//		LoggerFactory: logging.NewDefaultLoggerFactory(),
+//	}
+//	a, err := sctp.Server(config)
+//	if err != nil {
+//		return err
+//	}
+//
+//	s, err := a.AcceptStream()
+//
+//	s.SetReliabilityParams(true, sctp.ReliabilityTypeTimed, 10)
+//
+//	s.WriteSCTP([]byte("hi"), sctp.PayloadTypeWebRTCBinary)
+//	s.Write([]byte{1})
+//	return nil
+//}
+//
+//func (r *RTC) InitSCTP(addr string) error {
+//	conn, err := net.Dial("udp", "127.0.0.1:5678")
+//	if err != nil {
+//		log.Panic(err)
+//	}
+//	defer conn.Close()
+//
+//	config := sctp.Config{
+//		NetConn:       conn,
+//		LoggerFactory: logging.NewDefaultLoggerFactory(),
+//	}
+//	a, err := sctp.Client(config)
+//	if err != nil {
+//		return err
+//	}
+//
+//	s, err := a.OpenStream(0, sctp.PayloadTypeWebRTCBinary)
+//
+//	s.SetReliabilityParams(true, sctp.ReliabilityTypeTimed, 10)
+//
+//	s.WriteSCTP([]byte("hi"), sctp.PayloadTypeWebRTCBinary)
+//	s.Write([]byte{1})
+//	return nil
+//}
+//
+//
+//
+//
+//type disconnectedPacketConn struct { // nolint: unused
+//	mu    sync.RWMutex
+//	rAddr net.Addr
+//	pConn net.PacketConn
+//}
+//
+//// Read
+//func (c *disconnectedPacketConn) Read(p []byte) (int, error) {
+//	i, rAddr, err := c.pConn.ReadFrom(p)
+//	if err != nil {
+//		return 0, err
+//	}
+//
+//	c.mu.Lock()
+//	c.rAddr = rAddr
+//	c.mu.Unlock()
+//
+//	return i, err
+//}
+//
+//// Write writes len(p) bytes from p to the DTLS connection
+//func (c *disconnectedPacketConn) Write(p []byte) (n int, err error) {
+//	return c.pConn.WriteTo(p, c.RemoteAddr())
+//}
+//
+//// Close closes the conn and releases any Read calls
+//func (c *disconnectedPacketConn) Close() error {
+//	return c.pConn.Close()
+//}
+//
+//// LocalAddr is a stub
+//func (c *disconnectedPacketConn) LocalAddr() net.Addr {
+//	if c.pConn != nil {
+//		return c.pConn.LocalAddr()
+//	}
+//	return nil
+//}
+//
+//// RemoteAddr is a stub
+//func (c *disconnectedPacketConn) RemoteAddr() net.Addr {
+//	c.mu.RLock()
+//	defer c.mu.RUnlock()
+//	return c.rAddr
+//}
+//
+//// SetDeadline is a stub
+//func (c *disconnectedPacketConn) SetDeadline(t time.Time) error {
+//	return nil
+//}
+//
+//// SetReadDeadline is a stub
+//func (c *disconnectedPacketConn) SetReadDeadline(t time.Time) error {
+//	return nil
+//}
+//
+//// SetWriteDeadline is a stub
+//func (c *disconnectedPacketConn) SetWriteDeadline(t time.Time) error {
+//	return nil
+//}

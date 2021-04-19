@@ -56,6 +56,9 @@ auto-detecting TLS.
 
 # TODO
 
+- P1: register dialers ( webrtc, quic, etc) for muxed connections and streams
+- P1: webrtc listener to create new peerconnection after one is used, dial to use a synth. SDP string.
+
 - UDP
 - P2: (separate repo) WebRTC/TURN/STUN compat - check perf against H2 and SNI routing
 - P2: K8s compat  (konectivity ?), KNative
@@ -70,3 +73,4 @@ auto-detecting TLS.
 - P0: mangled hostname: KEYID.namespace.TRUST_DOMAIN in certs and SNI routes. Use pod ID as SAN, Istio Spiffe based on
   SA from JWT + namespace
 - P2: OIDC auth (to support certs), VAPID extensions for OIDC compat (send cert)
+

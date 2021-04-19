@@ -46,6 +46,8 @@ func (gw *LLDiscovery) PeriodicThread() error {
 
 // TODO: make sure it is called when android changes interfaces (AP, CON events)
 
+var brokenAndroidNetworks = false
+
 // RefreshNetworks will update the list of ActiveInterface networks, and ensure each has a listener.
 // Local communication uses the link-local address. If the interface
 // is connected to an Android AP, it uses a link-local multicast address instead.
@@ -54,6 +56,11 @@ func (gw *LLDiscovery) PeriodicThread() error {
 // - Also called from android at startup and property changes ( "P" - properties ).
 // - 15-min thread on link local
 func (gw *LLDiscovery) RefreshNetworks() {
+	if brokenAndroidNetworks {
+		go gw.AnnounceMulticast()
+		return
+	}
+
 	refreshMutex.Lock()
 	defer refreshMutex.Unlock()
 
@@ -61,7 +68,14 @@ func (gw *LLDiscovery) RefreshNetworks() {
 	newAct, err := ActiveNetworks(gw)
 
 	if err != nil {
+		// In android ActiveNetworks doesn't work, permission denied.
 		log.Println("Error getting active networks ", err)
+		brokenAndroidNetworks = true
+		// Fallback
+		go gw.AnnounceMulticast()
+
+		log.Println("MCDirect: RefreshNetworks", time.Since(t0))
+
 		return
 	}
 	unchanged := map[string]*ActiveInterface{}
@@ -94,10 +108,6 @@ func (gw *LLDiscovery) RefreshNetworks() {
 		changed = true
 		// No longer ActiveInterface. The socket is probably closed already
 		log.Println("MCDirect: Interface no longer active ", existing)
-		if existing.AndroidAP {
-			gw.ApStopTime = time.Now()
-			gw.ApRunTime = gw.ApRunTime + gw.ApStopTime.Sub(gw.ApStartTime)
-		}
 		if existing.unicastUdpServer != nil {
 			existing.unicastUdpServer.Close()
 		}
@@ -194,9 +204,6 @@ func (gw *LLDiscovery) RefreshNetworks() {
 				IP:   MulticastDiscoveryIP4,
 				Port: gw.mcPort,
 				Zone: a.iface.Name,
-			}
-			if a.AndroidAP {
-				gw.ApStartTime = time.Now()
 			}
 			if a.IP6LL != nil {
 				m, err := net.ListenMulticastUDP("udp6", a.iface, mc6APUDPAddr)
@@ -295,7 +302,7 @@ func ActiveNetworks(gw *LLDiscovery) (map[string]*ActiveInterface, error) {
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		log.Println("failed to get intefaces", err)
+		// Android - denied on recent versions. "route ip+net: netlinkrib: permission denied"
 		return nil, err
 	}
 	gw.ActiveP2P = ""

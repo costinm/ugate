@@ -1,19 +1,23 @@
 package ugatesvc
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/pkg/cfgfs"
 	msgs "github.com/costinm/ugate/webpush"
 )
 
@@ -28,8 +32,10 @@ type UGate struct {
 
 	// Default dialer used to connect to host:port extracted from metadata.
 	// Defaults to net.Dialer, making real connections.
-	// Can be replaced with a mux or egress dialer or router.
-	Dialer ugate.ContextDialer
+	//
+	// Can be replaced with a mux or egress dialer or router for
+	// integration.
+	parentDialer ugate.ContextDialer
 
 	// Configurations, keyed by host + port and URL.
 	Conf map[string]*ugate.Listener
@@ -38,9 +44,6 @@ type UGate struct {
 
 	// Handlers for incoming connections - local accept or forwarding.
 	Mux *http.ServeMux
-
-	// Handlers for egress - source is local. Default is to forward using Dialer.
-	EgressMux *http.ServeMux
 
 	// template, used for TLS connections and the host ID
 	TLSConfig *tls.Config
@@ -62,27 +65,53 @@ type UGate struct {
 	m     sync.RWMutex
 	Auth  *auth.Auth
 
-	Msg *msgs.Pubsub
+	Msg *msgs.Mux
+}
+
+func (ug *UGate) OnConnect(c ugate.ContextDialer, id string) {
+}
+
+func (ug *UGate) OnDisconnect(c ugate.ContextDialer, id string) {
+}
+
+func NewConf(base ...string) ugate.ConfStore {
+	return cfgfs.NewConf(base...)
+}
+func Get(h2 ugate.ConfStore, name string, to interface{}) error {
+	raw, err := h2.Get(name)
+	if err != nil {
+		log.Println("name:", err)
+		raw = []byte("{}")
+		//return nil
+	}
+	if len(raw) > 0 {
+		// TODO: detect yaml or proto ?
+		if err := json.Unmarshal(raw, to); err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+	return nil
 }
 
 func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.ConfStore) *UGate {
-	if cfg == nil {
-		// No config storage - test mode.
-		if cs == nil {
-			cfg = &ugate.GateCfg {
-				BasePort: 0,
-				Domain: "h.webinf.info",
-			}
-		} else {
-			bp := ugate.ConfInt(cs, "BASE_PORT", 15000)
+	ug := New(cs, a, cfg)
+	if d != nil {
+		ug.parentDialer = d
+	}
+	ug.Start()
+	return ug
+}
 
-			cfg = &ugate.GateCfg{
-				BasePort: bp,
-				Domain:   ugate.ConfStr(cs, "DOMAIN", "h.webinf.info"),
-				H2R: map[string]string{
-					"c1.webinf.info": "",
-				},
-			}
+func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
+	if cs == nil {
+		cs = cfgfs.NewConf()
+	}
+	if cfg == nil {
+		bp := ugate.ConfInt(cs, "BASE_PORT", 15000)
+
+		cfg = &ugate.GateCfg{
+			BasePort: bp,
 		}
 	}
 	if cfg.H2R == nil {
@@ -95,12 +124,14 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 		cfg.Listeners = map[string]*ugate.Listener{}
 	}
 
-	if cs != nil {
-		Get(cs, "ugate", cfg)
-	}
+	// Merge 'ugate' JSON config, from config store.
+	Get(cs, "ugate", cfg)
 
-	if d == nil {
-		d = &net.Dialer{}
+	if cfg.Domain == "" {
+		cfg.Domain = ugate.ConfStr(cs, "DOMAIN", "h.webinf.info")
+		if len(cfg.H2R) == 0 {
+			cfg.H2R[cfg.Domain] = ""
+		}
 	}
 
 	if a == nil {
@@ -108,19 +139,18 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 	}
 
 	ug := &UGate{
-		Listeners: map[string]*Listener{},
-		Dialer:    d,
-		Config:    cfg,
-		NodesByID: map[string]*ugate.DMNode{},
-		Nodes:     map[uint64]*ugate.DMNode{},
-		Conf:      map[string]*ugate.Listener{},
-		Mux:       http.NewServeMux(),
-		EgressMux: http.NewServeMux(),
-		Auth:      a,
-		ActiveTcp: map[int]*ugate.Stream{},
+		Listeners:    map[string]*Listener{},
+		parentDialer: &net.Dialer{},
+		Config:       cfg,
+		NodesByID:    map[string]*ugate.DMNode{},
+		Nodes:        map[uint64]*ugate.DMNode{},
+		Conf:         map[string]*ugate.Listener{},
+		Mux:          http.NewServeMux(),
+		Auth:         a,
+		ActiveTcp:    map[int]*ugate.Stream{},
 		DefaultListener: &ugate.Listener{
 		},
-		Msg: msgs.NewPubsub(),
+		Msg: msgs.DefaultMux,
 	}
 
 
@@ -129,7 +159,7 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 		//PreferServerCipherSuites: ugate.preferServerCipherSuites(),
 		InsecureSkipVerify: true,                  // This is not insecure here. We will verify the cert chain ourselves.
 		ClientAuth:         tls.RequestClientCert, // not require - we'll fallback to JWT
-		Certificates:       a.TlsCerts,
+		Certificates:       []tls.Certificate{*a.Cert}, // a.TlsCerts,
 		VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
 			panic("tls config not specialized for peer")
 		},
@@ -144,15 +174,15 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 			if ok {
 				return c, nil
 			}
-			return &ug.Auth.TlsCerts[0], nil
+			return ug.Auth.Cert, nil
 		},
 
 		//SessionTicketsDisabled: true,
 	}
 
-	ug.H2Handler, _ = NewH2Transport(ug)
+	msgs.InitMux(ug.Msg,ug.Mux, ug.Auth)
 
-	go ug.H2Handler.UpdateReverseAccept()
+	ug.H2Handler, _ = NewH2Transport(ug)
 
 	ug.Mux.Handle("/debug/", http.DefaultServeMux)
 	ug.Mux.HandleFunc("/dmesh/tcpa", ug.HttpTCP)
@@ -162,8 +192,12 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 	ug.Mux.HandleFunc("/jwks", ug.Auth.HandleJWK)
 	ug.Mux.HandleFunc("/sts", ug.Auth.HandleSTS)
 
-	ug.Mux.HandleFunc("/msg/", ug.Msg.HandleMsg)
+	return ug
+}
 
+// Start listening on all configured ports.
+func (ug *UGate) Start() {
+	go ug.H2Handler.UpdateReverseAccept()
 	ug.DefaultPorts(ug.Config.BasePort)
 
 	// Explicit TCP forwarders.
@@ -172,55 +206,27 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 		ug.Add(t)
 	}
 
+	log.Println("Starting uGate ", ug.Config.Name,
+		ug.Config.BasePort,
+		auth.IDFromPublicKey(auth.PublicKey(ug.Auth.Cert.PrivateKey)),
+		ug.Auth.VIP6)
 
-
-	return ug
 }
 
+
 // Expects the result to be validated and do ALPN.
-//func (ug *UGate) DialTLS(net, addr string, tc *tls.Config) {
+//func (ug *UGate) dialTLS(net, addr string, tc *tls.Config) {
 //
 //}
 
-// DialContext creates  connection to the remote addr.
-// Supports:
-// - tcp - normal tcp address, using the gate dialer.
-// - tls - tls connection, using the gate workload identity.
-// - h2r - h2r connection, suitable for reverse H2.
-func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
-	tcpC, err := ug.Dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
+func NewDMNode() *ugate.DMNode {
+	now := time.Now()
+	return &ugate.DMNode{
+		Labels:       map[string]string{},
+		FirstSeen:    now,
+		LastSeen:     now,
+		NodeAnnounce: &ugate.NodeAnnounce{},
 	}
-
-	if "tls" == netw {
-		// TODO: parse addr as URL or VIP6 extract peer ID
-		return ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", nil)
-	}
-	if "h2r" == netw {
-		// TODO: parse addr as URL or VIP6 extract peer ID
-		return ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", []string{"h2r", "h2"})
-	}
-
-	return tcpC, err
-}
-
-// DialTLS opens a direct TLS connection using the dialer for TCP.
-// No peer verification - the returned stream will have the certs.
-// addr is a real internet address, not a mesh one.
-func (ug *UGate) DialTLS(addr string, alpn []string) (*ugate.Stream, error) {
-	ctx, cf := context.WithTimeout(context.Background(), 5*time.Second)
-	tcpC, err := ug.Dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	// TODO: parse addr as URL or VIP6 extract peer ID
-	t, err := ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", alpn)
-	if err != nil {
-		return nil, err
-	}
-	cf()
-	return t.Meta(), nil
 }
 
 func (ug *UGate) GetNode(id string) *ugate.DMNode {
@@ -229,16 +235,33 @@ func (ug *UGate) GetNode(id string) *ugate.DMNode {
 	if n == nil {
 		n = ug.Config.Hosts[id]
 	}
+	// Make sure it is set correctly.
+	if n != nil && n.ID == "" {
+		n.ID = id
+	}
 	ug.m.RUnlock()
 	return n
 }
 
+// GetOrAddNode will get a node, and if not found create one,
+// updating "FirstSeen". LastSeen will be update as well.
+// NodesByID will be updated.
+//
+// id is a hostname or meshid, without port.
 func (ug *UGate) GetOrAddNode(id string) *ugate.DMNode {
 	ug.m.Lock()
 	n := ug.NodesByID[id]
 	if n == nil {
+		n = ug.Config.Hosts[id]
+	}
+	// Make sure it is set correctly.
+	if n != nil && n.ID == "" {
+		n.ID = id
+	}
+	if n == nil {
 		n = &ugate.DMNode{
 			FirstSeen: time.Now(),
+			ID:        id,
 		}
 		ug.NodesByID[id] = n
 	}
@@ -247,6 +270,85 @@ func (ug *UGate) GetOrAddNode(id string) *ugate.DMNode {
 	return n
 }
 
+// All streams must call this method, and defer OnStreamDone
+func (ug *UGate) OnStream(s *ugate.Stream) {
+	ug.m.Lock()
+	ug.ActiveTcp[s.StreamId] = s
+	ug.m.Unlock()
+
+	ugate.TcpConActive.Add(1)
+	ugate.TcpConTotal.Add(1)
+}
+
+// Called at the end of the connection handling. After this point
+// nothing should use or refer to the connection, both proxy directions
+// should already be closed for write or fully closed.
+func (ug *UGate) OnStreamDone(rc ugate.MetaConn) {
+	str := rc.Meta()
+	ug.m.Lock()
+	delete(ug.ActiveTcp, str.StreamId)
+	ug.m.Unlock()
+	ugate.TcpConActive.Add(-1)
+	// TODO: track multiplexed streams separately.
+	if str.ReadErr != nil {
+		ugate.VarzSErrRead.Add(1)
+	}
+	if str.WriteErr != nil {
+		ugate.VarzSErrWrite.Add(1)
+	}
+	if str.ProxyReadErr != nil {
+		ugate.VarzCErrRead.Add(1)
+	}
+	if str.ProxyWriteErr != nil {
+		ugate.VarzCErrWrite.Add(1)
+	}
+
+	if r := recover(); r != nil {
+
+		debug.PrintStack()
+
+		// find out exactly what the error was and set err
+		var err error
+
+		switch x := r.(type) {
+		case string:
+			err = errors.New(x)
+		case error:
+			err = x
+		default:
+			err = errors.New("Unknown panic")
+		}
+		log.Println("AC: Recovered in f", r, err)
+	}
+
+	if str.ReadErr != io.EOF && str.ReadErr != nil ||
+			str.WriteErr != nil {
+		log.Println("Err in:", str.ReadErr, str.WriteErr)
+	}
+	if str.ProxyReadErr != nil || str.ProxyWriteErr != nil {
+		log.Println("Err out:", str.ProxyReadErr, str.ProxyWriteErr)
+	}
+	if !str.Closed {
+		str.Close()
+	}
+
+	log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
+		str.StreamId,
+		str.Type, rc.RemoteAddr(),
+		str.Dest,
+		str.RcvdPackets, str.RcvdBytes,
+		str.SentPackets, str.SentBytes,
+		time.Since(str.LastWrite),
+		time.Since(str.LastRead),
+		int64(time.Since(str.Open).Seconds()))
+
+	if bc, ok := rc.(*ugate.BufferedStream); ok {
+		ugate.BufferedConPool.Put(bc)
+	}
+}
+
+// RemoteID returns the node ID based on authentication.
+//
 func RemoteID(s *ugate.Stream)  string {
 	if s.TLS == nil {
 		return ""
@@ -290,32 +392,36 @@ func (ug *UGate) Close() error {
 func (ug *UGate) DefaultPorts(base int) error {
 	// Set if running in a knative env.
 	knativePort := os.Getenv("PORT")
+	haddr := ""
 	if knativePort != "" {
-		ug.Add(&ugate.Listener{
-			Address: ":" + knativePort,
-			Protocol: ugate.ProtoHTTP,
-		})
-		// KNative doesn't support other ports by default - but still register them
+		haddr = ":" + knativePort
+	} else {
+		haddr = fmt.Sprintf("0.0.0.0:%d", base)
 	}
+	// ProtoHTTP detects H1/H2 and sends to ug.H2Handler
+	// That deals with auth and dispatches to ugate.Mux
+	ug.Add(&ugate.Listener{
+		Address: haddr,
+		Protocol: ugate.ProtoHTTP,
+	})
+	// KNative doesn't support other ports by default - but still register them
 
-	// Egress: iptables and SOCKS5
-	// Not on localhost - redirect changes the port, keeps IP
+	btsAddr := fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_BTS)
+	if os.Getuid() == 0 {
+		btsAddr = ":443"
+	}
+	// Main BTS port, with TLS certificates
+	ug.Add(&ugate.Listener{
+		Address:  btsAddr,
+		Protocol: ugate.ProtoHTTPS,
+		ALPN: []string{"h2"},
+	})
 
 	ug.Add(&ugate.Listener{
 		Address:  fmt.Sprintf("127.0.0.1:%d", base+ugate.PORT_SOCKS),
 		Protocol: ugate.ProtoSocks,
 	})
-	// TODO: add HTTP CONNECT for egress.
 
-	// Ingress: iptables ( capture all incoming )
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_IPTABLES),
-		Protocol: ugate.ProtoIPTables,
-	})
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_IPTABLES_IN),
-		Protocol: ugate.ProtoIPTablesIn,
-	})
 	// BTS - incoming, SNI, relay
 	// Normally should be 443 for SNI gateways
 	// Use iptables to redirect, or an explicit config for port 443 if running as root.
@@ -324,18 +430,6 @@ func (ug *UGate) DefaultPorts(base int) error {
 		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_SNI),
 		Protocol: ugate.ProtoTLS,
 	})
-
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_HTTPS),
-		Protocol: ugate.ProtoHTTPS,
-		Handler:  ug.H2Handler,
-	})
-	go func() {
-		err := http.ListenAndServe(fmt.Sprintf(":%d", base), ug.Mux)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}()
 
 	return nil
 }
@@ -352,7 +446,50 @@ func (ug *UGate) FindCfgIptablesIn(bconn ugate.MetaConn) *ugate.Listener {
 	return ug.DefaultListener
 }
 
-func (ug *UGate) httpEgressProxy(pl *ugate.Listener, bconn *ugate.RawConn) error {
-	return nil
+// HandleStream is called for accepted (incoming) streams.
+// Regular Http and messages are handled separatedly, don't call this.
+//
+// Multiplexed streams ( H2 ) also call this method.
+//
+// At this point the stream has the metadata:
+//
+// - RequestURI
+// - Host
+// - Headers
+// - TLS context
+// - Dest and Listener are set.
+//
+// In addition TrackStreamIn has been called.
+// This is a blocking method.
+func (ug *UGate) HandleStream(str *ugate.Stream) error {
+	if str.Listener == nil {
+		str.Listener = ug.DefaultListener
+	}
+	cfg := str.Listener
+
+	if cfg.Protocol == ugate.ProtoHTTPS {
+		str.PostDial(str, nil)
+		return ug.H2Handler.HandleHTTPS(str)
+	}
+
+	// Config has an in-process handler - not forwarding (or the handler may
+	// forward).
+	if cfg.Handler != nil {
+		// SOCKS and others need to send something back - we don't
+		// have a real connection, faking it.
+		str.PostDial(str, nil)
+		return cfg.Handler.Handle(str)
+	}
+
+	// By default, dial out
+	return ug.DialAndProxy(str)
 }
 
+
+// Handle is the main entry point for accepted streams over QUIC or WebRTC.
+// There is minimal info in the stream meta.
+func (ug *UGate) Handle(c ugate.MetaConn) error {
+	log.Println("UGate stream ", c.Meta())
+	// TODO: use metadata to dispatch
+	return nil
+}

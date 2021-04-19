@@ -1,0 +1,9 @@
+{
+  "domain": "svc.cluster.local",
+  "basePort": 6100,
+  "listeners": {
+    ":6109": {
+      "forwardTo": "localhost:5201"
+    }
+  }
+}

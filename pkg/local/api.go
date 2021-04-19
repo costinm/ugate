@@ -3,23 +3,17 @@ package local
 import (
 	"net"
 	"sync"
-	"time"
 
 	auth2 "github.com/costinm/ugate/pkg/auth"
-	"github.com/costinm/ugate"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 // link local announcements,discovery and messaging
-
-// LLDiscovery tracks local interfaces and neighbors.
-//
-// Aware of P2P links and Android specific behavior.
-// It also tracks Wifi information if available.
 type LLDiscovery struct {
 
 	// Will be updated with the list of active interfaces
-	// by Refresh() calls.
+	// by Refresh() calls or provided by Android.
+	// Key is the string representation of the address.
 	ActiveInterfaces map[string]*ActiveInterface
 
 	activeMutex sync.RWMutex
@@ -32,27 +26,15 @@ type LLDiscovery struct {
 
 	// Information about AP extracted from messages sent by the dmesh-l2 or Android application.
 
-	// Zero if AP is not running. Set to the time when AP started.
-	APStartTime time.Time
-	APRunning   bool
-	// Track if any of the interfaces is an Wifi AP.
-	ApStopTime  time.Time
-	ApStartTime time.Time
-	ApRunTime   time.Duration
 
 	// SSID and password of the AP
 	AP     string
 	APFreq string
 	PSK    string
-
 	// Set to the SSID of the main connection. 'w' param in the net status message.
 	ConnectedWifi string
 	WifiFreq      string
 	WifiLevel     string
-
-	// UpstreamAP is set if a local announce or registration from an AP has been received. In includes the IP4 and IP6
-	// of the AP and info. Will be used by Dial to initiate multiplexed connections ( SSH, future QUIC )
-	UpstreamAP *ugate.DMNode
 
 	// Port used to listen for multicast messages.
 	// Default 5227.
@@ -61,9 +43,9 @@ type LLDiscovery struct {
 	// Additional UDP port.
 	udpPort int
 
-	// QUIC link-local listeners will be started on this port or following ports.
 	// Defaults to 6970
 	baseListenPort int
+
 	gw             *ug.UGate
 
 	// Listening on * for signed messages
@@ -74,7 +56,9 @@ type LLDiscovery struct {
 	auth *auth2.Auth
 }
 
-// Track one interface.
+// ActiveInterface tracks one 'up' interface. Used for IPv6 multicast,
+// which requires 'zone', and to find the local addresses.
+// On recent Android - it is blocked by privacy and not used.
 type ActiveInterface struct {
 	// Interface name. Name containing 'p2p' results in specific behavior.
 	Name string

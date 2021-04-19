@@ -24,72 +24,142 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
-	"github.com/costinm/ugate/pkg/msgs"
 	"github.com/costinm/ugate/pkg/ugatesvc"
-	"github.com/costinm/wpgate/pkg/h2"
-	"github.com/costinm/wpgate/pkg/transport/eventstream"
+	msgs "github.com/costinm/ugate/webpush"
 )
 
 var (
-	// vapid  = flag.NewFlagSet("vapid", flag.ExitOnError)
-	// sub = vapid.String("sub", "", "Optional email or URL identifying the sender")
-	// vapid.Parse(os.Args[2:])
+	to = flag.String("to", "", "Destination, default to local node")
 
-	to = flag.String("to", "", "Destination, if not set will print info. A VIP6 or known hostname")
+	addr = flag.String("addr", "127.0.0.1:15007", "address:port for the node")
 
 	// Mesh: currently use .ssh/authorized_keys, known_hosts
 	// Webpush: file under .ssh/webpush/NAME or TO. Inside
-	sub = flag.String("sub", "",
+	hostid = flag.String("host", "",
 		"Optional email or URL identifying the sender, to look up the subscription")
 
+	sub = flag.String("sub", "",
+		"Subscribe")
+
 	aud  = flag.String("aud", "", "Generate a VAPID key with the given domain. Defaults to https://fcm.googleapis.com")
-	curl = flag.Bool("curl", false, "Show curl request")
 
 	watch      = flag.Bool("watch", false, "Watch")
-	dump      = flag.Bool("dump", false, "Dump id and authz")
-	dumpKnown = flag.Bool("k", false, "Dump known hosts and keys")
-
-	sendVerbose = flag.Bool("v", false, "Show request and response body")
+	recurse      = flag.Bool("r", false, "Crawl and watch all possible nodes")
 
 	pushService = flag.String("server", "", "Base URL for the dmesh service")
+
+
+	jwt=flag.String("jwt", "", "JWT to decode")
+	data=flag.String("data", "", "Message to send, if empty stdin will be used")
+
+	netcat = flag.String("nc", "",
+		"Netcat")
+
 )
 
 var (
-	port = flag.Int("p", -1, "Port for http interface. Will run as daemon")
-
-	watchRecurse   = flag.Bool("r", false, "Connect recursively to all nodes")
 	verbose = flag.Bool("v", false, "Verbose messages")
-
-	dev = flag.String("d", "", "Single device to watch")
-
-	post  = flag.String("m", "", "Message to send")
-	topic = flag.String("t", "", "Message to send")
 )
 
 var hc *http.Client
-
-
 
 const (
 	Subscription = "TO"
 )
 
-type Keys struct {
-	P256dh string ``
-	Auth   string ``
+func main() {
+	flag.Parse()
+	cfgDir := "./"
+	config := ugatesvc.NewConf(cfgDir, "./var/lib/dmesh/")
+
+	if *hostid == "" {
+		*hostid, _ = os.Hostname()
+	}
+	authz := auth.NewAuth(config, *hostid, "m.webinf.info")
+
+	ug := ugatesvc.New(config, authz, nil)
+
+	hc = &http.Client{
+		Transport: ug,
+	}
+
+	if *jwt != "" {
+		decode(*jwt, *aud)
+		return
+	}
+
+	if *aud != "" {
+		fmt.Println(authz.VAPIDToken(*aud))
+		return
+	}
+
+	if *netcat != "" {
+		Netcat(ug, *netcat, *addr)
+	}
+
+	if *watch {
+		watchNodes(ug)
+		return
+	}
+
+	if *sub != "" {
+		// Subscribe will add the given host to the list of nodes allowed to
+		// send messages to this node, and generate a subscription similar with
+		// browsers.
+		// Value is the public key of the sender.
+		subsc := subscribe(ug, *sub)
+		fmt.Println(subsc)
+		return
+	}
+
+	sendMessage(ug, *to, authz, *verbose, *data)
 }
 
-type Sub struct {
-	Endpoint string ``
+func Netcat(ug *ugatesvc.UGate, s string, via string) {
+	nc, err := ug.DialContext(context.Background(), "url", s)
+	if err != nil {
+		log.Fatal(err)
+	}
+	go func() {
+		b1 := make([]byte, 1024)
+		for {
+			n, err := nc.Read(b1)
+			if err != nil {
+				log.Fatal("Tun read err", err)
+			}
+			os.Stdout.Write(b1[0:n])
+		}
+	}()
+	b1 := make([]byte, 1024)
+	for {
+		n, err := os.Stdin.Read(b1)
+		if err != nil {
+			log.Fatal("Stding read err", err)
+		}
+		nc.Write(b1[0:n])
+	}
 }
 
-// Send the message.
-func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
-	//msg, err := ioutil.ReadAll(os.Stdin)
-	//if err != nil {
-	//	fmt.Println("Failed to read message")
-	//	os.Exit(3)
-	//}
+func subscribe(ug *ugatesvc.UGate, s string) string {
+	// TODO - create local permission/host, generate one for remote
+	// This doesn't require a running server, creates a file.
+	return ""
+}
+
+
+// Send a message.
+func sendMessage(ug *ugatesvc.UGate, toS string, vapid *auth.Auth, show bool,
+	msg string) {
+
+	var err error
+	if msg == "" {
+		msgB, err := ioutil.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Println("Failed to read message")
+			os.Exit(3)
+		}
+		msg = string(msgB)
+	}
 
 	destURL := ""
 	var destPubK []byte
@@ -136,13 +206,12 @@ func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
 			//authk = []byte{1}
 		}
 	}
-	var hc *http.Client
 
 	if *pushService != "" {
 		destURL = *pushService + "/push/"
-		hc = h2.InsecureHttp()
+		//hc = h2.InsecureHttp()
 	} else {
-		hc = h2.NewSocksHttpClient("127.0.0.1:5224")
+		//hc = h2.NewSocksHttpClient("127.0.0.1:5224")
 	}
 
 	ec := auth.NewContextSend(destPubK, authk)
@@ -182,7 +251,7 @@ func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
 		fmt.Println(string(dmp))
 		fmt.Println("Failed to send ", err, res.StatusCode)
 
-	} else if *sendVerbose {
+	} else if *verbose {
 		dmpReq, _ := httputil.DumpRequest(req, true)
 		fmt.Printf(string(dmpReq))
 		dmp, _ := httputil.DumpResponse(res, true)
@@ -190,40 +259,16 @@ func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
 	}
 }
 
-func main() {
-	flag.Parse()
-
-	// Using the SSH directory for keys and target.
-	cfgDir := os.Getenv("HOME") + "/.ssh/"
-	// File-based config
-	config := ugatesvc.NewConf(cfgDir, "./var/lib/dmesh/")
-	hn, _ := os.Hostname()
-
-	authz := auth.NewAuth(config, hn, "m.webinf.info")
-
-	if *watch {
-		watchNodes()
-		return
-	}
-	//if *dump {
-	//	authz.Dump()
-	//	return
-	//}
-	//if *dumpKnown {
-	//	authz.DumpKnown()
-	//	return
-	//}
-
-	sendMessage(*to, authz, *curl, flag.Args()[0])
-}
-
 // Known nodes and watchers
 var watchers = map[uint64]*watcher{}
 
+// Track a single node
 type watcher struct {
 	Node *ugate.DMNode
+
 	Path []string
 
+	// For crawling
 	dirty bool
 
 	base string
@@ -235,46 +280,49 @@ type watcher struct {
 }
 
 
-func watchNodes() {
-	var hc *http.Client
-	if *pushService != "" {
-		hc = h2.InsecureHttp()
-	} else {
-		hc = h2.NewSocksHttpClient("127.0.0.1:5224")
-	}
-	hc.Timeout = 1 * time.Hour
+// Connect to all known nodes and watch them.
+// Uses the internal debug endpoint for getting connected nodes,
+// and crawls the mesh.
+func watchNodes(ug *ugatesvc.UGate) {
+	ctx := context.Background()
 
-	mux := msgs.DefaultMux
+	if *recurse {
+		// Recursive list of all devices in the mesh.
+		for {
+			crawl() // Get nodes connected to our parent ( all directions )
 
-	// Recursive list of all devices in the mesh.
-	for {
-		listOnce()
-		if !*watch {
-			return
-		} else {
-			//if *dev == "*" || *dev == "" {
-			//	go msgs.DefaultMux.MonitorNode(hc, nil, nil)
-			//}
-			for _, w := range watchers {
-				//if w.idhex == *dev || *dev == "*" {
-				if !w.watching {
-					w.watching = true
-					go func() {
-						log.Println("Watch: ", w.ip6)
-
-						eventstream.MonitorNode(mux, hc, w.ip6)
-						w.watching = false
-						log.Println("Watch close: ", w.ip6)
-					}()
-				}
-
+			if !*watch {
+				return // Just crawl.
+			} else {
+				//if *dev == "*" || *dev == "" {
+				//	go msgs.DefaultMux.MonitorNode(hc, nil, nil)
 				//}
+				for _, w := range watchers {
+					//if w.idhex == *dev || *dev == "*" {
+					if !w.watching {
+						w.watching = true
+
+						go func() {
+							log.Println("Watch: ", w.ip6)
+
+							ug.Connect(ctx, w.Node, nil)
+							w.watching = false
+							log.Println("Watch close: ", w.ip6)
+						}()
+					}
+				}
 			}
+			time.Sleep(10 * time.Second)
+			//select {}
 		}
-		time.Sleep(10 * time.Second)
-		//select {}
+		return
 	}
 
+	n0 := &ugate.DMNode{
+		Addr: *addr,
+	}
+
+	ug.Connect(ctx, n0, nil)
 }
 
 // Get neighbors from a node. Side effect: updates the watchers table.
@@ -298,40 +346,54 @@ func neighbors(url string, path []string) map[uint64]*ugate.DMNode {
 	}
 
 	cnodes, _ := ioutil.ReadAll(res.Body)
-	cnodemap := map[uint64]*ugate.DMNode{}
-	err = json.Unmarshal(cnodes, &cnodemap)
+	connectedNodes := map[uint64]*ugate.DMNode{}
+	err = json.Unmarshal(cnodes, &connectedNodes)
 	if err != nil {
 		log.Println("HTTP_ERROR_RES", url, err, string(cnodes))
 		return nil
 	}
 
-	peers := []string{}
-
-	newdemap := map[uint64]*watcher{}
-	oldmap := map[uint64]*watcher{}
-	for k, v := range cnodemap {
-		w, f := watchers[k]
-		if !f {
-			ip6 := toIP6(k)
-			w = &watcher{Node: v, dirty: true, ip6: ip6,
-				idhex: fmt.Sprintf("%x", k),
-				Path:  path}
-			w.New = true
-			watchers[k] = w
-			newdemap[k] = w
-		} else {
-			oldmap[k] = w
+	if watchers != nil {
+		peers := []string{}
+		// Any node that is new, not yet found in the current watched list.
+		newConnectedNodes := map[uint64]*watcher{}
+		// Nodes already connected
+		oldmap := map[uint64]*watcher{}
+		for k, v := range connectedNodes {
+			w, f := watchers[k]
+			if !f {
+				ip6 := toIP6(k)
+				w = &watcher{Node: v, dirty: true, ip6: ip6,
+					idhex: fmt.Sprintf("%x", k),
+					Path:  path}
+				w.New = true
+				watchers[k] = w
+				newConnectedNodes[k] = w
+			} else {
+				oldmap[k] = w
+			}
+			peers = append(peers, w.idhex)
 		}
-		peers = append(peers, w.idhex)
+		if *verbose {
+			log.Println("GET", url, len(connectedNodes), peers)
+		}
 	}
-	if *verbose {
-		log.Println("GET", url, len(cnodemap), peers)
-	}
-	return cnodemap
+
+	return connectedNodes
 }
 
 // Scan all nodes for neighbors. Watch them if not watched already.
-func listOnce() {
+//
+// - Will first mark all currently known nodes as 'dirty' and 'old'.
+// - For each known node, get a list of connected nodes.
+// - For each connected node, if still connected update and set dirty=false
+// - If new nodes is found, add it as 'New' and 'dirty'.
+//
+// - repeat until all nodes are !dirty
+// - at the end, the set of nodes that are new will be marked as New.
+// -
+//
+func crawl() {
 	for _, v := range watchers {
 		v.dirty = true
 		v.New = false
@@ -404,7 +466,7 @@ func toIP6(k uint64) *net.IPAddr {
 	return ip6
 }
 
-func (w *watcher) monitor(addr *net.IPAddr) {
+func (w *watcher) monitor(ug *ugatesvc.UGate, addr *net.IPAddr) {
 
 	req, err := http.NewRequest("GET", "http://["+addr.String()+"]:5227/debug/events", nil)
 	if err != nil {
@@ -433,4 +495,15 @@ func (w *watcher) monitor(addr *net.IPAddr) {
 		log.Println(addr, ls)
 	}
 
+}
+
+func decode(jwt, aud string) {
+	// TODO: verify if it's a VAPID
+	parts := strings.Split(jwt, ".")
+	p1b, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	fmt.Println(string(p1b))
 }

@@ -3,6 +3,52 @@
 var kDatabaseName = 'WebRTC-Database';
 var gDatabase = null;
 
+function subscribeUserToPush(keyBase64) {
+    if (!('serviceWorker' in navigator)) {
+        // Service Worker isn't supported on this browser, disable or hide UI.
+        return;
+    }
+
+    if (!('PushManager' in window)) {
+        // Push isn't supported on this browser, disable or hide UI.
+        return;
+    }
+
+
+    return navigator.serviceWorker.register('/js/service-worker.js')
+        .then(function(registration) {
+            const subscribeOptions = {
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(keyBase64)
+            };
+
+            return registration.pushManager.subscribe(subscribeOptions);
+        })
+        .then(function(pushSubscription) {
+            console.log('Received PushSubscription: ', JSON.stringify(pushSubscription));
+            return pushSubscription;
+        });
+}
+
+// webpush - permission
+function askPermission() {
+    return new Promise(function(resolve, reject) {
+        const permissionResult = Notification.requestPermission(function(result) {
+            resolve(result);
+        });
+
+        if (permissionResult) {
+            permissionResult.then(resolve, reject);
+        }
+    })
+        .then(function(permissionResult) {
+            if (permissionResult !== 'granted') {
+                throw new Error('We weren\'t granted permission.');
+            }
+        });
+}
+
+
 function openDatabase() {
     return new Promise(function(resolve, reject) {
         var reqOpen = indexedDB.open(kDatabaseName);
