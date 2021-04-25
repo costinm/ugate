@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+
 // Stream is the main abstraction, representing a connection with metadata and additional
 // helpers.
 //
@@ -34,54 +35,58 @@ import (
 // stream can be used with H2 library.
 type Stream struct {
 
-	// Counter
-	// Key in the Active table.
+	// StreamId is based on a counter, it is the key in the Active table.
+	// Streams may also have local ids associated with the transport.
 	StreamId int
 
 	// In - data from remote.
-	// Can be a TCP or TLS net.Conn, a http request or response Body, or
-	// some other ReadCloser.
 	//
-	// Closing without fully reading may result in RST.
+	// - TCP or TLS net.Conn,
+	// - a http request Body (stream mapped to a http accepted connection in a Handler)
+	// - http response Body (stream mapped to a client http connection)
+	// - a QUIC stream - accepted or dialed
+	// - some other ReadCloser.
+	//
+	// Closing In without fully reading all data may result in RST.
+	//
+	// Normal process for close is to call CloseWrite, read fully the In and call Close on the stream.
 	In io.ReadCloser `json:"-"`
 
 	// Out - send to remote.
 	//
-	// Normally an instance of net.Conn or tls.Conn - both implementing CloseWrite and Close
-	//
-	// Not WriterCloser because it can be an http.ResponseWriter, which implements
-	// CloseWrite instead, but not Close. This is used in 'incoming HTTP' cases, using
-	// normal H2 API.
-	//
-	// Normal close sequence is to call CloseWrite on Out, and after reading the full In to call
-	// Close on In.
-	//
-	// Out may be nil, if the remote side is read only ( GET ) or if the creation of the
-	// stream passed a Reader object which is automatically piped to the Out, for example
-	// when a HTTP request is used.
+	// - an instance of net.Conn or tls.Conn - both implementing CloseWrite for FIN
+	// - http.ResponseWriter - for accepted HTTP connections, implements CloseWrite
+	// - a Pipe - for dialed HTTP connections, emulating DialContext behavior ( no body sent before connection is
+	//   completed)
+	// - nil, if the remote side is read only ( GET ) or if the creation of the
+	//   stream passed a Reader object which is automatically piped to the Out, for example
+	//   when a HTTP request is used.
 	Out io.Writer `json:"-"`
 
 	// Request associated with the stream. Will be set if the stream is
-	// received over H2/H3 (real or over another virtual connection),
-	// or if the stream is originated locally and sent to a H2/H3 dest.
-	// Headers will be passed to any proxied egress, according to http rules.
+	// received over HTTP (real or over another virtual connection),
+	// or if the stream is originated locally and sent to a HTTP dest.
+	// Deprecated
 	Request *http.Request `json:"-"`
 
 	// Set if the connection finished a TLS handshake.
 	// A 'dummy' value may be set if a sidecar terminated the connection.
+	// Deprecated - moved to MUX
 	TLS *tls.ConnectionState `json:"-"`
 
-	// Metadata to send on response. Stream implements http.ResponseWriter.
+	// Metadata to send. Stream implements http.ResponseWriter.
 	// For streams without metadata - will be ignored.
 	// Incoming metadata is set in Request.
-	ResponseHeader http.Header `json:"-"`
+	OutHeader http.Header `json:"-"`
 
-	// Remote mesh ID, if authenticated. Base32(SHA256(CERT))
+	// Header received from the remote.
+	// For egress it is the response headers.
+	// For ingress it is the request headers.
+	InHeader http.Header `json:"-"`
+
+	// Remote mesh ID, if authenticated. Base32(SHA256(PUB)) or Base32(PUB) (for ED)
 	// This can be used in DNS names, URLs, etc.
 	RemoteID string
-
-	// Remote VIP, last 8 bytes of the SHA256(Cert).
-	RemoteVIP net.IP
 
 	// Original dest - hostname or IP, including port. Parameter of the original Dial from the captured egress stream.
 	// May be a mesh IP6, host, etc. If original address was captured by IP, destIP will also be set.
@@ -129,18 +134,24 @@ type Stream struct {
 	RcvdPackets int
 
 	// If set, this is a circuit.
-	NextPath []string
+	//NextPath []string
 
 	// Set for circuits - path so far (over H2)
-	PrevPath []string
+	//PrevPath []string
 
 	// Additional closer, to be called after the proxy function is done and both client and remote closed.
 	Closer     func() `json:"-"`
+
+	// Methods to call when the stream is closed on the read side, i.e. received a FIN or RST or
+	// the context was canceled.
 	ReadCloser func() `json:"-"`
 
 	// Set if CloseWrite() was called, which should result in a FIN sent.
 	// This should happen if a EOF was received when proxying.
 	ServerClose bool `json:"-"`
+
+	// Set if the client has sent the FIN, and gateway sent the FIN to server
+	ClientClose bool `json:"-"`
 
 	// Set if Close() was called.
 	Closed bool `json:"-"`
@@ -148,6 +159,12 @@ type Stream struct {
 	// Errors associated with this stream, read from or write to.
 	ReadErr  error `json:"-"`
 	WriteErr error `json:"-"`
+
+	// Only for 'accepted' streams (server side), in proxy mode: keep track
+	// of the client side. The server is driving the proxying.
+	ProxyReadErr  error `json:"-"`
+	ProxyWriteErr error `json:"-"`
+
 
 	// Context and cancel funciton for this stream.
 	ctx       context.Context `json:"-"`
@@ -158,8 +175,11 @@ type Stream struct {
 	// Set for accepted connections, with the config associated with the listener.
 	Listener *Listener `json:"-"`
 
-	// Optional function to call after dial. Used to send metadata
-	// back to the protocol ( for example SOCKS)
+	// Optional function to call after dial (proxied streams) or after a stream handling has started for local handlers.
+	// Used to send back metadata or finish the handshake.
+	//
+	// For example in SOCKS it sends back the IP/port of the remote.
+	// net.Conn may be a Stream or a regular TCP/TLS connection.
 	PostDialHandler func(net.Conn, error) `json:"-"`
 
 	// True if the Stream is originated from local machine, i.e.
@@ -167,21 +187,10 @@ type Stream struct {
 	Egress bool
 
 	// If the stream is multiplexed, this is the Mux.
-	Parent *Stream `json:"-"`
-
-	// If this stream is a 'mux connection', this is the Muxer interface.
-	// Streams to the same node will use this stream.
-	Muxer Muxer `json:"-"`
+	MUX *Muxer `json:"-"`
 
 	// ---------------------------------------------------------
 
-	// Only for 'accepted' streams (server side), in proxy mode: keep track
-	// of the client side. The server is driving the proxying.
-	ProxyReadErr  error `json:"-"`
-	ProxyWriteErr error `json:"-"`
-
-	// Set if the client has sent the FIN, and gateway sent the FIN to server
-	ClientClose bool `json:"-"`
 }
 
 // Create a new stream.
@@ -213,14 +222,14 @@ func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Stream) *Stre
 
 func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *Stream) *Stream {
 	return &Stream{
-		StreamId: int(atomic.AddUint32(&StreamId, 1)),
-		Open:     time.Now(),
-		ResponseHeader:  w.Header,
-		Request: r,
-		In:      w.Body, // Input from remote http
-		Out:     out, //
-		TLS:     r.TLS,
-		Dest:    r.Host,
+		StreamId:  int(atomic.AddUint32(&StreamId, 1)),
+		Open:      time.Now(),
+		OutHeader: w.Header,
+		Request:   r,
+		In:        w.Body, // Input from remote http
+		Out:       out, //
+		TLS:       r.TLS,
+		Dest:      r.Host,
 	}
 }
 
@@ -316,14 +325,12 @@ func (s *Stream) Read(out []byte) (int, error) {
 	s.RcvdBytes += n
 	s.RcvdPackets++
 	s.LastRead = time.Now()
-	err = eof(err)
 	if err != nil {
-		log.Println("XXXXX CLOSE ", err)
+		s.ReadErr = err
 		if s.ReadCloser != nil {
 			s.ReadCloser()
 			s.ReadCloser = nil
 		}
-		s.ReadErr = err
 	}
 	return n, err
 }
@@ -344,10 +351,19 @@ func (s *Stream) Close() error {
 	rw := s.HTTPResponse()
 	if rw != nil {
 		rw.Header().Set("X-Close", "1")
+		if DebugClose {
+			log.Println("Close HTTP via trailer", s.StreamId, s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		}
 	}
 	if c, ok := s.Out.(io.Closer); ok {
+		if DebugClose {
+			log.Println(s.StreamId, "Close(out) ", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		}
 		return c.Close()
 	} else {
+		if DebugClose {
+			log.Println(s.StreamId, "Close(in) ", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		}
 		return s.In.Close()
 	}
 }
@@ -360,15 +376,32 @@ func (s *Stream) CloseWrite() error {
 	s.ServerClose = true
 
 	if cw, ok := s.Out.(CloseWriter); ok {
+		if DebugClose {
+			log.Println(s.StreamId, "CloseWriter", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		}
 		return cw.CloseWrite()
 	} else {
 		if c, ok := s.Out.(io.Closer); ok {
-			log.Println("ServerOut is not CloseWriter - closing full connection")
+			if DebugClose {
+				log.Println(s.StreamId, "CloseWrite using Out.Close()",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+			}
 			return c.Close()
 		} else {
 			rw := s.HTTPResponse()
 			if rw != nil {
+				// Server side HTTP stream. For client side, FIN can be sent by closing the pipe (or
+				// request body). For server, the FIN will be sent when the handler returns - but
+				// this only happen after request is completed and body has been read. If server wants
+				// to send FIN first - while still reading the body - we are in trouble.
+
+				// That means HTTP2 TCP servers provide no way to send a FIN from server, without
+				// having the request fully read.
+				if DebugClose {
+					log.Println(s.StreamId, "CloseWrite using HTTP trailer ",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+				}
+				// This works for H2 with the current library.
 				rw.Header().Set("X-Close", "0")
+				rw.(http.Flusher).Flush()
 			} else {
 				log.Println("Server out not Closer nor CloseWriter")
 			}
@@ -402,10 +435,10 @@ func (s *Stream) Header() http.Header {
 	if rw, ok := s.Out.(http.ResponseWriter); ok {
 		return rw.Header()
 	}
-	if s.ResponseHeader == nil {
-		s.ResponseHeader = map[string][]string{}
+	if s.OutHeader == nil {
+		s.OutHeader = map[string][]string{}
 	}
-	return s.ResponseHeader
+	return s.OutHeader
 }
 
 func (s *Stream) WriteHeader(statusCode int) {
@@ -454,13 +487,13 @@ func (s *Stream) CopyBuffered(dst io.Writer, src io.Reader, srcIsRemote bool) (w
 		nr, er := src.Read(buf)
 		if er != nil && er != io.EOF {
 			if strings.Contains(er.Error(), "NetworkIdleTimeout") {
-				return written, nil
+				return written, io.EOF
 			}
 			return written, err
 		}
 		if nr == 0 {
 			// shouldn't happen unless err == io.EOF
-			return written, nil
+			return written, io.EOF
 		}
 		if nr > 0 {
 			if srcIsRemote {
@@ -574,7 +607,7 @@ func (s *Stream) ReadFrom(cin io.Reader) (n int64, err error) {
 		}
 		nr, er := cin.Read(buf)
 		if er != nil {
-			er = eof(err)
+			s.ProxyReadErr = er
 			return n, er
 		}
 		if nr > int(VarzMaxRead.Value()) {
@@ -603,6 +636,10 @@ func (b *Stream) PostDial(nc net.Conn, err error) {
 	}
 }
 
+// If true, will debug or close operations.
+// Close is one of the hardest problems, due to FIN/RST multiple interfaces.
+const DebugClose = true
+
 // Proxy the accepted connection to a dialed connection.
 // Blocking, will wait for both sides to FIN or RST.
 func (s *Stream) ProxyTo(nc net.Conn) error {
@@ -610,7 +647,7 @@ func (s *Stream) ProxyTo(nc net.Conn) error {
 	go s.proxyFromClient(nc, errCh)
 	// Blocking, returns when all data is read from In, or error
 	err1 := s.proxyToClient(nc, errCh)
-	log.Println("proxyToClient finish ", err1)
+
 
 	// Wait for data to be read from nc and sent to Out, or error
 	remoteErr := <-errCh
@@ -620,14 +657,20 @@ func (s *Stream) ProxyTo(nc net.Conn) error {
 
 	// The read part may have returned EOF, or the write may have failed.
 	// In the first case close will send FIN, else will send RST
-
+	if DebugClose {
+		if strings.HasPrefix(s.Request.RequestURI, "/dm/") {
+			log.Println(s.StreamId, "proxyTo H2 ",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr, s.Request.RequestURI)
+		} else {
+			log.Println(s.StreamId, "proxyTo ",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		}
+	}
 	s.In.Close()
 	nc.Close()
 	return remoteErr
 }
 
-// Read from the Reader, send to the client.
-// Should be used on accepted (server) connections.
+// Read from the Reader, send to the cout client.
+// Updates ReadErr and ProxyWriteErr
 func (s *Stream) proxyToClient(cout io.WriteCloser, errch chan error) error {
 	s.WriteTo(cout) // errors are preserved in stats, 4 kinds possible
 
@@ -637,24 +680,35 @@ func (s *Stream) proxyToClient(cout io.WriteCloser, errch chan error) error {
 		err = s.ReadErr
 	}
 
-	if err != nil {
+	if NoEOF(err) != nil {
 		// Should send RST if unbuffered data (may also be FIN - no way to control)
+		if DebugClose {
+			log.Println(s.StreamId, "proxyToClient RST",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		}
 		cout.Close()
 		s.In.Close()
 	} else {
 		// WriteTo doesn't close the writer ! We need to send a FIN, so remote knows we're done.
 		if c, ok := cout.(CloseWriter); ok {
+			if DebugClose {
+				log.Println(s.StreamId,"proxyToClient EOF", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+			}
 			s.ClientClose = true
 			c.CloseWrite()
 		} else {
-			log.Println("Missing CloseWrite ", cout)
+			//if debugClose {
+				log.Println(s.StreamId,"proxyToClient EOF, XXX Missing CloseWrite",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+			//}
 			cout.Close()
 		}
 		// EOF was received already for normal close.
 		// If a write error happened - we want to close it to force a RST.
-		if cc, ok := s.In.(CloseReader); ok {
-			cc.CloseRead()
-		}
+		//if cc, ok := s.In.(CloseReader); ok {
+		//	if debugClose {
+		//		log.Println("proxyToClient CloseRead", s.StreamId, s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		//	}
+		//	cc.CloseRead()
+		//}
 	}
 	return err
 }
@@ -698,37 +752,45 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 				f.Flush()
 			}
 		}
-		sErr = eof(sErr)
 		// May return err but still have few bytes
 		if sErr != nil {
 			s.ReadErr = sErr
-			if strings.HasPrefix(s.Request.RequestURI, "/dm/") {
-				log.Println("proxyToClient from H2 err", sErr)
-			}
 			return n, sErr
 		}
 	}
 }
 
-// proxyFromClient writes to the net.Conn. Should be in a go routine.
+// proxyFromClient reads from cin, writes to the stream. Should be in a go routine.
+// Updates ProxyReadErr and WriteErr
 func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error) {
 	_, err := s.ReadFrom(cin)
-	log.Println("proxyFromClient finish ", err)
 	// At this point cin either returned an EOF (FIN), or error (RST from remote, or error writing)
-	if s.ProxyReadErr != nil || s.WriteErr != nil {
+	if NoEOF(s.ProxyReadErr) != nil || s.WriteErr != nil {
 		// May send RST
+		if DebugClose {
+			log.Println(s.StreamId, "proxyFromClient RST ", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		}
 		s.Close()
 		cin.Close()
 	} else {
-		s.CloseWrite()
-		if cc, ok := cin.(CloseReader); ok {
-			cc.CloseRead()
+		if DebugClose {
+			log.Println(s.StreamId, "proxyFromClient FIN ", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 		}
+		s.CloseWrite()
+		//if cc, ok := cin.(CloseReader); ok {
+		//	if debugClose {
+		//		log.Println("proxyFromClient CloseRead", s.StreamId, s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		//	}
+		//	cc.CloseRead()
+		//}
 	}
 
 	errch <- err
 }
 
+// Implements net.Addr, can be returned as getRemoteAddr()
+// Not ideal: apps will assume IP. Better to return the VIP6.
+// Deprecated
 type nameAddress string
 
 // name of the network (for example, "tcp", "udp")

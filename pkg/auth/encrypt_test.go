@@ -218,7 +218,10 @@ func Test2Way(t *testing.T) {
 		t.Error(err)
 	}
 
-	plain, err := Decrypt(sub, result, subPriv)
+	dc := EncryptionContext{
+		UAPrivate: subPriv,
+	}
+	plain, err := dc.Decrypt(result.Ciphertext)
 
 	// assumes 2-bytes padding length == 0
 

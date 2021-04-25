@@ -2,6 +2,7 @@ package ugatesvc
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"time"
 
@@ -37,10 +37,6 @@ type H2Transport struct {
 	h2t      *http2.Transport
 	h2Server *http2.Server
 
-	// Client streams connected to 'upstream' servers.
-	// Connections will be maintained, with exp. backoff.
-	Reverse map[string]*ugate.Stream
-
 	// Included file server, for UI.
 	fs    http.Handler
 	conns map[*http2.ClientConn]*ugate.DMNode
@@ -58,7 +54,6 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 			StrictMaxConcurrentStreams: false,
 			AllowHTTP: true,
 		},
-		Reverse: map[string]*ugate.Stream{},
 	}
 	h2.h2Server = &http2.Server{}
 
@@ -66,6 +61,11 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 		h2.fs = http.FileServer(http.Dir("./www"))
 		ug.Mux.Handle("/", h2.fs)
 	}
+
+	//ug.Mux.HandleFunc("/h2r/", h2.HandleH2R)
+
+	ug.Mux.HandleFunc("/_dm/", ug.HandleID)
+	ug.Mux.HandleFunc("/dm/", ug.HandleTCPProxy)
 
 	// Plain HTTP requests - we only care about CONNECT/ws
 	go http.Serve(h2.httpListener, h2)
@@ -93,17 +93,56 @@ func (t *H2Transport) UpdateReverseAccept() {
 	<- ev
 	log.Println("maintainPinned connected for ", t.ug.Auth.VIP6)
 
-	// We can also let them die
-	for addr, str := range t.Reverse {
-		if _, f := t.ug.Config.H2R[addr]; !f {
-			log.Println("Closing removed upstream ", addr)
-			str.Close()
-			t.m.Lock()
-			delete(t.Reverse, addr)
-			t.m.Unlock()
-		}
-	}
 }
+
+// Reverse Accept dials a connection to addr, and registers a H2 SERVER
+// conn on it. The other end will register a H2 client, and create streams.
+// The client cert will be used to associate incoming streams, based on config or direct mapping.
+// TODO: break it in 2 for tests to know when accept is in effect.
+func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string) {
+	// maintain while the host is in the 'pinned' list
+	if _, f := t.ug.Config.H2R[dm.ID]; !f {
+		return
+	}
+
+	//ctx := context.Background()
+	backoff := 3000 * time.Millisecond
+
+	ctx := context.TODO()
+	//ctx, ctxCancel := context.WithTimeout(ctx, 5*time.Second)
+	//defer ctxCancel()
+
+	_, err := t.ug.DialMUX(ctx, "quic", dm, nil)
+	//err := t.ug.Connect(ctx, dm, ev)
+	if err != nil {
+		_, err = t.ug.DialMUX(ctx, "h2r", dm, nil)
+	}
+	if err == nil {
+		// wait for mux to be closed
+		return
+	} else if backoff < 15*time.Minute {
+		backoff = 2 * backoff
+	}
+
+	time.AfterFunc(backoff, func() {
+		t.maintainPinnedConnection(dm, ev)
+	})
+
+	// p := str.TLS.NegotiatedProtocol
+	//if p == "h2r" {
+	//	// Old code used the 'raw' TLS connection to create a  server connection
+	//	t.h2Server.ServeConn(
+	//		str,
+	//		&http2.ServeConnOpts{
+	//			Handler: t, // Also plain text, needs to be upgraded
+	//			Context: str.Context(),
+	//
+	//			//Context: // can be used to cancel, pass meta.
+	//			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
+	//		})
+	//}
+}
+
 
 // Common entry point for H1, H2 - both plain and tls
 // Will do the 'common' operations - authn, authz, logging, metrics for all BTS and regular HTTP.
@@ -120,13 +159,12 @@ func (t *H2Transport) UpdateReverseAccept() {
 //
 func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t0 := time.Now()
-	var Pub []byte
+	var RemoteID string
 	var SAN string
 	defer func() {
 		// TODO: add it to an event buffer
-		log.Println("HTTP", r, Pub, SAN,
-			//h2c.SAN, h2c.ID(),
-			r.RemoteAddr, r.URL, time.Since(t0))
+		log.Println("HTTP", r.Method, r.URL, r.Proto, r.Header, RemoteID, SAN,
+			r.RemoteAddr, time.Since(t0))
 		if r := recover(); r != nil {
 			fmt.Println("Recovered in f", r)
 
@@ -149,38 +187,56 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// TODO: parse Envoy
+	// https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_conn_man/headers
+	// In particular:
+	//x-forwarded-client-cert: By=http://frontend.lyft.com;
+	//  Hash=468..;
+	//  URI=http://testclient.lyft.com,
+	// By=http://backend.lyft.com;
+	//  Hash=9ba61d6425303443;
+	//  URI=http://frontend.lyft.com;DNS=foo.com
+
 	vapidH := r.Header["Authorization"]
 	if len(vapidH) > 0 {
 		tok, pub, err := auth.CheckVAPID(vapidH[0], time.Now())
 		if err == nil {
-			Pub = pub
+			RemoteID = auth.IDFromPublicKeyBytes(pub)
 			SAN = tok.Sub
 		}
 	}
 
 	tls := r.TLS
+	// If the request was handled by normal uGate listener.
 	us := r.Context().Value("ugate.stream")
 	if ugs, ok := us.(*ugate.Stream); ok {
 		tls = ugs.TLS
 		r.TLS = tls
 	}
+	// other keys:
+	// - http-server (*http.Server)
+	// - local-addr - *net.TCPAddr
+	//
 
 	if tls != nil && len(tls.PeerCertificates) > 0 {
 		pk1 := tls.PeerCertificates[0].PublicKey
-		Pub = auth.PublicKeyBytesRaw(pk1)
+		RemoteID = auth.IDFromPublicKey(pk1)
 		// TODO: Istio-style, signed by a trusted CA. This is also for SSH-with-cert
 		sans, _ := auth.GetSAN(tls.PeerCertificates[0])
 		if len(sans) > 0 {
 			SAN = sans[0]
 		}
 	}
+	// Using the 'from' header internally
+	if RemoteID != "" {
+		r.Header.Set("from", RemoteID)
+	} else {
+		r.Header.Del("from")
+	}
 
-	log.Println("Received ", r.RequestURI)
+	log.Println("HTTP-Start ", r.Method, r.URL, r.Proto, r.Header, RemoteID, SAN, r.RemoteAddr)
 
 	// TODO: authz for each case !!!!
-
-	// For plain http requests, the context doesn't have useful data.
-	parts := strings.Split(r.RequestURI, "/")
 
 	// Explicit hostname - forwardTo the node.
 	// The request may be a BTS TCP proxy or HTTP - either way forwarding is the same
@@ -193,69 +249,11 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HTTP/1.1 ?
 	if r.Method == "CONNECT" {
-		// WS or HTTP Proxy
+		l.ug.HandleTCPProxy(w, r)
+		return
 	}
 
-
-	//if r.ProtoMajor > 1 {
-		if len(parts) > 2 {
-			if parts[1] == "_dm" {
-				w.WriteHeader(201)
-				w.Write([]byte(l.ug.Auth.ID))
-				return
-			} else 	if parts[1] == "h2r" {
-				// Regular H2 request, the ALPN negotiation failed due to infrastructure.
-				// Like WS, use one or more H2 forward streams to do the reverse H2.
-				// WIP:
-				str := ugate.NewStreamRequest(r, w, nil)
-				str.TLS = r.TLS // TODO: also get the ID from JWT
-				l.HandleH2R(str)
-				log.Println("H2R closed ")
-				return
-			} else if parts[1] == "dm" {
-				r1 := CreateUpstreamRequest(w, r)
-				r1.Host = parts[2]
-				r1.URL.Scheme = "https"
-				r1.URL.Host = r1.Host
-				r1.URL.Path = "/" + strings.Join(parts[3:], "/")
-
-				str := ugate.NewStreamRequest(r1, w, nil)
-				str.Dest = parts[2]
-				str.PostDialHandler = func(conn net.Conn, err error) {
-					if err != nil {
-						w.Header().Add("Error", err.Error())
-						w.WriteHeader(500)
-						w.(http.Flusher).Flush()
-						return
-					}
-					w.Header().Set("Trailer", "X-Close")
-					w.WriteHeader(200)
-					w.(http.Flusher).Flush()
-				}
-				str.Dest = parts[2]
-
-				l.ug.HandleVirtualIN(str)
-				log.Println("TUN DONE ", parts)
-				return
-			} else if parts[1] == "tcp" {
-				// Will use r.Host to find the destination - not sure if this is right.
-				s := ugate.NewStreamRequest(r, w, nil)
-				l.ug.HandleVirtualIN(s)
-				return
-			}
-		}
-
-	if strings.HasPrefix(r.RequestURI, "/ws") {
-
-	} else {
-
-	}
-
-	// TODO: HTTP Proxy with absolute URL
-
-	// Regular HTTP/1.1 methods
 	l.ug.Mux.ServeHTTP(w,r)
 }
 
@@ -342,9 +340,6 @@ func SniffH2(br *ugate.BufferedStream) error {
 func (t *H2Transport) HandleHTTPS(c ugate.MetaConn) error {
 	// http2 and http expect a net.Listener, and do their own accept()
 	str := c.Meta()
-	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2r" {
-		return t.HandleH2R(str)
-	}
 	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2" {
 		t.h2Server.ServeConn(
 			c,
@@ -419,4 +414,28 @@ func (l *listener) Accept() (net.Conn, error) {
 			return nil, fmt.Errorf("listener is closed")
 		}
 	}
+}
+
+type HttpClientStream struct {
+	ugate.Stream
+	*http.Response
+	request *http.Request
+}
+
+func NewHttpClientStream(s *ugate.Stream) *HttpClientStream {
+	h := &HttpClientStream{
+	}
+	return h
+}
+
+type HttpServerStream struct {
+	ugate.Stream
+	http.ResponseWriter
+	request *http.Request
+}
+
+func NewHttpServerStream(s *ugate.Stream) *HttpServerStream {
+	h := &HttpServerStream{
+	}
+	return h
 }

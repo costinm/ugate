@@ -12,87 +12,52 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"testing"
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/pkg/cfgfs"
 	"github.com/costinm/ugate/pkg/pipe"
-	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/costinm/ugate/test"
 )
 
 
-
-func xTestLive(t *testing.T) {
-	m := "10.1.10.228:15007"
-	ag := test.InitTestServer("", &ugate.GateCfg{
-		BasePort: 6300,
-		H2R: map[string]string{
-			//"h.webinf.info:15007": "",
-			m: "",
-		},
-	})
-	//ag.h2Handler.UpdateReverseAccept()
-
-	//err := ag.h2Handler.maintainPinnedConnection("h.webinf.info:15007", "")
-	//if err != nil {
-	//	t.Fatal("Failed to RA", err)
-	//}
-
-	//p := pipe.New()
-	//r, _ := http.NewRequest("POST",
-	//	"https://" + m + "/dm/" + IDFromPublicKey(ag.Auth.EC256PrivateKey.Public()), p)
-	//res, err := ag.h2Handler.RoundTrip(r)
-	//
-	//if err != nil {
-	//	t.Fatal(err)
-	//}
-	//
-	//res1, err := CheckEcho(res.Body, p)
-	//if err != nil {
-	//	t.Fatal(err)
-	//}
-
-	log.Println(ag)
-	//log.Println(res1, ag)
-	select {}
-}
-
 func TestSrv(t *testing.T) {
-	// Bob accepts POST and H2R tunnels
+	// xx07 -> BTS port
+	// xx12 -> plain text echo
+	// "/dm/" -> POST-based tunnel ( more portable than CONNECT )
+
 	// Bob connected to Carol
-	bg := test.InitTestServer(test.BOB_KEYS, &ugate.GateCfg{
+	bob := test.InitTestServer(test.BOB_KEYS, &ugate.GateCfg{
 		BasePort: 6100,
-		Name: "bob",
-	})
+		Name:     "bob",
+	}, nil)
 
 	// Alice connected to Bob
-	ag := test.InitTestServer(test.ALICE_KEYS, &ugate.GateCfg{
+	alice := test.InitTestServer(test.ALICE_KEYS, &ugate.GateCfg{
 		BasePort: 6000,
-		Name: "alice",
+		Name:     "alice",
 		H2R: map[string]string{
 			"bob": "-",
 		},
-		Hosts: map[string] *ugate.DMNode {
+		Hosts: map[string]*ugate.DMNode{
 			"bob": &ugate.DMNode{
 				Addr: "127.0.0.1:6107",
 			},
 		},
-	})
+	}, nil)
 
 
-	// Carol accepts only POST tunnels
-	cg := test.InitTestServer(test.CAROL_KEYS, &ugate.GateCfg{
-		BasePort: 6200,
-		Name: "carol",
-	})
+	//carol := test.InitTestServer(test.CAROL_KEYS, &ugate.GateCfg{
+	//	BasePort: 6200,
+	//	Name:     "carol",
+	//}, nil)
 
 	//http2.DebugGoroutines = true
 
 	t.Run("Echo-tcp", func(t *testing.T) {
-		ab, err := ag.DialContext(context.Background(), "tcp",
+		ab, err := alice.DialContext(context.Background(), "tcp",
 			fmt.Sprintf("127.0.0.1:%d", 6112))
 		if err != nil {
 			t.Fatal(err)
@@ -107,7 +72,7 @@ func TestSrv(t *testing.T) {
 
 	// TLS Echo server, on 6111
 	t.Run("Echo-tls", func(t *testing.T) {
-		ab, err := ag.DialContext(context.Background(), "tls",
+		ab, err := alice.DialContext(context.Background(), "tls",
 			fmt.Sprintf("127.0.0.1:%d", 6111))
 		if err != nil {
 			t.Fatal(err)
@@ -126,11 +91,8 @@ func TestSrv(t *testing.T) {
 	// Alice -BTS-> Bob -TCP-> Carol
 	t.Run("H2-egress", func(t *testing.T) {
 		p := pipe.New()
-		// xx07 -> BTS port
-		// xx12 -> plain text echo
-		// "/dm/" -> POST-based tunnel ( more portable than CONNECT )
 		r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+"127.0.0.1:6112", p)
-		res, err := ag.RoundTrip(r)
+		res, err := alice.RoundTrip(r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -140,37 +102,57 @@ func TestSrv(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		log.Println(res1, ag, bg)
+		log.Println(res1, alice, bob)
 	})
 
 	// TODO: perm checks for egress
 	// TODO: same test for ingress ( localhost:port ) and internal listeners
 
-	// Alice -- reverse tunnel --> Bob
-	// Carol --> Bob -- via H2R --> Alice
-	t.Run("H2R", func(t *testing.T) {
-		ag.H2Handler.UpdateReverseAccept()
-		// Connecting to Bob's gateway (from c). Request should go to Alice.
-		//
-		nc, err := cg.DialContext(context.Background(), "url",
-			"https://127.0.0.1:6107/dm/"+ag.Auth.ID + "/dm/127.0.0.1:6112")
-		if err != nil {
-			t.Fatal(err)
-		}
-		res1, err := test.CheckEcho(nc, nc)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		log.Println(res1, ag, bg)
-
-		//ag.Config.H2R = map[string]string{
-		//}
-		//ag.H2Handler.UpdateReverseAccept()
-		if len(ag.H2Handler.Reverse) > 0 {
-			t.Error("Failed to disconnect")
-		}
-	})
+	//// Bob -> H2R -> Alice
+	//t.Run("H2R1", func(t *testing.T) {
+	//	p := pipe.New()
+	//	r, _ := http.NewRequest("POST", "https://" + alice.Auth.ID + "/dm/127.0.0.1:6112", p)
+	//	res, err := bob.RoundTrip(r)
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//	nc := ugate.NewStreamRequestOut(r, p, res, nil)
+	//
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//	res1, err := test.CheckEcho(nc, nc)
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//
+	//	log.Println(res1, alice, bob)
+	//})
+	//
+	//// Alice -- reverse tunnel --> Bob
+	//// Carol --> Bob -- via H2R --> Alice
+	//t.Run("H2R", func(t *testing.T) {
+	//	alice.H2Handler.UpdateReverseAccept()
+	//	// Connecting to Bob's gateway (from c). Request should go to Alice.
+	//	//
+	//	p := pipe.New()
+	//	r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+alice.Auth.ID + "/dm/127.0.0.1:6112", p)
+	//	res, err := carol.RoundTrip(r)
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//	nc := ugate.NewStreamRequestOut(r, p, res, nil)
+	//
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//	res1, err := test.CheckEcho(nc, nc)
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//
+	//	log.Println(res1, alice, bob)
+	//})
 }
 
 // Run a suite of tests with a specific key, to repeat the tests for all types of keys.
@@ -196,26 +178,9 @@ func testKey(k crypto.PrivateKey, t *testing.T) {
 	t.Log("Key ID:", id)
 }
 
-type MemCfg struct {
-	data map[string][]byte
-}
-
-func (m MemCfg) Get(name string) ([]byte, error) {
-	return m.data[name], nil
-}
-
-func (m MemCfg) Set(conf string, data []byte) error {
-	m.data[conf] = data
-	return nil
-}
-
-func (m MemCfg) List(name string, tp string) ([]string, error) {
-	return []string{}, nil
-}
-
 func TestCrypto(t *testing.T) {
 	t.Run("AuthInit", func(t *testing.T) {
-		cfg := &MemCfg{data: map[string][]byte{}}
+		cfg := cfgfs.NewConf()
 		a := auth.NewAuth(cfg, "", "")
 
 		//if a.RSACert == nil {
@@ -246,81 +211,11 @@ func TestCrypto(t *testing.T) {
 	})
 }
 
-func TestUGate(t *testing.T) {
-	td := &net.Dialer{}
-	ug := ugatesvc.NewGate(td, nil, nil, nil)
-
-	basePort := 2900
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+100),
-		Protocol: "echo",
-	})
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+101),
-		Protocol: "static",
-	})
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+102),
-		Protocol: "delay",
-	})
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+106),
-		Protocol: "tls",
-	})
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+103),
-		Protocol: "socks5",
-	})
-	ug.Add(&ugate.Listener{
-		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+105),
-		ForwardTo: "localhost:3000",
-	})
-
-	ug.Add(&ugate.Listener{
-		Address: fmt.Sprintf("0.0.0.0:%d", basePort+106),
-		Handler: &ugatesvc.EchoHandler{},
-	})
-
-}
-
 func BenchmarkUGate(t *testing.B) {
 	// WIP
 }
 
 var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
-
-//func Test_Service(t *testing.T) {
-//	mux := http.NewServeMux()
-//
-//	// Real TLS server listener, httptest.Server
-//	srv := httptest.NewUnstartedServer(mux)
-//	srv.EnableHTTP2 = true
-//	srv.StartTLS()
-//	defer srv.Close()
-//
-//	http2.ConfigureServer(srv.Config, &http2.Server{})
-//
-//	log.Println(srv.URL)
-//	url := srv.URL
-//
-//	http2.VerboseLogs = true
-//
-//	tr := &http.Transport{
-//		TLSClientConfig: tlsConfigInsecure,
-//	}
-//	hc := http.Client{
-//		Transport: tr,
-//	}
-//
-//	res, err := hc.Get(url + "/push/mon/1234")
-//	if err != nil {
-//		t.Fatal("subscribe", err)
-//	}
-//	loc := res.Header.Get("location")
-//	if len(loc) == 0 {
-//		t.Fatal("location", res)
-//	}
-//}
 
 func xTestKube(t *testing.T) {
 	d, _ := ioutil.ReadFile("testdata/kube.json")

@@ -24,6 +24,7 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/pkg/pipe"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	msgs "github.com/costinm/ugate/webpush"
 )
@@ -38,8 +39,7 @@ var (
 	hostid = flag.String("host", "",
 		"Optional email or URL identifying the sender, to look up the subscription")
 
-	sub = flag.String("sub", "",
-		"Subscribe")
+	sub = flag.String("sub", "", "Subscribe")
 
 	aud  = flag.String("aud", "", "Generate a VAPID key with the given domain. Defaults to https://fcm.googleapis.com")
 
@@ -52,8 +52,9 @@ var (
 	jwt=flag.String("jwt", "", "JWT to decode")
 	data=flag.String("data", "", "Message to send, if empty stdin will be used")
 
-	netcat = flag.String("nc", "",
-		"Netcat")
+	netcat = flag.String("nc", "", "Netcat")
+
+	kubeconfig = flag.Bool("kubeconfig", false, "Generate a kube config with key/cert")
 
 )
 
@@ -69,14 +70,24 @@ const (
 
 func main() {
 	flag.Parse()
-	cfgDir := "./"
-	config := ugatesvc.NewConf(cfgDir, "./var/lib/dmesh/")
 
 	if *hostid == "" {
 		*hostid, _ = os.Hostname()
 	}
-	authz := auth.NewAuth(config, *hostid, "m.webinf.info")
 
+	if *kubeconfig {
+		config := ugatesvc.NewConf()
+		_ = auth.NewAuth(config, *hostid, "m.webinf.info")
+		gen, _ := config.Get("kube.json")
+		fmt.Println(string(gen))
+		return
+	}
+
+
+	cfgDir := "./"
+	config := ugatesvc.NewConf(cfgDir, "./var/lib/dmesh/")
+
+	authz := auth.NewAuth(config, *hostid, "m.webinf.info")
 	ug := ugatesvc.New(config, authz, nil)
 
 	hc = &http.Client{
@@ -116,11 +127,14 @@ func main() {
 }
 
 func Netcat(ug *ugatesvc.UGate, s string, via string) {
-	nc, err := ug.DialContext(context.Background(), "url", s)
+	p := pipe.New()
+	r, _ := http.NewRequest("POST", s, p)
+	res, err := ug.RoundTrip(r)
 	if err != nil {
 		log.Fatal(err)
 	}
-	go func() {
+	nc := ugate.NewStreamRequestOut(r, p, res, nil)
+go func() {
 		b1 := make([]byte, 1024)
 		for {
 			n, err := nc.Read(b1)
@@ -305,7 +319,7 @@ func watchNodes(ug *ugatesvc.UGate) {
 						go func() {
 							log.Println("Watch: ", w.ip6)
 
-							ug.Connect(ctx, w.Node, nil)
+							ug.DialMUX(ctx, "quic", w.Node, nil)
 							w.watching = false
 							log.Println("Watch close: ", w.ip6)
 						}()
@@ -322,7 +336,7 @@ func watchNodes(ug *ugatesvc.UGate) {
 		Addr: *addr,
 	}
 
-	ug.Connect(ctx, n0, nil)
+	ug.DialMUX(ctx, "quic", n0, nil)
 }
 
 // Get neighbors from a node. Side effect: updates the watchers table.

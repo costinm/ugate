@@ -366,11 +366,11 @@ func (auth *Auth) initCert() {
 			{Name: "default",
 				Context: Context{
 					Cluster: "default",
-					AuthInfo: "default",
+					AuthInfo: auth.ID,
 				}},
 		},
 		Users: []KubeNamedUser{
-			{Name: "default",
+			{Name: auth.ID,
 				User: KubeUser{
 					ClientKeyData: keyPEM,
 					ClientCertificateData: certPEM,
@@ -552,6 +552,15 @@ func IDFromPublicKey(key crypto.PublicKey) string {
 	return enc.EncodeToString(m)
 }
 
+func IDFromPublicKeyBytes(m []byte) string {
+	if len(m) > 32 {
+		sha256 := sha256.New()
+		sha256.Write(m)
+		m = sha256.Sum([]byte{}) // 302
+	}
+	return enc.EncodeToString(m)
+}
+
 func IDFromCert(c []*x509.Certificate) string {
 	if c == nil || len(c) == 0 {
 		return ""
@@ -593,6 +602,9 @@ func RawToCertChain(rawCerts [][]byte) ([]*x509.Certificate, error) {
 
 // PubKeyFromCertChain verifies the certificate chain and extract the remote's public key.
 func PubKeyFromCertChain(chain []*x509.Certificate) (crypto.PublicKey, error) {
+	if chain == nil || len(chain) == 0 {
+
+	}
 	cert := chain[0]
 
 	// Self-signed certificate

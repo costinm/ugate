@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/costinm/ugate"
@@ -20,7 +22,6 @@ type EchoHandler struct {
 func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Println("ECHOH ", r)
 	w.WriteHeader(200)
-	//w.Write([]byte{32})
 	w.(http.Flusher).Flush()
 
 	// H2 requests require write to be flushed - buffering happens !
@@ -33,7 +34,6 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	d := make([]byte, 2048)
-	select {}
 	si := str.StreamInfo()
 	si.RemoteID=   RemoteID(str)
 	b1, _ := json.Marshal(si)
@@ -49,7 +49,7 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	if err != nil {
 		return err
 	}
-	log.Println("ECHO rcv", n)
+	log.Println("ECHO rcv", n, "strid", str.StreamId)
 
 	if !serverFirst {
 		str.Write(b.Bytes())
@@ -57,11 +57,14 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	str.Write(d[0:n])
 
 	io.Copy(str, str)
+	if ugate.DebugClose {
+		log.Println("ECHO DONE", str.StreamId)
+	}
 	return nil
 }
 
 func (eh *EchoHandler) Handle(ac ugate.MetaConn) error {
-	log.Println("ECHO ", ac.Meta())
+	log.Println("ECHOS ", ac.Meta())
 
 	return eh.handle(ac.Meta(), false)
 }
@@ -200,3 +203,50 @@ func (gw *UGate) HttpH2R(w http.ResponseWriter, r *http.Request) {
 //	// get the csr and sign
 //}
 //
+
+// HandleID is the first request in a MUX connection.
+//
+// If the request is authenticated, we'll track the node.
+// For QUIC, mTLS handshake completes after 0RTT requests are received, so JWT is
+// needed.
+func (gw *UGate) HandleID(w http.ResponseWriter, r *http.Request) {
+	f := r.Header.Get("from")
+	if f == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	//n := gw.GetOrAddNode(f)
+
+	w.WriteHeader(200)
+	w.Write([]byte(gw.Auth.ID))
+}
+
+// HandleTCPPRoxy is called for CONNECT and /dm/ADDRESS
+// TODO: also handle /ipfs/... for compat.
+func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.RequestURI, "/")
+	//
+	//r1 := CreateUpstreamRequest(w, r)
+	//r1.Host = parts[2]
+	//r1.URL.Scheme = "https"
+	//r1.URL.Host = r1.Host
+	//r1.URL.Path = "/" + strings.Join(parts[3:], "/")
+
+	str := ugate.NewStreamRequest(r, w, nil)
+	str.Dest = parts[2]
+	str.PostDialHandler = func(conn net.Conn, err error) {
+		if err != nil {
+			w.Header().Add("Error", err.Error())
+			w.WriteHeader(500)
+			w.(http.Flusher).Flush()
+			return
+		}
+		w.Header().Set("Trailer", "X-Close")
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+	}
+	str.Dest = parts[2]
+
+	gw.HandleVirtualIN(str)
+
+}

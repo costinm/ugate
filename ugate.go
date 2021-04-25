@@ -120,40 +120,61 @@ type HostStats struct {
 
 // Node information, based on registration info or discovery.
 //
-// Used for 'mesh' nodes, where we have a public key and other info.
+// Used for 'mesh' nodes, where we have a public key and other info, as well
+// as non-mesh nodes.
+//
+// This struct includes statistics about the node and current active association/mux
+// connections.
 //
 type DMNode struct {
-	// ID is the primary id of the node. Format is:
+	// ID is the (best) primary id known for the node. Format is:
 	//    base32(SHA256(EC_256_pub)) - 32 bytes binary, 52 bytes encoded
 	//    base32(ED_pub) - same size, for nodes with ED keys.
 	//
-	// For non-mesh nodes, it is a real domain name or IP if unknown.
+	// For non-mesh nodes, it is a (real) domain name or IP if unknown.
+	// It may include port, or even be a URL - the external destinations may
+	// have different public keys on different ports.
 	//
+	// The node may be a virtual IP ( ex. K8S/Istio service ) or name
+	// of a virtual service.
+	//
+	// If IPs are used, they must be either truncated SHA or included
+	// in the node cert or the control plane must return metadata and
+	// secure low-level network is used (like wireguard)
+	//
+	// Required for secure communication.
+	//
+	// Examples:
+	//  -  [B32_SHA]
+	//  -  [B32_SHA].reviews.bookinfo.svc.example.com
+	//  -  IP6 (based on SHA or 'trusted' IP)
+	//  -  IP4 ('trusted' IP)
 	// TODO: To support captured traffic, the IP6 format is also supported.
 	//
 	ID string `json:"id,omitempty"`
 
-	// IDCert is the sha256(cert) - used for WebRTC.
-	// Alternative: []Certs
-	//IDCert []byte `json:"idcert,omitempty"`
+	// IDAlias is a list of alternate identities associated with the
+	// node.
+	//
+	// TODO: implement
+	IDAlias []string `json:"alias,omitempty"`
 
+	// Groups is a list of groups and roles the node is associated with.
+	//
 	Groups []string `json:"groups,omitempty"`
 
 	// TODO: rename to node ID - use truncated or full form.
 
 	// TODO: print Hex form as well, make sure the 8 bytes of the VIP are visible
 
-	//// VIP is the mesh specific IP6 address. The 'network' identifies the master node, the
-	//// link part is the sha of the public key. This is a byte[16].
-	//// If not known, will be populated after the connection.
-	//// If set, will be verified and used to locate the node.
-	//VIP net.IP `json:"vip,omitempty"`
-
 	// Primary/main address and port of the BTS endpoint.
 	// Can be a DNS name that resolves, or some other node.
 	// Individual IPs (relay, etc) will be in the info.addrs field
 	// May also be a URL (webpush endpoint).
 	Addr string `json:"addr,omitempty"`
+
+	// Alternate addresses, list of URLs
+	URLs []string `json:"urls,omitempty"`
 
 	// Primary public key of the node.
 	// EC256: 65 bytes, uncompressed format
@@ -163,7 +184,8 @@ type DMNode struct {
 	// If not known, will be populated after the connection.
 	PublicKey []byte `json:"pub,omitempty"`
 
-	// Auth for webpush.
+	// Auth for webpush. A shared secret known by uGate and remote
+	// node.
 	Auth []byte `json:"auth,omitempty"`
 
 	// Information from the node - from an announce or message.
@@ -171,13 +193,19 @@ type DMNode struct {
 
 	Labels map[string]string `json:"l,omitempty"`
 
+	// Will be set if there are problems connecting to the node
+	// (or if connection duration is too short)
 	Bacokff time.Duration `json:"-"`
 
 	// IP4 address of last announce (link local) or connection
 	Last4 *net.UDPAddr `json:"-"`
+	// LastSeen in a multicast announce
+	LastSeen4 time.Time
 
 	// IP6 address of last announce or connection.
 	Last6 *net.UDPAddr `json:"-"`
+	// LastSeen in a multicast announce
+	LastSeen6 time.Time `json:"-"`
 
 	FirstSeen time.Time
 
@@ -187,53 +215,15 @@ type DMNode struct {
 	// In seconds since first seen, last 100
 	Seen []int `json:"-"`
 
-	// LastSeen in a multicast announce
-	LastSeen4 time.Time
 
-	// LastSeen in a multicast announce
-	LastSeen6 time.Time `json:"-"`
-
-	// Number of multicast received
-	//Announces int `json:"-"`
-
-	//// Numbers of announces received from that node on the P2P interface
-	//AnnouncesOnP2P int `json:"-"`
-	//
-	//// Numbers of announces received from that node on the P2P interface
-	//AnnouncesFromP2P int `json:"-"`
+	Stats *HostStats
 
 	// Muxer is a HTTP2-like connection to the node.
 	// Implements RoundTrip, with the semantics of CONNECT (no buffering)
 	// May be a direct or reverse connection.
 	Muxer Muxer `json:"-"`
 
-	// Set if the gateway has an active incoming connection from this
-	// node, with the node acting as client.
-	// Streams will be forwarded to the node using special 'accept' mode.
-	// This is similar with PUSH in H2.
-	// Deprecated - impl in ssh server, use in old wpgate DialMeshLocal
-	//TunSrv MuxedConn `json:"-"`
 
-	// Existing tun to the remote node, previously dialed.
-	// Deprecated
-	//TunClient MuxedConn `json:"-"`
-}
-
-//func (dmn *DMNode) ID() string {
-//	if dmn.VIP != nil {
-//		return dmn.VIP.String()
-//	}
-//	return dmn.FQDN
-//}
-
-// Muxer is the interface implemented by a multiplexed connection with metadata
-// http2.ClientConn is the default implementation used.
-type Muxer interface {
-	http.RoundTripper
-
-	io.Closer
-
-	Ping(ctx context.Context) error
 }
 
 const ProtoTLS = "tls"
@@ -343,23 +333,38 @@ type ContextDialer interface {
 	DialContext(ctx context.Context, net, addr string) (net.Conn, error)
 }
 
-type MsgCon interface {
+// Muxer is the interface implemented by a multiplexed connection with metadata
+// http2.ClientConn is the default implementation used.
+type Muxer interface {
+	http.RoundTripper
 
-	// SendMessage sends a message as a datagram.
-	SendMessage([]byte) error
+	io.Closer
 
-	// ReceiveMessage gets a message received in a datagram.
-	ReceiveMessage() ([]byte, error)
-
+	//Ping(ctx context.Context) error
 }
 
-// MuxConPool tracks multiplexed 'connections'('associations','sessions').
-// Each Mux needs to be able to dial back. The ConHandler interface is used
-// for accepting streams.
-type MuxConPool interface {
-	OnConnect(c ContextDialer, id string)
-	OnDisconnect(c ContextDialer, id string)
+type MuxDialer interface {
+	// DialMux creates a bi-directional multiplexed association with the node.
+	// The node must support a multiplexing protocol - the fallback is H2.
+	//
+	// Fallback:
+	// For non-mesh nodes the H2 connection may not allow incoming streams or
+	// messages. Mesh nodes emulate incoming streams using /h2r/ and send/receive
+	// messages using /.dm/msg/
+	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Stream)) (Muxer, error)
 }
+
+// StreamDialer is similar with RoundTrip, makes a single connection using a MUX.
+//
+// Unlike ContextDialer, also takes 'meta' and returns a Stream ( which implements net.Conn).
+//
+// UGate implements ContextDialer, so it can be used in other apps as a library without
+// dependencies to the API. The context can be used for passing metadata.
+// It also implements RoundTripper, since streams are mapped to HTTP.
+//type StreamDialer interface {
+//	DialStream(ctx context.Context, netw string, addr string, meta http.Header) (*Stream, error)
+//}
+
 
 // ConHandler is a handler for net.Conn with metadata.
 // Lighter alternative to http.Handler
@@ -377,13 +382,6 @@ func (c ConHandlerF) Handle(conn MetaConn) error {
 // For integration with TUN
 // TODO: use same interfaces.
 
-// UdpWriter is the interface implemented by the TunTransport, to send
-// packets back to the virtual interface. TUN or TProxy raw support this.
-// Required for 'transparent' capture of UDP - otherwise use STUN/TURN/etc.
-// A UDP NAT does not need this interface.
-type UdpWriter interface {
-	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
-}
 
 type HostResolver interface {
 	// HostByAddr returns the last lookup address for an IP, or the original
@@ -391,14 +389,16 @@ type HostResolver interface {
 	HostByAddr(addr string) (string, bool)
 }
 
-// Interface implemented by TCPHandler.
+// Used by the TUN interface
 type UDPHandler interface {
 	HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte)
 }
-
-// Used by the TUN interface.
-type TCPHandler interface {
-	HandleTUN(conn net.Conn, target *net.TCPAddr) error
+// UdpWriter is the interface implemented by the TunTransport, to send
+// packets back to the virtual interface. TUN or TProxy raw support this.
+// Required for 'transparent' capture of UDP - otherwise use STUN/TURN/etc.
+// A UDP NAT does not need this interface.
+type UdpWriter interface {
+	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
 }
 
 
@@ -412,13 +412,9 @@ type TCPHandler interface {
 
 // Internal use.
 
+// Deprecated
 type MetaConn interface {
 	net.Conn
-
-	// Returns request metadata. This is a subset of
-	// http.Request. An adapter exists to convert this into
-	// a proper http.Request and use normal http.Handler and
-	// RoundTrip.
 	Meta() *Stream
 }
 
@@ -547,12 +543,6 @@ type NodeAnnounce struct {
 //
 
 
-type StreamCreator interface {
-	CreateStream(ctx context.Context, n *DMNode, r1 *http.Request) (*Stream, error)
-}
-
-
-
 // Textual representation of the node registration data.
 func (n *DMNode) String() string {
 	b, _ := json.Marshal(n)
@@ -594,10 +584,3 @@ func (n *DMNode) BackoffSleep() {
 // Main 'difference' between a message and a regular HTTP is the size of request is limited.
 // Webpush is also mapped in the same way - the glue code handles encryption/decryption.
 // PubSubMessage is the payload of a Pub/Sub event.
-type PubSubMessage struct {
-	Message struct {
-		Data []byte `json:"data,omitempty"`
-		ID   string `json:"id"`
-	} `json:"message"`
-	Subscription string `json:"subscription"`
-}

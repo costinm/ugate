@@ -43,7 +43,7 @@ func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
 
 // Mirroring handleAcceptedConn in UGate
 func handleAcceptedConn(ug *ugatesvc.UGate, acceptedCon net.Conn, in bool) {
-	bconn := ugate.GetConn(acceptedCon)
+	bconn := ugate.GetBufferedStream(acceptedCon, acceptedCon)
 	ug.OnStream(bconn.Meta())
 	defer ug.OnStreamDone(bconn)
 	str := bconn.Meta()

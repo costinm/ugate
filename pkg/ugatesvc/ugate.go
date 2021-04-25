@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -66,12 +65,8 @@ type UGate struct {
 	Auth  *auth.Auth
 
 	Msg *msgs.Mux
-}
 
-func (ug *UGate) OnConnect(c ugate.ContextDialer, id string) {
-}
-
-func (ug *UGate) OnDisconnect(c ugate.ContextDialer, id string) {
+	MuxDialers map[string]ugate.MuxDialer
 }
 
 func NewConf(base ...string) ugate.ConfStore {
@@ -141,6 +136,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	ug := &UGate{
 		Listeners:    map[string]*Listener{},
 		parentDialer: &net.Dialer{},
+		MuxDialers: map[string]ugate.MuxDialer{},
 		Config:       cfg,
 		NodesByID:    map[string]*ugate.DMNode{},
 		Nodes:        map[uint64]*ugate.DMNode{},
@@ -215,7 +211,7 @@ func (ug *UGate) Start() {
 
 
 // Expects the result to be validated and do ALPN.
-//func (ug *UGate) dialTLS(net, addr string, tc *tls.Config) {
+//func (ug *UGate) DialTLS(net, addr string, tc *tls.Config) {
 //
 //}
 
@@ -321,12 +317,11 @@ func (ug *UGate) OnStreamDone(rc ugate.MetaConn) {
 		log.Println("AC: Recovered in f", r, err)
 	}
 
-	if str.ReadErr != io.EOF && str.ReadErr != nil ||
-			str.WriteErr != nil {
-		log.Println("Err in:", str.ReadErr, str.WriteErr)
+	if ugate.NoEOF(str.ReadErr) != nil || str.WriteErr != nil {
+		log.Println("AE:", str.StreamId, "Err in:", str.ReadErr, str.WriteErr)
 	}
-	if str.ProxyReadErr != nil || str.ProxyWriteErr != nil {
-		log.Println("Err out:", str.ProxyReadErr, str.ProxyWriteErr)
+	if ugate.NoEOF(str.ProxyReadErr) != nil || str.ProxyWriteErr != nil {
+		log.Println("AE:", str.StreamId, "Err out:", str.ProxyReadErr, str.ProxyWriteErr)
 	}
 	if !str.Closed {
 		str.Close()
@@ -351,6 +346,9 @@ func (ug *UGate) OnStreamDone(rc ugate.MetaConn) {
 //
 func RemoteID(s *ugate.Stream)  string {
 	if s.TLS == nil {
+		return ""
+	}
+	if len(s.TLS.PeerCertificates) == 0 {
 		return ""
 	}
 	pk, err := auth.PubKeyFromCertChain(s.TLS.PeerCertificates)
@@ -478,7 +476,9 @@ func (ug *UGate) HandleStream(str *ugate.Stream) error {
 		// SOCKS and others need to send something back - we don't
 		// have a real connection, faking it.
 		str.PostDial(str, nil)
-		return cfg.Handler.Handle(str)
+		err:= cfg.Handler.Handle(str)
+		str.Close()
+		return err
 	}
 
 	// By default, dial out
@@ -493,3 +493,12 @@ func (ug *UGate) Handle(c ugate.MetaConn) error {
 	// TODO: use metadata to dispatch
 	return nil
 }
+
+func (gw *UGate) OnMuxClose(dm *ugate.DMNode) {
+	if _, f := gw.Config.H2R[dm.ID]; !f {
+		return
+	}
+	gw.H2Handler.maintainPinnedConnection(dm, nil)
+
+}
+

@@ -133,7 +133,7 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//ra := proxyClient.RemoteAddr().(*net.TCPAddr)
-	str := ugate.GetConn(proxyClient)
+	str := ugate.GetBufferedStream(proxyClient, proxyClient)
 	defer gw.gw.OnStreamDone(str)
 	gw.gw.OnStream(str.Meta())
 

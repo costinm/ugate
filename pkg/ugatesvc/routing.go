@@ -30,14 +30,15 @@ func (ug *UGate) Dial(netw, addr string) (net.Conn, error) {
 	return ug.DialContext(context.Background(), netw, addr)
 }
 
-// dialTLS opens a direct TLS connection using the dialer for TCP.
+// DialTLS opens a direct TLS connection using the dialer for TCP.
 // No peer verification - the returned stream will have the certs.
 // addr is a real internet address, not a mesh one.
 //
 // Used internally to create the raw TLS connections to both mesh
 // and non-mesh nodes.
-func (ug *UGate) dialTLS(ctx context.Context, addr string, alpn []string) (*ugate.Stream, error) {
+func (ug *UGate) DialTLS(ctx context.Context, addr string, alpn []string) (*ugate.Stream, error) {
 	ctx1, cf := context.WithTimeout(ctx, 5*time.Second)
+	defer cf()
 	tcpC, err := ug.parentDialer.DialContext(ctx1, "tcp", addr)
 	if err != nil {
 		return nil, err
@@ -47,7 +48,6 @@ func (ug *UGate) dialTLS(ctx context.Context, addr string, alpn []string) (*ugat
 	if err != nil {
 		return nil, err
 	}
-	cf()
 	return t.Meta(), nil
 }
 
@@ -79,8 +79,8 @@ func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
 	defer nc.Close()
 
 	if ncs, ok := nc.(*ugate.Stream) ; ok {
-		if ncs.ResponseHeader != nil {
-			CopyResponseHeaders(str.Header(), ncs.ResponseHeader)
+		if ncs.OutHeader != nil {
+			CopyResponseHeaders(str.Header(), ncs.OutHeader)
 		}
 		//str.WriteHeader(res.StatusCode)
 		str.Flush()
@@ -93,28 +93,18 @@ func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
 // DialContext creates  connection to the remote addr, implements
 // x.net.proxy.ContextDialer and ugate.ContextDialer.
 //
-// TODO: allow context to pass metadata.
-//
 // Supports:
 // - tcp - normal tcp address, using the gate dialer.
 // - tls - tls connection, using the gate workload identity.
 // - h2r - h2r connection, suitable for reverse H2.
 func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
-	// TODO: integrate WebRTC, IPFS interfaces
-
-	// Raw URL - will be used as is, assume it is a tunnel
-	if netw == "url" {
-		p := pipe.New()
-		r, _ := http.NewRequest("POST", addr, p)
-		res, err := ug.RoundTrip(r)
-		if err != nil {
-			return nil, err
-		}
-		str := ugate.NewStreamRequestOut(r, p, res, nil)
-		return str, nil
+	host, _, err := net.SplitHostPort(addr)
+	n := ug.GetNode(host)
+	if n != nil {
+		// Mesh node
+		return ug.dial(ctx, addr, nil)
 	}
 
-	//host, port, err := net.SplitHostPort(addr)
 	//ug.dial(addr, )
 
 	// Use the Dialer passed as an option, may do additional proxying
@@ -128,10 +118,6 @@ func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, 
 		// TODO: parse addr as URL or VIP6 extract peer ID
 		return ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", nil)
 	}
-	if "h2r" == netw {
-		// TODO: parse addr as URL or VIP6 extract peer ID
-		return ug.NewTLSConnOut(ctx, tcpC, ug.TLSConfig, "", []string{"h2r", "h2"})
-	}
 
 	return tcpC, err
 }
@@ -143,8 +129,13 @@ func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, 
 //
 // If it has real endpoint address - we can use the associated protocol.
 // Else we can try all supported protos.
-func (ug *UGate) DialMUX(node *ugate.DMNode) error {
-	return nil
+func (ug *UGate) DialMUX(ctx context.Context, net string, node *ugate.DMNode, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
+	// TODO: list, try them all.
+	rd := ug.MuxDialers[net]
+	if rd == nil {
+		return nil, errors.New("Not found " + net)
+	}
+	return rd.DialMux(ctx, node, nil, ev)
 }
 
 
@@ -180,12 +171,16 @@ func (ug *UGate) dial(ctx context.Context, addr string, r1 *http.Request) (net.C
 		if rt != nil {
 			// We have an active reverse RoundTripper for the host.
 			p := pipe.New()
+			h, port, _ :=  net.SplitHostPort(addr)
 			if r1 == nil {
 				// Regular TCP stream, upgraded to H2.
 				// This is a simple tunnel, so use the right URL
 				r1, err = http.NewRequestWithContext(ctx, "POST",
-					"https://" + addr, p)
+					"https://" + h + "/dm/localhost:" + port, p)
 			} else {
+				r1.URL.Scheme = "https"
+				r1.URL.Host = dmn.ID // addr
+				r1.URL.Path = "/dm/localhost:" + port
 				r1.Body = p
 			}
 
@@ -193,9 +188,6 @@ func (ug *UGate) dial(ctx context.Context, addr string, r1 *http.Request) (net.C
 			if r1.Header == nil {
 				r1.Header = make(http.Header)
 			}
-
-			r1.URL.Scheme = "https"
-			r1.URL.Host = addr
 
 			// RT client - forward the request.
 			res, err := rt.RoundTrip(r1)
@@ -269,7 +261,7 @@ func (t *H2Transport) MarkDead(h2c *http2.ClientConn) {
 // The result implements RoundTrip interface.
 func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.ClientConn, error) {
 	// The h2 Transport has support for dialing TLS, with the std handshake.
-	// It is possible to replace Transport.dialTLS, used in clientConnPool
+	// It is possible to replace Transport.DialTLS, used in clientConnPool
 	// which tracks active connections. Or specify a custom conn pool.
 
 	// addr is either based on req.Host or the resolved IP, in which case Host must be used for TLS verification.
@@ -300,7 +292,7 @@ func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.Clie
 
 	// TODO: reuse connection or use egress server
 	// TODO: track it by addr
-	tc, err := t.ug.dialTLS(req.Context(), addr, []string{"h2"})
+	tc, err := t.ug.DialTLS(req.Context(), addr, []string{"h2"})
 	if err != nil {
 		return nil, err
 	}

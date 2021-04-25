@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 
 	"github.com/costinm/ugate"
@@ -13,7 +12,8 @@ import (
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
-func InitTestServer(kubecfg string, cfg *ugate.GateCfg) *ugatesvc.UGate {
+// InitTestServer creates a node with the given config.
+func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate)) *ugatesvc.UGate {
 	basePort := cfg.BasePort
 	cfg.Domain = "test.cluster.local"
 	cs := cfgfs.NewConf()
@@ -21,6 +21,10 @@ func InitTestServer(kubecfg string, cfg *ugate.GateCfg) *ugatesvc.UGate {
 
 	ug := ugatesvc.NewGate(&net.Dialer{}, nil, cfg, cs)
 
+	// Similar with the cmd, add extensions to avoid deps in core.
+	if ext != nil {
+		ext(ug)
+	}
 
 	// Echo - TCP
 	_, _, _ = ug.Add(&ugate.Listener{
@@ -44,6 +48,7 @@ var chunk2 = []byte("chunk2")
 // - read response from server  - should include metadata for the request plus chunk1
 // -
 func CheckEcho(in io.Reader, out io.Writer) (string, error) {
+
 	d := make([]byte, 2048)
 	// Start with a write - client send first (echo will wait, to verify that body is not cached)
 	_, err := out.Write(chunk1)
@@ -109,9 +114,12 @@ func CheckEcho(in io.Reader, out io.Writer) (string, error) {
 	} else {
 		out.(io.Closer).Close()
 	}
+	// Possible issue: the server has sent FIN, but reader (h3 response body) did not
+	// receive it.
+
 	n, err = in.Read(d)
 	if err != io.EOF {
-		log.Println("unexpected ", err)
+		return "", err
 	}
 
 	return js, nil
@@ -125,9 +133,9 @@ const ALICE_ID="A3UCXD63FCFXMX7GH64FZM5EAHH3PGLKWRMBHPGY4AA3MGM6SXPQ"
 const ALICE_PORT=6007
 const ALICE_VIP = "fd00::f054:f1ab:89ed:c146"
 
-const BOB_ID="FYNTCKQJGFAPEMMTNI5LQEJYUI5QXHJTWE64DCFB2HLGKVKAESZQ"
+const BOB_ID="BVMXJRUH7FVKYBZBXJ7HQVHDIMDO7ADRUUQLYMDU6X7SARNP5OXA"
 const BOB_PORT=6107
-const BOB_VIP="fd00::825f:82a5:22f9:9ec0"
+const BOB_VIP="fd00::156:6388:1fdf:cb69"
 
 const CAROL_PORT=6207
 const CAROL_ID="IN7E4J4VZ66TJZFY4ZABEM6STXIBEU7GVAVOE5NCM5DLVRIDJNFQ"
@@ -167,10 +175,10 @@ const BOB_KEYS = `
   "clusters": [],
   "users": [
     {
-      "name": "default",
+      "name": "BVMXJRUH7FVKYBZBXJ7HQVHDIMDO7ADRUUQLYMDU6X7SARNP5OXA",
       "user": {
-        "client-certificate-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwakNDQVhpZ0F3SUJBZ0lRR0RUNDYydDVDUUI1c3d1V1haN2RGVEFLQmdncWhrak9QUVFEQWpBNU1SWXcKRkFZRFZRUUtFdzFvTG5kbFltbHVaaTVwYm1adk1SOHdIUVlEVlFRREV4WmpiM04wYVc0eE5pNW9MbmRsWW1sdQpaaTVwYm1adk1CNFhEVEl4TURFeE9ERTRNVGd6TmxvWERUSXlNREV4T0RFNE1UZ3pObG93T1RFV01CUUdBMVVFCkNoTU5hQzUzWldKcGJtWXVhVzVtYnpFZk1CMEdBMVVFQXhNV1kyOXpkR2x1TVRZdWFDNTNaV0pwYm1ZdWFXNW0KYnpCWk1CTUdCeXFHU000OUFnRUdDQ3FHU000OUF3RUhBMElBQk1qVUJnWFVUc3dRcDdBalNGRFF1OXBIWWtZSwpuWU5YbjlJRWVUOGxrN3ZLS081Tm9wWjkvSll1Ri9EUnpURlpSY2lOajEyVVlTMk9nbCtDcFNMNW5zQ2pZakJnCk1BNEdBMVVkRHdFQi93UUVBd0lGb0RBZEJnTlZIU1VFRmpBVUJnZ3JCZ0VGQlFjREFRWUlLd1lCQlFVSEF3SXcKREFZRFZSMFRBUUgvQkFJd0FEQWhCZ05WSFJFRUdqQVlnaFpqYjNOMGFXNHhOaTVvTG5kbFltbHVaaTVwYm1adgpNQW9HQ0NxR1NNNDlCQU1DQTBnQU1FVUNJQi9iT3EzMFNtTVZpYnY4amZiZ2JDZzBnRGUwWTJQVmNueFJuN3dSCk9SeE5BaUVBcFBEUGdDdExZeWg5bjZHbEdaREwyeXBDNmFkWm5BZEZ1Tjd3R0E2eE1vRT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=",
-        "client-key-data": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ1hlQjl1ZnN5SVZlN0V0SUMKWTVYOWNCQzBCZVArUmdoc0MxQzhkQlRuRHZpaFJBTkNBQVRJMUFZRjFFN01FS2V3STBoUTBMdmFSMkpHQ3AyRApWNS9TQkhrL0paTzd5aWp1VGFLV2ZmeVdMaGZ3MGMweFdVWElqWTlkbEdFdGpvSmZncVVpK1o3QQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+        "client-certificate-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwekNDQVhpZ0F3SUJBZ0lRS1RXUlp4WWUyTzIxa2doRkNnL1Z0VEFLQmdncWhrak9QUVFEQWpBNU1SWXcKRkFZRFZRUUtFdzF0TG5kbFltbHVaaTVwYm1adk1SOHdIUVlEVlFRREV4WmpiM04wYVc0eE5pNXRMbmRsWW1sdQpaaTVwYm1adk1CNFhEVEl4TURReU5ERXpORGt3TlZvWERUSXlNRFF5TkRFek5Ea3dOVm93T1RFV01CUUdBMVVFCkNoTU5iUzUzWldKcGJtWXVhVzVtYnpFZk1CMEdBMVVFQXhNV1kyOXpkR2x1TVRZdWJTNTNaV0pwYm1ZdWFXNW0KYnpCWk1CTUdCeXFHU000OUFnRUdDQ3FHU000OUF3RUhBMElBQlBWUUVCRjBMMWZnTzlrQVpUS0RwdzZ5ZlI5WgpzWVh1dGJwY0trTUhoV3BJTkw0SDFxcDgxc0VOZ21KbmdIbnA4VU50NWxvbHA3VU5BVlpqaUIvZnkybWpZakJnCk1BNEdBMVVkRHdFQi93UUVBd0lGb0RBZEJnTlZIU1VFRmpBVUJnZ3JCZ0VGQlFjREFRWUlLd1lCQlFVSEF3SXcKREFZRFZSMFRBUUgvQkFJd0FEQWhCZ05WSFJFRUdqQVlnaFpqYjNOMGFXNHhOaTV0TG5kbFltbHVaaTVwYm1adgpNQW9HQ0NxR1NNNDlCQU1DQTBrQU1FWUNJUUMrbytLbDZ4cklaNEtUeVNTQWczd0p4L2pZOFFzWGlOb2VUZ1lrCmdYeTl4QUloQVBORlpHRm44UTBiMkFuSUI4LzFHR0Z0bzcwT3VWczF3cG1qRzByK3lQZnAKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=",
+        "client-key-data": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3o1YXFiMmhIUDlkcjQ5QXMKMXRuM0Vwclg0TmdSbHQ1QS9qL1d2cjIxY2p1aFJBTkNBQVQxVUJBUmRDOVg0RHZaQUdVeWc2Y09zbjBmV2JHRgo3clc2WENwREI0VnFTRFMrQjlhcWZOYkJEWUppWjRCNTZmRkRiZVphSmFlMURRRldZNGdmMzh0cAotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
       }
     }
   ],
@@ -179,7 +187,7 @@ const BOB_KEYS = `
       "name": "default",
       "context": {
         "cluster": "default",
-        "user": "default"
+        "user": "BVMXJRUH7FVKYBZBXJ7HQVHDIMDO7ADRUUQLYMDU6X7SARNP5OXA"
       }
     }
   ],

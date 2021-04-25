@@ -9,14 +9,14 @@ import (
 
 func TestRTC(t *testing.T) {
 
-	alice := test.InitTestServer(test.ALICE_KEYS, nil)
+	alice := test.InitTestServer(test.ALICE_KEYS, nil, nil)
 	// Enable RTC for alice
 	pc1, off1, err := InitWebRTCS(alice, alice.Auth)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bob := test.InitTestServer(test.BOB_KEYS, nil)
+	bob := test.InitTestServer(test.BOB_KEYS, nil, nil)
 	InitWebRTCS(bob, bob.Auth)
 
 

@@ -3,9 +3,9 @@ package main
 import (
 	"net/http"
 
+	"github.com/costinm/ugate/ext/xds"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/costinm/ugate/webpush"
-	"github.com/costinm/ugate/xds"
 	"google.golang.org/grpc"
 )
 

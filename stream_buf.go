@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -42,15 +43,16 @@ var BufferedConPool = sync.Pool{New: func() interface{} {
 	}
 }}
 
-func GetConn(in net.Conn) *BufferedStream {
+// GetBufferedStream should be used to get a recycled stream.
+func GetBufferedStream(out io.Writer, in io.ReadCloser) *BufferedStream {
 	br := BufferedConPool.Get().(*BufferedStream)
 	br.resetStats()
-	br.Out = in
-	br.Out = in
+	br.Out = out
 	br.In = in
 	br.sniffing = false
 	br.off = 0
 	br.End = 0
+	br.recycled = false
 	return br
 }
 
@@ -80,16 +82,27 @@ type BufferedStream struct {
 	// using end and off as pointers to data
 	Buf []byte
 
-	// read so far from buffer. Unread data in off:last
+	// read so far from buffer. Unread data in off:End (TODO: use len instead of End)
 	off int
 
-	// number of bytes in buffer.
+	// last bytes with data in the buffer.
 	End int
 
 	// If an error happened while sniffing
 	lastErr error
 
 	IpBuf []byte
+
+	// True if the buffer has been recycled. Will panic if any operation is done.
+	recycled bool
+
+	// TODO: if a Read or Write are in progress.
+	active bool
+}
+
+func (b *BufferedStream) Recycle() {
+	b.recycled = true
+	BufferedConPool.Put(b)
 }
 
 func (b *BufferedStream) empty() bool {
@@ -192,7 +205,6 @@ func (b *BufferedStream) Read(p []byte) (int, error) {
 	}
 	b.Stream.RcvdPackets++
 	b.Stream.RcvdBytes += sn
-	sErr = eof(sErr)
 	if sErr != nil {
 		b.Stream.ReadErr = sErr
 	}
@@ -255,7 +267,6 @@ func (b *BufferedStream) WriteTo(w io.Writer) (n int64, err error) {
 			}
 		}
 		// May return err but still have few bytes
-		sErr = eof(sErr)
 		if sErr != nil {
 			b.Stream.ReadErr = sErr
 			return n, sErr
@@ -263,16 +274,16 @@ func (b *BufferedStream) WriteTo(w io.Writer) (n int64, err error) {
 	}
 }
 
-func eof(err error) error {
+func NoEOF(err error) error {
 	if err == nil {
 		return nil
 	}
-	//if err == io.EOF {
-	//	err = nil
-	//}
-	//if err1, ok := err.(*net.OpError); ok && err1.Err == syscall.EPIPE {
-	//	// typical close
-	//	err = nil
-	//}
+	if err == io.EOF {
+		err = nil
+	}
+	if err1, ok := err.(*net.OpError); ok && err1.Err == syscall.EPIPE {
+		// typical close
+		err = nil
+	}
 	return err
 }

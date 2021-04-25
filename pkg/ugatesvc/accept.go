@@ -49,7 +49,7 @@ func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.BufferedStream) {
 
 // New style, based on lwip. Blocks until connect, proxy runs in background.
 func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
-	bconn := ugate.GetConn(conn)
+	bconn := ugate.GetBufferedStream(conn, conn)
 	bconn.Meta().Egress = true
 	ug.OnStream(bconn.Meta())
 	defer ug.OnStreamDone(bconn)
@@ -96,7 +96,7 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 
 	// Get a buffered stream - this is used for sniffing.
 	// Most common case is TLS, we want the SNI.
-	bconn := ugate.GetConn(acceptedCon)
+	bconn := ugate.GetBufferedStream(acceptedCon, acceptedCon)
 	ug.OnStream(bconn.Meta())
 	defer ug.OnStreamDone(bconn)
 	str := bconn.Meta()

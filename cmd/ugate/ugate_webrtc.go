@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
+	"github.com/costinm/ugate/ext/webrtc"
 	"github.com/costinm/ugate/pkg/ugatesvc"
-	"github.com/costinm/ugate/webrtc"
 )
 
 func init() {

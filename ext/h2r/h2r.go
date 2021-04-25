@@ -1,4 +1,4 @@
-package ugatesvc
+package h2r
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/pipe"
+	"github.com/costinm/ugate/pkg/ugatesvc"
 	"golang.org/x/net/http2"
 )
 
@@ -56,17 +57,47 @@ import (
 //			log.Println("H2R-Client: Read Context done")
 //		}()
 
-// Connect creates one connection to a mesh node, using one of the
+type H2R struct {
+	ug *ugatesvc.UGate
+
+	// Transport object for http2 library
+	h2t      *http2.Transport
+	h2Server *http2.Server
+	handler  http.Handler
+}
+
+func New(ug *ugatesvc.UGate) *H2R {
+	h2t := &http2.Transport{
+			ReadIdleTimeout: 10000 * time.Second,
+			StrictMaxConcurrentStreams: false,
+			AllowHTTP: true,
+	}
+	h2r := &H2R{ug: ug, handler: ug.H2Handler, h2t: h2t, h2Server: &http2.Server{}}
+	ug.Mux.HandleFunc("/h2r/", h2r.HandleH2R)
+	ug.MuxDialers["h2r"] = h2r
+	return h2r
+}
+
+
+type H2RMux struct {
+	*http2.ClientConn
+
+	tlsStr *ugate.Stream
+	dm *ugate.DMNode
+}
+
+
+
+// DialMUX creates one connection to a mesh node, using one of the
 // supported multiplex protocols.
-func (ug *UGate) Connect(ctx context.Context, dm *ugate.DMNode, ev chan string) error {
+func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
 	// TODO: try all published addresses, including all protos
 	addr := dm.Addr
-	t := ug.H2Handler
 
-	str, err := ug.dialTLS(ctx, addr, []string{/*"h2r", */"h2"})
+	str, err := t.ug.DialTLS(ctx, addr, []string{ "h2r",  "h2"})
 	if err != nil {
 		log.Println("Failed to connect ", addr, err)
-		return err
+		return nil, err
 	}
 
 	// Callback when the stream is closed, notify end.
@@ -82,124 +113,65 @@ func (ug *UGate) Connect(ctx context.Context, dm *ugate.DMNode, ev chan string) 
 	//
 
 	// Forward connection to the node.
-	cc, err := t.ug.H2Handler.h2t.NewClientConn(str)
+	cc, err := t.h2t.NewClientConn(str)
 	if err != nil {
 		log.Println("Failed to initiate h2 conn")
-		return err
+		return nil, err
 	}
 
-	//go func() {
-	//	for {
-	//		time.Sleep(50 * time.Second)
-	//		r0, _ := http.NewRequest("GET", "http://localhost/_dm/id/UPSTREAM", nil)
-	//		_, err := cc.RoundTrip(r0)
-	//		if err != nil {
-	//			log.Println("H2R upstream ", err)
-	//			return
-	//		}
-	//		//err := cc.Ping(context.Background())
-	//		//if err != nil {
-	//		//	log.Println("Ping err")
-	//		//}
-	//	}
-	//
-	//}()
-
-	t.m.Lock()
-	t.Reverse[dm.ID] = str
-	t.m.Unlock()
-
-	// Set the mux, for future connections.
-	dm.Muxer = cc
+	// TODO: use MASQUE to detect support ?
 
 	// Initial message on the connection is to setup the reverse pipe.
 	// This in turn will call this node, to validate the connection.
 	p := pipe.New()
-	postR, _ := http.NewRequest("POST", "https://localhost/h2r/", p)
+	postR, _ := http.NewRequest("POST",
+		"https://" + addr + "/h2r/", p)
+	tok := t.ug.Auth.VAPIDToken(addr)
+	postR.Header.Add("authorization", tok)
+
 	res, err := cc.RoundTrip(postR)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	str = ugate.NewStreamRequestOut(postR, p, res, nil)
 
 	log.Println("H2R-Client: POST Reverse accept start ",
-		str.RemoteAddr(), str.LocalAddr(), RemoteID(str))
+		str.RemoteAddr(), str.LocalAddr(), ugatesvc.RemoteID(str))
 
-	if ev != nil {
-		select {
-			case ev <- "":
-			default:
-		}
-	}
+	go func() {
+		t.h2Server.ServeConn(
+			str,
+			&http2.ServeConnOpts{
+				Handler: t.handler, // Also plain text, needs to be upgraded
+				Context: str.Context(),
 
-	t.h2Server.ServeConn(
-		str,
-		&http2.ServeConnOpts{
-			Handler: t, // Also plain text, needs to be upgraded
-			Context: str.Context(),
+				//Context: // can be used to cancel, pass meta.
+				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
+			})
+		log.Println("H2R-Client: Reverse accept closed")
+		dm.Muxer = nil
+	}()
 
-			//Context: // can be used to cancel, pass meta.
-			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
-		})
-	log.Println("H2R-Client: Reverse accept closed")
-	dm.Muxer = nil
-	return nil
+	h2rm := &H2RMux{dm: dm, tlsStr: str, ClientConn: cc}
+	dm.Muxer = h2rm
+
+	return h2rm, nil
 }
 
-// Reverse Accept dials a connection to addr, and registers a H2 SERVER
-// conn on it. The other end will register a H2 client, and create streams.
-// The client cert will be used to associate incoming streams, based on config or direct mapping.
-// TODO: break it in 2 for tests to know when accept is in effect.
-func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string)  {
-	// maintain while the host is in the 'pinned' list
-	if _, f := t.ug.Config.H2R[dm.ID]; !f {
-		return
-	}
 
-	ctx := context.Background()
-	backoff := 3000 * time.Millisecond
-
-	//ctx := context.Background()
-	//ctx, ctxCancel = context.WithTimeout(ctx, 5*time.Second)
-
-	// Blocking
-	err := t.ug.Connect(ctx, dm, ev)
-	if err != nil {
-		if backoff < 15 * time.Minute {
-			backoff = 2 * backoff
-		}
-	} else {
-		backoff = 3000 * time.Millisecond
-	}
-	time.AfterFunc(backoff, func() {
-		t.maintainPinnedConnection(dm, ev)
-	})
-
-	// p := str.TLS.NegotiatedProtocol
-	//if p == "h2r" {
-	//	// Old code used the 'raw' TLS connection to create a  server connection
-	//	t.h2Server.ServeConn(
-	//		str,
-	//		&http2.ServeConnOpts{
-	//			Handler: t, // Also plain text, needs to be upgraded
-	//			Context: str.Context(),
-	//
-	//			//Context: // can be used to cancel, pass meta.
-	//			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
-	//		})
-	//}
-}
-
-// HandleH2R takes a stream ( handshaked over TLS or in a POST/CONNECT),
-// and uses it to create a H2 RoundTripper, i.e. a client connection.
-// Typically str is associated with the /h2r/ URL
+// HandleH2R takes a POST "/h2r/" request and set the stream as a H2 client connection.
 //
-// The connection was accepted/received, but we act as client.
+// It will start by sending a test "id" request, and associate the muxed connection to the
+// node.
+//
 // Blocks until str.Close().
-func (t *H2Transport) HandleH2R(str *ugate.Stream) error {
+func (t *H2R) HandleH2R(w http.ResponseWriter, r *http.Request) {
 	// This is the H2 in reverse - start a TLS client conn, and keep  track of it
 	// for forwarding to the dest.
+	str := ugate.NewStreamRequest(r, w, nil)
+	str.TLS = r.TLS // TODO: also get the ID from JWT
+
 	end := make(chan int)
 
 	// Callback when the stream is closed, notify end.
@@ -209,14 +181,13 @@ func (t *H2Transport) HandleH2R(str *ugate.Stream) error {
 
 	cc, err := t.h2t.NewClientConn(str)
 	if err != nil {
-		return err
+		return
 	}
 
-	k := RemoteID(str) // mesh ID based on client cert.
+	k := ugatesvc.RemoteID(str) // mesh ID based on client cert.
 
 	n := t.ug.GetOrAddNode(k)
 
-	log.Println("Setting H2R on ", n.ID(), "for", t.ug.Auth.VIP6)
 	n.Muxer = cc
 
 	ra := str.RemoteAddr()
@@ -224,14 +195,17 @@ func (t *H2Transport) HandleH2R(str *ugate.Stream) error {
 
 	// TODO: use new URL
 	r0, _ := http.NewRequest("GET", "http://localhost/_dm/id/U/" + t.ug.Auth.ID, nil)
+	tok := t.ug.Auth.VAPIDToken(n.ID)
+	r0.Header.Add("authorization", tok)
 	res0, err := cc.RoundTrip(r0)
 	if err != nil {
-		log.Println("Reverse accept id ", err, ra, k)
-		return err
+		log.Println("Reverse accept id err ", err, ra, k)
+		return
 	}
 	upData, _ := ioutil.ReadAll(res0.Body)
 	res0.Body.Close()
-	log.Println("H2R-UP start ", k, ra, t.ug.Auth.ID, " -> ", string(upData))
+
+	log.Println("H2R start on ", t.ug.Auth.ID, "for", n.ID, k, ra, " -> ", string(upData))
 
 	//go func() {
 	//	for {
@@ -252,8 +226,7 @@ func (t *H2Transport) HandleH2R(str *ugate.Stream) error {
 
 	// Wait until t.MarkDead is called - or the con is closed
 	<-end
-	log.Println("H2R-UP end", k, ra, t.ug.Auth.ID)
 
 	n.Muxer = nil
-	return nil
+	return
 }

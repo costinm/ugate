@@ -1,8 +1,8 @@
-module github.com/costinm/ugate/webrtc
+module github.com/costinm/ugate/ext/webrtc
 
 go 1.16
 
-replace github.com/costinm/ugate => ../
+replace github.com/costinm/ugate => ../../
 
 require (
 	github.com/costinm/ugate v0.0.0-20210221155556-10edd21fadbf
