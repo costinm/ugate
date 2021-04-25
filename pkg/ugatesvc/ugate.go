@@ -151,7 +151,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 
 
 	ug.TLSConfig = &tls.Config{
-		MinVersion: tls.VersionTLS13,
+		//MinVersion: tls.VersionTLS13,
 		//PreferServerCipherSuites: ugate.preferServerCipherSuites(),
 		InsecureSkipVerify: true,                  // This is not insecure here. We will verify the cert chain ourselves.
 		ClientAuth:         tls.RequestClientCert, // not require - we'll fallback to JWT

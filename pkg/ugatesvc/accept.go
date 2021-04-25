@@ -159,7 +159,7 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 		tc, err := ug.NewTLSConnIn(str.Context(),cfg,  bconn, ug.TLSConfig)
 		if err != nil {
 			str.ReadErr = err
-			log.Println("TLS: ", err)
+			log.Println("TLS: ", str.RemoteAddr(), str.Dest, str.Listener, err)
 			return
 		}
 		tlsOrOrigStr = tc.Meta()

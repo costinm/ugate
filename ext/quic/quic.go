@@ -39,7 +39,6 @@ import (
 type Quic struct {
 	Auth      *auth.Auth
 	Port      int
-	PortHTTPS int
 
 	// Incoming streams are mapped to HTTP
 	HTTPHandler http.Handler
@@ -59,14 +58,13 @@ func New(ug *ugatesvc.UGate) *Quic {
 	//os.Setenv("QUIC_GO_LOG_LEVEL", "DEBUG")
 
 	// We will only register a single QUIC server by default, and a factory for cons
-	port := ug.Config.BasePort + ugate.PORT_HTTPS
+	port := ug.Config.BasePort + ugate.PORT_BTS
 	if os.Getuid() == 0 {
 		port = 443
 	}
 
 	qa := &Quic{
-		Port: ug.Config.BasePort + ugate.PORT_BTS,
-		PortHTTPS: port,
+		Port: port,
 		Auth: ug.Auth,
 		HTTPHandler: ug.H2Handler,
 		UG: ug,

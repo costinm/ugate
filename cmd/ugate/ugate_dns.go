@@ -1,3 +1,5 @@
+// +build !MIN
+
 package main
 
 import (
