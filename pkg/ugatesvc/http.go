@@ -163,8 +163,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var SAN string
 	defer func() {
 		// TODO: add it to an event buffer
-		log.Println("HTTP", r.Method, r.URL, r.Proto, r.Header, RemoteID, SAN,
-			r.RemoteAddr, time.Since(t0))
+		l.ug.OnHClose("HTTP", RemoteID, SAN, r, time.Since(t0))
 		if r := recover(); r != nil {
 			fmt.Println("Recovered in f", r)
 
@@ -234,7 +233,9 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Del("from")
 	}
 
-	log.Println("HTTP-Start ", r.Method, r.URL, r.Proto, r.Header, RemoteID, SAN, r.RemoteAddr)
+	if ugate.DebugClose {
+		log.Println("HTTP-Start ", r.Method, r.URL, r.Proto, r.Header, RemoteID, SAN, r.RemoteAddr)
+	}
 
 	// TODO: authz for each case !!!!
 

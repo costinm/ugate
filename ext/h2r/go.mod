@@ -2,7 +2,7 @@ module github.com/costinm/ugate/ext/h2r
 
 go 1.16
 
-//replace github.com/costinm/ugate => ../../
+replace github.com/costinm/ugate => ../../
 
 require (
 	github.com/costinm/ugate v0.0.0-20210419001517-08ea89abf527

@@ -41,15 +41,19 @@ func (ugs *QuicMUX) RoundTrip(request *http.Request) (*http.Response, error) {
 	request.URL.Scheme = "https"
 	request.URL.Host = ugs.hostname
 	if ugate.DebugClose {
-		log.Println("H3: RT-start", ugs.n.ID, request.URL, ugs.client)
+		if ugs.n != nil {
+			log.Println("H3: RT-start", ugs.n.ID, request.URL, ugs.client)
+		} else {
+			log.Println("H3: RT-start", request.URL, ugs.client)
+		}
 	}
 	res, err := ugs.rt.RoundTrip(request)
 	if ugate.DebugClose {
-		log.Println("H3: RT-done", ugs.n.ID, request.URL, ugs.client, err)
+		log.Println("H3: RT-done", request.URL, ugs.client, err)
 		if err == nil {
 			go func() {
 				<-request.Context().Done()
-				log.Println("H3: RT-ctx-done", ugs.n.ID, request.URL)
+				log.Println("H3: RT-ctx-done", request.URL)
 			}()
 		}
 	}

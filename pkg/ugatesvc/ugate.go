@@ -327,15 +327,7 @@ func (ug *UGate) OnStreamDone(rc ugate.MetaConn) {
 		str.Close()
 	}
 
-	log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
-		str.StreamId,
-		str.Type, rc.RemoteAddr(),
-		str.Dest,
-		str.RcvdPackets, str.RcvdBytes,
-		str.SentPackets, str.SentBytes,
-		time.Since(str.LastWrite),
-		time.Since(str.LastRead),
-		int64(time.Since(str.Open).Seconds()))
+	ug.OnSClose(str, rc.RemoteAddr())
 
 	if bc, ok := rc.(*ugate.BufferedStream); ok {
 		ugate.BufferedConPool.Put(bc)
@@ -502,3 +494,26 @@ func (gw *UGate) OnMuxClose(dm *ugate.DMNode) {
 
 }
 
+var LogClose = false
+
+// OnHClose called on http close
+func (gw *UGate) OnHClose(s string, id string, san string, r *http.Request, since time.Duration) {
+	if LogClose {
+		log.Println("HTTP", r.Method, r.URL, r.Proto, r.Header, id, san, r.RemoteAddr, since)
+	}
+}
+
+func (gw *UGate) OnSClose(str *ugate.Stream, addr net.Addr) {
+	if LogClose {
+		log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
+			str.StreamId,
+			str.Type, addr,
+			str.Dest,
+			str.RcvdPackets, str.RcvdBytes,
+			str.SentPackets, str.SentBytes,
+			time.Since(str.LastWrite),
+			time.Since(str.LastRead),
+			int64(time.Since(str.Open).Seconds()))
+
+	}
+}

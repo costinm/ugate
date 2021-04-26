@@ -638,7 +638,7 @@ func (b *Stream) PostDial(nc net.Conn, err error) {
 
 // If true, will debug or close operations.
 // Close is one of the hardest problems, due to FIN/RST multiple interfaces.
-const DebugClose = true
+const DebugClose = false
 
 // Proxy the accepted connection to a dialed connection.
 // Blocking, will wait for both sides to FIN or RST.

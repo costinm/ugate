@@ -19,8 +19,12 @@ import (
 type EchoHandler struct {
 }
 
+var DebugEcho = false
+
 func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Println("ECHOH ", r)
+	if DebugEcho {
+		log.Println("ECHOH ", r)
+	}
 	w.WriteHeader(200)
 	w.(http.Flusher).Flush()
 
@@ -49,8 +53,9 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	if err != nil {
 		return err
 	}
-	log.Println("ECHO rcv", n, "strid", str.StreamId)
-
+	if DebugEcho {
+		log.Println("ECHO rcv", n, "strid", str.StreamId)
+	}
 	if !serverFirst {
 		str.Write(b.Bytes())
 	}
@@ -64,8 +69,9 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 }
 
 func (eh *EchoHandler) Handle(ac ugate.MetaConn) error {
-	log.Println("ECHOS ", ac.Meta())
-
+	if DebugEcho {
+		log.Println("ECHOS ", ac.Meta())
+	}
 	return eh.handle(ac.Meta(), false)
 }
 

@@ -4,13 +4,8 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/rsa"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"testing"
@@ -211,62 +206,5 @@ func TestCrypto(t *testing.T) {
 	})
 }
 
-func BenchmarkUGate(t *testing.B) {
-	// WIP
-}
-
 var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
 
-func xTestKube(t *testing.T) {
-	d, _ := ioutil.ReadFile("testdata/kube.json")
-	kube := &auth.KubeConfig{}
-	err := json.Unmarshal(d, kube)
-	if err != nil {
-		t.Fatal("Invalid kube config ", err)
-	}
-	//log.Printf("%#v\n", kube)
-	var pubk crypto.PublicKey
-	for _, c := range kube.Clusters {
-		//log.Println(string(c.Cluster.CertificateAuthorityData))
-		block, _ := pem.Decode(c.Cluster.CertificateAuthorityData)
-		xc, _ := x509.ParseCertificate(block.Bytes)
-		log.Printf("%#v\n", xc.Subject)
-		pubk = xc.PublicKey
-	}
-
-	scrt, _ := ioutil.ReadFile("testdata/server.crt")
-	block, _ := pem.Decode(scrt)
-	xc, _ := x509.ParseCertificate(block.Bytes)
-	log.Printf("%#v\n", xc.Subject)
-	pubk1 := xc.PublicKey
-
-	for _, a := range kube.Users {
-		if a.User.Token != "" {
-			h, t, txt, sig, _ := auth.JwtRawParse(a.User.Token)
-			log.Printf("%#v %#v\n", h, t)
-
-			if h.Alg == "RS256" {
-				rsak := pubk.(*rsa.PublicKey)
-				hasher := crypto.SHA256.New()
-				hasher.Write(txt)
-				hashed := hasher.Sum(nil)
-				err = rsa.VerifyPKCS1v15(rsak,crypto.SHA256, hashed, sig)
-				if err != nil {
-					log.Println("K8S Root Certificate not a signer")
-				}
-				err = rsa.VerifyPKCS1v15(pubk1.(*rsa.PublicKey),crypto.SHA256, hashed, sig)
-				if err != nil {
-					log.Println("K8S Server Certificate not a signer")
-				}
-			}
-
-		}
-
-		if a.User.ClientKeyData != nil {
-
-		}
-		if a.User.ClientCertificateData != nil {
-
-		}
-	}
-}

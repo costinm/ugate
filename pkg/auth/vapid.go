@@ -42,7 +42,7 @@ var (
 	dot         = []byte(".")
 )
 
-type jwtHead struct {
+type JWTHead struct {
 	Typ string `json:"typ"`
 	Alg string `json:"alg,omitempty"`
 }
@@ -68,6 +68,8 @@ type JWT struct {
 // VAPIDToken creates a token with the specified endpoint, using configured Sub id
 // and a default expiration (1h).
 //
+// Format is "vapid t=TOKEN k=PUBKEY
+//
 // The optional (unauthenticated) Sub field is populated from Name@Domain or Domain.
 // The DMesh VIP is based on the public key of the signer.
 // AUD is the URL from the subscription - for DMesh https://VIP:5228/s or
@@ -89,10 +91,10 @@ func (auth *Auth) VAPIDToken(aud string) string {
 	jwt.Exp = time.Now().Unix() + 3600
 	t, _ := json.Marshal(jwt)
 
-	return auth.VAPIDSign(t)
+	return auth.rawVAPIDSign(t)
 }
 
-func (auth *Auth) VAPIDSign(t []byte) string {
+func (auth *Auth) rawVAPIDSign(t []byte) string {
 	enc := base64.RawURLEncoding
 	// Base64URL for the content of the token
 	t64 := make([]byte, enc.EncodedLen(len(t)))
@@ -144,7 +146,7 @@ func (auth *Auth) VAPIDSign(t []byte) string {
 	return "vapid t=" + string(token) + ", k=" + auth.pub64
 }
 
-func JwtRawParse(tok string) (*jwtHead, *JWT, []byte, []byte, error) {
+func JwtRawParse(tok string) (*JWTHead, *JWT, []byte, []byte, error) {
 	// Token is parsed with square/go-jose
 	parts := strings.Split(tok, ".")
 	if len(parts) < 2 {
@@ -154,7 +156,7 @@ func JwtRawParse(tok string) (*jwtHead, *JWT, []byte, []byte, error) {
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("VAPI: malformed jwt %v", err)
 	}
-	h := &jwtHead{}
+	h := &JWTHead{}
 	json.Unmarshal(head, h)
 
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
@@ -172,7 +174,7 @@ func JwtRawParse(tok string) (*jwtHead, *JWT, []byte, []byte, error) {
 	return h, b, []byte(tok[0 : len(parts[0])+len(parts[1])+1]), sig, nil
 }
 
-func JWTParseAndSig(tok string, pk crypto.PublicKey) (*JWT, error) {
+func jwtParseAndCheckSig(tok string, pk crypto.PublicKey) (*JWT, error) {
 	h, b, txt, sig, err := JwtRawParse(tok)
 	if err != nil {
 		return nil, err
@@ -211,6 +213,8 @@ func JWTParseAndSig(tok string, pk crypto.PublicKey) (*JWT, error) {
 // expCheck should be set to current time to set expiration
 //
 // Data is extracted from VAPID header - 'vapid' scheme and t/k params
+//
+// Does not check audience or other parms.
 func CheckVAPID(tok string, now time.Time) (jwt *JWT, pub []byte, err error) {
 	// Istio uses oidc - will make a HTTP request to fetch the .well-known from
 	// iss.
@@ -241,7 +245,7 @@ func CheckVAPID(tok string, now time.Time) (jwt *JWT, pub []byte, err error) {
 		return nil, nil, fmt.Errorf("VAPI: malformed jwt %d", len(pubk))
 	}
 
-	b, err := JWTParseAndSig(tok, pk)
+	b, err := jwtParseAndCheckSig(tok, pk)
 	if err != nil {
 		return nil, nil, err
 	}

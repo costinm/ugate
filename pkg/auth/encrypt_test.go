@@ -16,14 +16,10 @@ package auth
 
 import (
 	"bytes"
-	"crypto/elliptic"
 	"encoding/base64"
 	"encoding/hex"
 	"log"
-	"strings"
 	"testing"
-
-	"github.com/costinm/ugate/webpush"
 )
 
 var (
@@ -39,102 +35,22 @@ var (
 		}
 	}`)
 	message   = `I am the walrus`
-	rfcPublic = "BCEkBjzL8Z3C-oi2Q7oE5t2Np-p7osjGLg93qUP0wvqRT21EEWyf0cQDQcakQMqz4hQKYOQ3il2nNZct4HgAUQU"
-	rfcCipher = "6nqAQUME8hNqw5J3kl8cpVVJylXKYqZOeseZG8UueKpA"
-	rfcAuth   = "R29vIGdvbyBnJyBqb29iIQ"
+
+	rfcPlaintext = "V2hlbiBJIGdyb3cgdXAsIEkgd2FudCB0byBiZSBhIHdhdGVybWVsb24"
+	rfcAsPublic = "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8"
+	rfcAsPrivate = "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw"
+	rfcUAPublic = "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
+	rfcUAPrivate = "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94"
+
+	rfcCipher = "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN"//"8pfeW0KbunFT06SuDKoJH9Ql87S1QUrdirN6GcG7sFz1y1sqLgVi1VhjVkHsUoEsbI_0LpXMuGvnzQ"//"6nqAQUME8hNqw5J3kl8cpVVJylXKYqZOeseZG8UueKpA"
+	rfcSalt = "DGv6ra1nlYgDCS1FRnbzlw"
+	rfcAuth   = "BTBZMqHH6r4Tts7J_aSIgg"
 )
-
-func mockSalt() ([]byte, error) {
-	return hex.DecodeString("00112233445566778899aabbccddeeff")
-}
-
-func mockKeys() ([]byte, []byte, error) {
-	priv, _ := hex.DecodeString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-
-	// Generate the right public key for the static private key
-	x, y := curve.ScalarMult(curve.Params().Gx, curve.Params().Gy, priv)
-
-	return priv, elliptic.Marshal(curve, x, y), nil
-}
-
-func stubFuncs(salt func() ([]byte, error), key func() ([]byte, []byte, error)) func() {
-	origSalt, origKey := randomSalt, randomKey
-	randomSalt, randomKey = salt, key
-	return func() {
-		randomSalt, randomKey = origSalt, origKey
-	}
-}
-
-
-func TestEncrypt(t *testing.T) {
-	sub, err := webpush.SubscriptionFromJSON(subscriptionJSON)
-	if err != nil {
-		t.Error("Couldn't decode JSON subscription")
-	}
-
-	// 4079 byted should be too big
-	_, err = Encrypt(sub.Key, sub.Auth, strings.Repeat(" ", 4079))
-	if err == nil {
-		t.Error("Expected to get an error due to long payload")
-	}
-
-	// 4078 bytes should be fine
-	_, err = Encrypt(sub.Key, sub.Auth, strings.Repeat(" ", 4078))
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	defer stubFuncs(mockSalt, mockKeys)()
-
-	// Use the library to encrypt the message
-	result, err := Encrypt(sub.Key, sub.Auth, message)
-	if err != nil {
-		t.Error(err)
-	}
-
-	expCiphertext, err := hex.DecodeString(expectedCiphertextHex)
-	if err != nil {
-		t.Error(err)
-	}
-	if !bytes.Equal(result.Ciphertext, expCiphertext) {
-		t.Errorf("Ciphertext was %v, expected %v", result.Ciphertext, expCiphertext)
-	}
-
-	_, expKey, err := mockKeys()
-	if err != nil {
-		t.Error(err)
-	}
-	if !bytes.Equal(result.SendPublic, expKey) {
-		t.Errorf("Server key was %v, expected %v", result.SendPublic, expKey)
-	}
-
-	expSalt, err := mockSalt()
-	if err != nil {
-		t.Error(err)
-	}
-	if !bytes.Equal(result.Salt, expSalt) {
-		t.Errorf("Salt was %v, expected %v", result.Salt, expSalt)
-	}
-}
-
-func rfcSalt() ([]byte, error) {
-	return base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString("lngarbyKfMoi9Z75xYXmkg")
-}
-
-func rfcKeys() ([]byte, []byte, error) {
-	priv, _ := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString("nCScek-QpEjmOOlT-rQ38nZzvdPlqa00Zy0i6m2OJvY")
-
-	// Generate the right public key for the static private key
-	x, y := curve.ScalarMult(curve.Params().Gx, curve.Params().Gy, priv)
-
-	return priv, elliptic.Marshal(curve, x, y), nil
-}
 
 // TestRfcVectors uses the values given in the RFC for HTTP encryption to verify
 // that the code conforms to the RFC
-// See: https://tools.ietf.org/html/draft-ietf-httpbis-encryption-encoding-02#appendix-B
 func TestRfcVectors(t *testing.T) {
-	defer stubFuncs(rfcSalt, rfcKeys)()
+	//defer stubFuncs(rfcSalt, rfcKeys)()
 
 	b64 := base64.URLEncoding.WithPadding(base64.NoPadding)
 
@@ -142,14 +58,39 @@ func TestRfcVectors(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	key, err := b64.DecodeString(rfcPublic)
+	salt, err := b64.DecodeString(rfcSalt)
+	if err != nil {
+		t.Error(err)
+	}
+	key, err := b64.DecodeString(rfcUAPublic)
+	if err != nil {
+		t.Error(err)
+	}
+	asPublic, err := b64.DecodeString(rfcAsPublic)
+	if err != nil {
+		t.Error(err)
+	}
+	asPrivate, err := b64.DecodeString(rfcAsPrivate)
+	if err != nil {
+		t.Error(err)
+	}
+	msg, err := b64.DecodeString(rfcPlaintext)
 	if err != nil {
 		t.Error(err)
 	}
 
-	sub := &webpush.Subscription{Auth: auth, Key: key}
+	ec := &EncryptionContext{
+		Auth: auth,
+		UAPublic: key,
 
-	result, err := Encrypt(sub.Key, sub.Auth, message)
+		// Random usually - but set to match RFC
+		SendPublic: asPublic,
+		SendPrivate: asPrivate,
+
+		Salt: salt,
+	}
+
+	_, err = ec.Encrypt(msg)
 	if err != nil {
 		t.Error(err)
 	}
@@ -158,8 +99,8 @@ func TestRfcVectors(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	if !bytes.Equal(result.Ciphertext, expCiphertext) {
-		t.Errorf("Ciphertext was %v, expected %v", result.Ciphertext, expCiphertext)
+	if !bytes.Equal(ec.Ciphertext, expCiphertext) {
+		t.Errorf("Ciphertext was %v, expected %v", ec.Ciphertext, expCiphertext)
 	}
 }
 
@@ -187,14 +128,14 @@ func TestSharedSecret(t *testing.T) {
 }
 
 func BenchmarkEncrypt(b *testing.B) {
-	sub, _ := webpush.SubscriptionFromJSON(subscriptionJSON)
+	sub, _ := SubscriptionFromJSON(subscriptionJSON)
 	for i := 0; i < b.N; i++ {
 		Encrypt(sub.Key, sub.Auth, "Hello world")
 	}
 }
 
 //func BenchmarkEncryptWithKey(b *testing.B) {
-//	sub, _ := webpush.SubscriptionFromJSON(subscriptionJSON)
+//	sub, _ := SubscriptionFromJSON(subscriptionJSON)
 //	plain := []byte("Hello world")
 //	serverPrivateKey, serverPublicKey, _ := randomKey()
 //
@@ -208,7 +149,7 @@ func Test2Way(t *testing.T) {
 
 	subPriv, subPub, err := randomKey()
 	auth, err := b64.DecodeString("68zcbmaevQa7MS7aXXRX8Q")
-	sub := &webpush.Subscription{
+	sub := &Subscription{
 		Endpoint: "https://foo.com",
 		Auth:     auth,
 		Key:      subPub,
@@ -220,12 +161,15 @@ func Test2Way(t *testing.T) {
 
 	dc := EncryptionContext{
 		UAPrivate: subPriv,
+		UAPublic: subPub,
+		Auth: auth,
 	}
 	plain, err := dc.Decrypt(result.Ciphertext)
 
 	// assumes 2-bytes padding length == 0
-
-	if string(plain) != message {
+	if err != nil {
+		t.Error("Decrypt error ", err)
+	} else if string(plain) != message {
 		t.Error(plain, message)
 		return
 	}

@@ -8,9 +8,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -511,6 +515,8 @@ func (w *watcher) monitor(ug *ugatesvc.UGate, addr *net.IPAddr) {
 
 }
 
+// Decode a JWT.
+// If crt is specified - verify it using that cert
 func decode(jwt, aud string) {
 	// TODO: verify if it's a VAPID
 	parts := strings.Split(jwt, ".")
@@ -520,4 +526,26 @@ func decode(jwt, aud string) {
 		return
 	}
 	fmt.Println(string(p1b))
+
+	scrt, _ := ioutil.ReadFile("server.crt")
+	block, _ := pem.Decode(scrt)
+	xc, _ := x509.ParseCertificate(block.Bytes)
+	log.Printf("Cert subject: %#v\n", xc.Subject)
+	pubk1 := xc.PublicKey
+
+
+	h, t, txt, sig, _ := auth.JwtRawParse(jwt)
+	log.Printf("%#v %#v\n", h, t)
+
+	if h.Alg == "RS256" {
+		rsak := pubk1.(*rsa.PublicKey)
+		hasher := crypto.SHA256.New()
+		hasher.Write(txt)
+		hashed := hasher.Sum(nil)
+		err = rsa.VerifyPKCS1v15(rsak,crypto.SHA256, hashed, sig)
+		if err != nil {
+			log.Println("Root Certificate not a signer")
+		}
+	}
+
 }

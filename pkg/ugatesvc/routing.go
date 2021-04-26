@@ -197,8 +197,9 @@ func (ug *UGate) dial(ctx context.Context, addr string, r1 *http.Request) (net.C
 			}
 
 			rs := ugate.NewStreamRequestOut(r1, p, res, nil)
-
-			log.Println("TUN: ", addr, r1.URL)
+			if ugate.DebugClose {
+				log.Println("TUN: ", addr, r1.URL)
+			}
 			return rs, nil
 		}
 
