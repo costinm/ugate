@@ -8,6 +8,11 @@ listeners:
   # direct TCP connect to local iperf3 and fortio (or HTTP on default port)
   ":15101":
     forwardTo: 127.0.0.1:5201
+  "udp://:15101":
+    # The TLS server forwarding to iperf3
+    forwardTo: 127.0.0.1:5201
+
+
   # Double forwarding - similar with 2 Istio sidecars
   ":15104":
     forwardTo: localhost:15101
@@ -19,14 +24,11 @@ listeners:
   ":15102":
     forwardTo: localhost:5201
     proto: tls
+
   # The equivalent for 2 sidecars - out TLS, in TLS
   ":15103":
     # The TLS server forwarding to iperf3
     forwardTo: localiperf
-
-  # Also enabled by setting PORT, for knative or istio. Plain HTTP, with a sidecar or similar proxy.
-  ":9080":
-    proto: http
 
   # Virtual ports, captured via iptables-in
   "-:443":

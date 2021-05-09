@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"testing"
@@ -13,7 +14,6 @@ import (
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/cfgfs"
-	"github.com/costinm/ugate/pkg/pipe"
 	"github.com/costinm/ugate/test"
 )
 
@@ -77,22 +77,21 @@ func TestSrv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mc := ab.(ugate.MetaConn)
-		meta := mc.Meta()
-		log.Println("Result ", res, meta)
+		mc := ab.(*ugate.Stream)
+		log.Println("Result ", res, mc)
 	})
 
 	// This is a H2 (BTS) request that is forwarded to a TCP stream handler.
 	// Alice -BTS-> Bob -TCP-> Carol
 	t.Run("H2-egress", func(t *testing.T) {
-		p := pipe.New()
-		r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+"127.0.0.1:6112", p)
+		i, o := io.Pipe()
+		r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+"127.0.0.1:6112", i)
 		res, err := alice.RoundTrip(r)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		res1, err := test.CheckEcho(res.Body, p)
+		res1, err := test.CheckEcho(res.Body, o)
 		if err != nil {
 			t.Fatal(err)
 		}

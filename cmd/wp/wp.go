@@ -17,6 +17,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -28,7 +29,6 @@ import (
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/auth"
-	"github.com/costinm/ugate/pkg/pipe"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	msgs "github.com/costinm/ugate/webpush"
 )
@@ -131,13 +131,13 @@ func main() {
 }
 
 func Netcat(ug *ugatesvc.UGate, s string, via string) {
-	p := pipe.New()
-	r, _ := http.NewRequest("POST", s, p)
+	i, o := io.Pipe()
+	r, _ := http.NewRequest("POST", s, i)
 	res, err := ug.RoundTrip(r)
 	if err != nil {
 		log.Fatal(err)
 	}
-	nc := ugate.NewStreamRequestOut(r, p, res, nil)
+	nc := ugate.NewStreamRequestOut(r, o, res, nil)
 go func() {
 		b1 := make([]byte, 1024)
 		for {

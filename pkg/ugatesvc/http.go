@@ -106,25 +106,40 @@ func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string)
 	}
 
 	//ctx := context.Background()
-	backoff := 3000 * time.Millisecond
+	if dm.Backoff == 0 {
+		dm.Backoff = 1000 * time.Millisecond
+	}
 
 	ctx := context.TODO()
 	//ctx, ctxCancel := context.WithTimeout(ctx, 5*time.Second)
 	//defer ctxCancel()
 
-	_, err := t.ug.DialMUX(ctx, "quic", dm, nil)
-	//err := t.ug.Connect(ctx, dm, ev)
-	if err != nil {
-		_, err = t.ug.DialMUX(ctx, "h2r", dm, nil)
+	protos := t.ug.Config.TunProto
+	if len(protos) == 0 {
+		protos = []string{"quic", "h2r"}
+	}
+	var err error
+	var muxer ugate.Muxer
+	for _, k := range protos {
+		muxer, err = t.ug.DialMUX(ctx, k, dm, nil)
+		if err == nil {
+			break;
+		}
 	}
 	if err == nil {
+		log.Println("UP: ", dm.Addr, muxer)
 		// wait for mux to be closed
+		dm.Backoff = 1000 * time.Millisecond
 		return
-	} else if backoff < 15*time.Minute {
-		backoff = 2 * backoff
 	}
 
-	time.AfterFunc(backoff, func() {
+	log.Println("UP: err", dm.Addr, err, dm.Backoff)
+	// Failed to connect
+	if dm.Backoff < 15*time.Minute {
+		dm.Backoff = 2 * dm.Backoff
+	}
+
+	time.AfterFunc(dm.Backoff, func() {
 		t.maintainPinnedConnection(dm, ev)
 	})
 
@@ -262,14 +277,18 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Will sniff H2 and http/1.1 and use the right handler.
 //
 // Ex: curl localhost:9080/debug/vars --http2-prior-knowledge
-func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, bconn *ugate.BufferedStream) error {
+func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, acceptedCon net.Conn) error {
+	bconn := ugate.GetStream(acceptedCon, acceptedCon)
+	t.ug.OnStream(bconn)
+	defer t.ug.OnStreamDone(bconn)
+
 	err := SniffH2(bconn)
 	if err != nil {
 		return err
 	}
 	ctx := bconn.Context()
 
-	if bconn.Stream.Type == ugate.ProtoH2 {
+	if bconn.Type == ugate.ProtoH2 {
 		bconn.TLS = &tls.ConnectionState{
 			Version: tls.VersionTLS12,
 			CipherSuite: tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
@@ -284,7 +303,7 @@ func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, bconn *ugate.Buffer
 				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
 			})
 	} else {
-		bconn.Stream.Type = ugate.ProtoHTTP
+		bconn.Type = ugate.ProtoHTTP
 		// TODO: identify 'the proxy protocol'
 		// port is marked as HTTP - assume it is HTTP
 		t.httpListener.incoming <- bconn
@@ -302,33 +321,30 @@ var (
 )
 
 
-func SniffH2(br *ugate.BufferedStream) error {
-	br.Sniff()
+func SniffH2(s *ugate.Stream) error {
 	var proto string
 
 	for {
-		_, err := br.Fill()
+		buf, err := s.Fill(0)
 		if err != nil {
 			return err
 		}
-		off := br.End
-		if ix := bytes.IndexByte(br.Buf[0:off], '\n'); ix >=0 {
-			if bytes.Contains(br.Buf[0:off], []byte("HTTP/1.1")) {
+
+		if ix := bytes.IndexByte(buf, '\n'); ix >=0 {
+			if bytes.Contains(buf, []byte("HTTP/1.1")) {
 				proto = ugate.ProtoHTTP
 				break
 			}
 		}
-		if off >= len(h2ClientPreface) {
-			if bytes.Equal(br.Buf[0:len(h2ClientPreface)], h2ClientPreface) {
+		if ix := bytes.IndexByte(buf, '\n'); ix >=0 {
+			if bytes.Contains(buf, []byte("HTTP/2.0")) {
 				proto = ugate.ProtoH2
 				break
 			}
 		}
 	}
 
-	// All bytes in the buffer will be Read again
-	br.Reset(0)
-	br.Stream.Type = proto
+	s.Type = proto
 
 	return nil
 }
@@ -338,15 +354,15 @@ func SniffH2(br *ugate.BufferedStream) error {
 // listeners.
 //
 // Blocking.
-func (t *H2Transport) HandleHTTPS(c ugate.MetaConn) error {
+func (t *H2Transport) HandleHTTPS(c *ugate.Stream) error {
 	// http2 and http expect a net.Listener, and do their own accept()
-	str := c.Meta()
+	str := c
 	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2" {
 		t.h2Server.ServeConn(
 			c,
 			&http2.ServeConnOpts{
 				Handler: t,                  // Also plain text, needs to be upgraded
-				Context: c.Meta().Context(), // associated with the stream, with cancel
+				Context: c.Context(), // associated with the stream, with cancel
 
 				//Context: // can be used to cancel, pass meta.
 				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)

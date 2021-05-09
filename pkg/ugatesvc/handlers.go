@@ -34,11 +34,43 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	eh.handle(str, false)
 }
+// StreamInfo tracks informations about one stream.
+type StreamInfo struct {
+	LocalAddr  net.Addr
+	RemoteAddr net.Addr
 
+	Meta       http.Header
+
+	RemoteID string
+
+	ALPN     string
+
+	Dest string
+
+	Type string
+}
+
+
+func GetStreamInfo(str *ugate.Stream) *StreamInfo {
+	si := &StreamInfo{
+		LocalAddr:  str.LocalAddr(),
+		RemoteAddr: str.RemoteAddr(),
+		Dest:       str.Dest,
+		Type:       str.Type,
+	}
+	if str.Request != nil {
+		si.Meta= str.Request.Header
+	}
+	if str.TLS != nil {
+		si.ALPN = str.TLS.NegotiatedProtocol
+	}
+
+	return si
+}
 
 func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	d := make([]byte, 2048)
-	si := str.StreamInfo()
+	si := GetStreamInfo(str)
 	si.RemoteID=   RemoteID(str)
 	b1, _ := json.Marshal(si)
 	b := &bytes.Buffer{}
@@ -67,12 +99,14 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	}
 	return nil
 }
-
-func (eh *EchoHandler) Handle(ac ugate.MetaConn) error {
+func (eh *EchoHandler) String() string {
+	return "Echo"
+}
+func (eh *EchoHandler) Handle(ac *ugate.Stream) error {
 	if DebugEcho {
-		log.Println("ECHOS ", ac.Meta())
+		log.Println("ECHOS ", ac)
 	}
-	return eh.handle(ac.Meta(), false)
+	return eh.handle(ac, false)
 }
 
 //func (h2p *H2P) InitPush(mux http.ServeMux) {

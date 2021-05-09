@@ -96,7 +96,7 @@ type EncryptionContext struct {
 	// Format:
 	// 16 B Salt
 	// 4B rs {0,0, 16, 0} - 4k
-	// 1B ID-Len {65}
+	// 1B ID-Size {65}
 	// 65B SendPublicKey
 	// Up to 4k encrypted text - with 0x02 appended at the end before encryption
 	// Wasted: 7 const.

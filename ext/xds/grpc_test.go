@@ -55,6 +55,10 @@ func startLocalServer(t *testing.T) (*grpc.Server, string) {
 	return s, addr
 }
 
+func TestNativeXDS(t *testing.T) {
+
+}
+
 func TestGRpc(t *testing.T) {
 	addr := *testAddr
 	if len(*testAddr) == 0 {

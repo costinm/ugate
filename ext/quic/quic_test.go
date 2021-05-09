@@ -13,14 +13,13 @@ import (
 )
 
 func BenchmarkUGateQUIC(b *testing.B) {
-	ugatesvc.LogClose = false
 	// Fixed key, config from filesystem. Base is 14000
-	alice := test.InitTestServer(test.ALICE_KEYS, &ugate.GateCfg{BasePort: 6300, Name: "alice"}, func(gate *ugatesvc.UGate) {
+	alice := test.InitTestServer(test.ALICE_KEYS, &ugate.GateCfg{BasePort: 6300, NoAccessLog: true, Name: "alice"}, func(gate *ugatesvc.UGate) {
 		New(gate)
 	})
 
 	// In memory config store. All options
-	bob := 	test.InitTestServer(test.BOB_KEYS, &ugate.GateCfg{BasePort: 6400, Name: "bob"}, func(bob *ugatesvc.UGate) {
+	bob := 	test.InitTestServer(test.BOB_KEYS, &ugate.GateCfg{BasePort: 6400, NoAccessLog: true, Name: "bob"}, func(bob *ugatesvc.UGate) {
 		qb := New(bob)
 		qb.Start()
 	})

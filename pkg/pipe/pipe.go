@@ -8,11 +8,14 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log"
 	"sync"
 )
 
 // Useful utility from http2 package.
-// b is a bytes.Buffer or databuffer.
+// b is a bytes.RBuffer or databuffer.
+
+// Deprecated, useless - no back pressure / flow control.
 
 // Pipe is a goroutine-safe io.Reader/io.Writer pair. It's like
 // io.Pipe except there are no PipeReader/PipeWriter halves, and the
@@ -26,6 +29,8 @@ type Pipe struct {
 	donec    chan struct{} // closed on error
 	readFn   func()        // optional code to run in Read before error
 }
+
+// TODO: recycle, pre-alloc.
 
 func New() *Pipe {
 	return &Pipe{Buffer: new(bytes.Buffer)}
@@ -75,6 +80,8 @@ func (p *Pipe) Read(d []byte) (n int, err error) {
 
 var errClosedPipeWrite = errors.New("write on closed buffer")
 
+var MaxSize = 0
+
 // Write copies bytes from p into the buffer and wakes a reader.
 // It is an error to write more data than the buffer can hold.
 func (p *Pipe) Write(d []byte) (n int, err error) {
@@ -90,6 +97,10 @@ func (p *Pipe) Write(d []byte) (n int, err error) {
 	if p.breakErr != nil {
 		return len(d), nil // discard when there is no reader
 	}
+	l := p.Buffer.Len() + len(d)
+	if l > MaxSize {
+		MaxSize = l
+	}
 	return p.Buffer.Write(d)
 }
 
@@ -101,11 +112,13 @@ func (p *Pipe) Write(d []byte) (n int, err error) {
 func (p *Pipe) CloseWithError(err error) { p.closeWithError(&p.err, err, nil) }
 
 func (p *Pipe) CloseWrite() error {
+	log.Println("Pipe closeWrite", MaxSize)
 	return p.Close()
 }
 
 func (p *Pipe) Close() error {
 	p.closeWithError(&p.err, io.EOF, nil)
+	log.Println("Pipe closed", MaxSize)
 	return nil
 }
 

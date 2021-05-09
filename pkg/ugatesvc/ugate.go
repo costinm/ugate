@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +26,7 @@ type UGate struct {
 	// Actual (real) port listeners, key is the host:port
 	// Typically host is 0.0.0.0 or 127.0.0.1 - may also be one of the
 	// local addresses.
-	Listeners map[string]*Listener
+	Listeners map[string]*PortListener
 
 	Config *ugate.GateCfg
 
@@ -61,12 +62,14 @@ type UGate struct {
 	// a net.Conn or Stream, the dest will not be tracked here.
 	ActiveTcp map[int]*ugate.Stream
 
-	m     sync.RWMutex
-	Auth  *auth.Auth
+	m    sync.RWMutex
+	Auth *auth.Auth
 
 	Msg *msgs.Mux
 
 	MuxDialers map[string]ugate.MuxDialer
+	DNS        ugate.UDPHandler
+	UDPHandler ugate.UDPHandler
 }
 
 func NewConf(base ...string) ugate.ConfStore {
@@ -134,7 +137,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	}
 
 	ug := &UGate{
-		Listeners:    map[string]*Listener{},
+		Listeners:    map[string]*PortListener{},
 		parentDialer: &net.Dialer{},
 		MuxDialers: map[string]ugate.MuxDialer{},
 		Config:       cfg,
@@ -198,6 +201,9 @@ func (ug *UGate) Start() {
 
 	// Explicit TCP forwarders.
 	for k, t := range ug.Config.Listeners {
+		if strings.HasPrefix(k, "udp://") {
+			continue
+		}
 		t.Address = k
 		ug.Add(t)
 	}
@@ -279,8 +285,8 @@ func (ug *UGate) OnStream(s *ugate.Stream) {
 // Called at the end of the connection handling. After this point
 // nothing should use or refer to the connection, both proxy directions
 // should already be closed for write or fully closed.
-func (ug *UGate) OnStreamDone(rc ugate.MetaConn) {
-	str := rc.Meta()
+func (ug *UGate) OnStreamDone(str *ugate.Stream) {
+
 	ug.m.Lock()
 	delete(ug.ActiveTcp, str.StreamId)
 	ug.m.Unlock()
@@ -327,11 +333,8 @@ func (ug *UGate) OnStreamDone(rc ugate.MetaConn) {
 		str.Close()
 	}
 
-	ug.OnSClose(str, rc.RemoteAddr())
+	ug.OnSClose(str, str.RemoteAddr())
 
-	if bc, ok := rc.(*ugate.BufferedStream); ok {
-		ugate.BufferedConPool.Put(bc)
-	}
 }
 
 // RemoteID returns the node ID based on authentication.
@@ -352,17 +355,16 @@ func RemoteID(s *ugate.Stream)  string {
 }
 
 
-// Add and start a real port listener on a port.
+// Add and Start a real port listener on a port.
 // Virtual listeners can be added to ug.Conf or the mux.
-func (ug *UGate) Add(cfg *ugate.Listener) (*Listener, net.Addr, error) {
-	ll := &Listener{Listener:*cfg}
-	//ll.gate = ug
-	err := ll.start(ug)
+func (ug *UGate) Add(cfg *ugate.Listener) error {
+	ll := &PortListener{Listener: *cfg}
+	err := ll.Start(ug)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	ug.Listeners[cfg.Address] = ll
-	return ll, ll.Addr(), nil
+	return nil
 }
 
 func (ug *UGate) Close() error {
@@ -380,7 +382,9 @@ func (ug *UGate) Close() error {
 // Setup default ports, using base port.
 // For Istio, should be 15000
 func (ug *UGate) DefaultPorts(base int) error {
-	// Set if running in a knative env.
+	// Set if running in a knative env, or if an Envoy runs as a sidecar to handle
+	// TLS, QUIC, H2. In this mode only standard H2/MASQUE are supported, with
+	// reverse connections over POST or websocket.
 	knativePort := os.Getenv("PORT")
 	haddr := ""
 	if knativePort != "" {
@@ -394,31 +398,20 @@ func (ug *UGate) DefaultPorts(base int) error {
 		Address: haddr,
 		Protocol: ugate.ProtoHTTP,
 	})
-	// KNative doesn't support other ports by default - but still register them
 
+	// KNative doesn't support other ports by default - but still register them
 	btsAddr := fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_BTS)
 	if os.Getuid() == 0 {
 		btsAddr = ":443"
 	}
+
 	// Main BTS port, with TLS certificates
+	// Normally should be 443 for SNI gateways, when running as root
+	// Use iptables to redirect, or an explicit config for port 443 if running as root.
 	ug.Add(&ugate.Listener{
 		Address:  btsAddr,
 		Protocol: ugate.ProtoHTTPS,
-		ALPN: []string{"h2"},
-	})
-
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("127.0.0.1:%d", base+ugate.PORT_SOCKS),
-		Protocol: ugate.ProtoSocks,
-	})
-
-	// BTS - incoming, SNI, relay
-	// Normally should be 443 for SNI gateways
-	// Use iptables to redirect, or an explicit config for port 443 if running as root.
-	// Based on SNI a virtual listener may be selected.
-	ug.Add(&ugate.Listener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_SNI),
-		Protocol: ugate.ProtoTLS,
+		ALPN: []string{"h2","h2r"},
 	})
 
 	return nil
@@ -426,8 +419,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 
 // Based on the port in the Dest, find the Listener config.
 // Used when the dest IP:port is extracted from the metadata
-func (ug *UGate) FindCfgIptablesIn(bconn ugate.MetaConn) *ugate.Listener {
-	m := bconn.Meta()
+func (ug *UGate) FindCfgIptablesIn(m *ugate.Stream) *ugate.Listener {
 	_, p, _ := net.SplitHostPort(m.Dest)
 	l := ug.Config.Listeners["-:"+p]
 	if l != nil {
@@ -437,17 +429,16 @@ func (ug *UGate) FindCfgIptablesIn(bconn ugate.MetaConn) *ugate.Listener {
 }
 
 // HandleStream is called for accepted (incoming) streams.
-// Regular Http and messages are handled separatedly, don't call this.
 //
 // Multiplexed streams ( H2 ) also call this method.
 //
 // At this point the stream has the metadata:
 //
+// - Dest and Listener are set.
 // - RequestURI
 // - Host
 // - Headers
 // - TLS context
-// - Dest and Listener are set.
 //
 // In addition TrackStreamIn has been called.
 // This is a blocking method.
@@ -468,6 +459,7 @@ func (ug *UGate) HandleStream(str *ugate.Stream) error {
 		// SOCKS and others need to send something back - we don't
 		// have a real connection, faking it.
 		str.PostDial(str, nil)
+		str.Dest = fmt.Sprintf("%v", cfg.Handler)
 		err:= cfg.Handler.Handle(str)
 		str.Close()
 		return err
@@ -478,14 +470,6 @@ func (ug *UGate) HandleStream(str *ugate.Stream) error {
 }
 
 
-// Handle is the main entry point for accepted streams over QUIC or WebRTC.
-// There is minimal info in the stream meta.
-func (ug *UGate) Handle(c ugate.MetaConn) error {
-	log.Println("UGate stream ", c.Meta())
-	// TODO: use metadata to dispatch
-	return nil
-}
-
 func (gw *UGate) OnMuxClose(dm *ugate.DMNode) {
 	if _, f := gw.Config.H2R[dm.ID]; !f {
 		return
@@ -494,17 +478,30 @@ func (gw *UGate) OnMuxClose(dm *ugate.DMNode) {
 
 }
 
-var LogClose = false
+var LogClose = true
 
 // OnHClose called on http close
 func (gw *UGate) OnHClose(s string, id string, san string, r *http.Request, since time.Duration) {
-	if LogClose {
+	if !gw.Config.NoAccessLog {
 		log.Println("HTTP", r.Method, r.URL, r.Proto, r.Header, id, san, r.RemoteAddr, since)
 	}
 }
 
 func (gw *UGate) OnSClose(str *ugate.Stream, addr net.Addr) {
-	if LogClose {
+	if !gw.Config.NoAccessLog {
+		if str.ReadErr != nil || str.WriteErr != nil {
+			log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v %v %v",
+				str.StreamId,
+				str.Type, addr,
+				str.Dest,
+				str.RcvdPackets, str.RcvdBytes,
+				str.SentPackets, str.SentBytes,
+				time.Since(str.LastWrite),
+				time.Since(str.LastRead),
+				int64(time.Since(str.Open).Seconds()),
+				str.ReadErr, str.WriteErr)
+			return
+		}
 		log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
 			str.StreamId,
 			str.Type, addr,

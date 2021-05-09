@@ -391,7 +391,7 @@ func (uds *UdsConn) Read(out []byte) (int, error) {
 	return nresnow, nil
 }
 
-// Return a Len-prefixed slice containing the next message.
+// Return a Size-prefixed slice containing the next message.
 // The content must be handled before next call - will be replaced.
 // Format: same as gRPC stream:
 // - type 1B
@@ -485,7 +485,7 @@ func (uds *UdsConn) File() *os.File {
 	return fd
 }
 
-func processUnixConn(bc *ugate.BufferedStream) error {
+func processUnixConn(bc *ugate.Stream) error {
 	uc, ok := bc.Out.(*net.UnixConn)
 	if !ok {
 		return errors.New("Unexpected con")

@@ -2,13 +2,14 @@ package h2r
 
 import (
 	"context"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/pipe"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"golang.org/x/net/http2"
 )
@@ -78,14 +79,21 @@ func New(ug *ugatesvc.UGate) *H2R {
 	return h2r
 }
 
-
+// H2RMux is a mux using H2 frames.
+// Based on ALPN, may use raw frames.
 type H2RMux struct {
 	*http2.ClientConn
 
 	tlsStr *ugate.Stream
 	dm *ugate.DMNode
-}
 
+	// Raw frame support
+	m       sync.RWMutex
+	framer  *http2.Framer
+	streams map[uint32]*H2Stream
+	handleStream func(*H2Stream)
+	nextStreamID uint32
+}
 
 
 // DialMUX creates one connection to a mesh node, using one of the
@@ -123,9 +131,9 @@ func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, e
 
 	// Initial message on the connection is to setup the reverse pipe.
 	// This in turn will call this node, to validate the connection.
-	p := pipe.New()
+	r, w := io.Pipe() // pipe.New()
 	postR, _ := http.NewRequest("POST",
-		"https://" + addr + "/h2r/", p)
+		"https://" + addr + "/h2r/", r)
 	tok := t.ug.Auth.VAPIDToken(addr)
 	postR.Header.Add("authorization", tok)
 
@@ -134,7 +142,7 @@ func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, e
 		return nil, err
 	}
 
-	str = ugate.NewStreamRequestOut(postR, p, res, nil)
+	str = ugate.NewStreamRequestOut(postR, w, res, nil)
 
 	log.Println("H2R-Client: POST Reverse accept start ",
 		str.RemoteAddr(), str.LocalAddr(), ugatesvc.RemoteID(str))
@@ -151,9 +159,15 @@ func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, e
 			})
 		log.Println("H2R-Client: Reverse accept closed")
 		dm.Muxer = nil
+		t.ug.OnMuxClose(dm)
 	}()
 
-	h2rm := &H2RMux{dm: dm, tlsStr: str, ClientConn: cc}
+	h2rm := &H2RMux{dm: dm, tlsStr: str, ClientConn: cc,
+		// Used for raw streams, in both directions
+		framer:       http2.NewFramer(str, str),
+		streams:      map[uint32]*H2Stream{},
+		nextStreamID: 3,
+	}
 	dm.Muxer = h2rm
 
 	return h2rm, nil

@@ -1,14 +1,19 @@
 {
   "domain": "svc.cluster.local",
-  "basePort": 6000,
+  "tunProto": ["h2r"],
+  "basePort": 6400,
   "listeners": {
+    ":6411": {
+      "forwardTo": "GJU4ACOW36Q3IBL45T2TRQ63M6FNQYEJMLPJNDJETIOVIEFD7MGQ:5201"
+    }
+
   },
   "hosts": {
-    "bob": {
-      "addr": "127.0.0.1:6107"
+    "GJU4ACOW36Q3IBL45T2TRQ63M6FNQYEJMLPJNDJETIOVIEFD7MGQ": {
+      "addr": "127.0.0.1:6007"
     }
   },
   "remoteAccept": {
-    "bob": ""
+    "GJU4ACOW36Q3IBL45T2TRQ63M6FNQYEJMLPJNDJETIOVIEFD7MGQ": ""
   }
 }

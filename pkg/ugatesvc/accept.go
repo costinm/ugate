@@ -3,21 +3,12 @@ package ugatesvc
 import (
 	"log"
 	"net"
+	"strings"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/sni"
-	"github.com/costinm/ugate/pkg/socks"
 )
 
 // Accepting connections on ports and extracting metadata, including sniffing.
-
-
-
-// Deferred to connection close, only for the raw accepted connection.
-func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.BufferedStream) {
-	ug.OnStreamDone(rc)
-	ugate.BufferedConPool.Put(rc)
-}
 
 // WIP: special handling for egress, i.e. locally originated streams.
 // Identification:
@@ -48,124 +39,165 @@ func (ug *UGate) onAcceptDoneAndRecycle(rc *ugate.BufferedStream) {
 // computer, and localAddr is on same computer and not very useful.
 
 // New style, based on lwip. Blocks until connect, proxy runs in background.
-func (ug *UGate) HandleTUN(conn net.Conn, target *net.TCPAddr) error {
-	bconn := ugate.GetBufferedStream(conn, conn)
-	bconn.Meta().Egress = true
-	ug.OnStream(bconn.Meta())
+func (ug *UGate) HandleTUN(conn net.Conn, ra *net.TCPAddr, la *net.TCPAddr) error {
+	bconn := ugate.GetStream(conn, conn)
+	bconn.Egress = true
+	ug.OnStream(bconn)
 	defer ug.OnStreamDone(bconn)
 
-	ra := conn.RemoteAddr()
+	bconn.Session = &ugate.Session{RemoteAddr: ra, LocalAddr: la}
+
 	//la := conn.LocalAddr()
 
 	// Testing/debugging - localhost is captured by table local, rule 0.
-	if bconn.Stream.Dest == "" {
-		if ta, ok := ra.(*net.TCPAddr); ok {
-			if ta.Port == 5201 {
-				ta.IP = []byte{0x7f, 0, 0, 1}
+	if bconn.Dest == "" {
+			if ra.Port == 5201 {
+				ra.IP = []byte{0x7f, 0, 0, 1}
 			}
-			bconn.Stream.Dest = ta.String()
-			log.Println("LTUN ", conn.RemoteAddr(), conn.LocalAddr(), bconn.Stream.Dest)
-		}
+			bconn.Dest = ra.String()
+			log.Println("LTUN ", ra, la, bconn.Dest)
 	}
-	bconn.Stream.Egress = true
+	bconn.Egress = true
 
-	log.Println("TUN TCP ", bconn.Meta())
+	log.Println("TUN TCP ", bconn)
 	// TODO: config ? Could be shared with iptables port
-	return ug.HandleStream(bconn.Meta())
+	return ug.HandleStream(bconn)
 }
 
 // Handle a virtual (multiplexed) stream, received over
 // another connection, for example H2 POST/CONNECT, etc
 // The connection will have metadata, may include identify of the caller.
-func (ug *UGate) HandleVirtualIN(bconn ugate.MetaConn) error {
-	ug.OnStream(bconn.Meta())
+func (ug *UGate) HandleVirtualIN(bconn *ugate.Stream) error {
+	ug.OnStream(bconn)
 	defer ug.OnStreamDone(bconn)
 
-	return ug.HandleStream(bconn.Meta())
+	return ug.HandleStream(bconn)
 }
 
-
-// A real accepted connection from port_listener.
-// Based on config, sniff and possibly dispatch to a different type.
-func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
+// handles a directly accepted TCP connection for a TLS port.
+// May SNI-forward or terminate, based on listener config.
+//
+// If terminating, based on ALPN and domain will route the stream.
+// For SNI - will use the SNI name to route the stream.
+func (ug *UGate) handleTLS(l *ugate.Listener, acceptedCon net.Conn) {
 	// Attempt to determine the Listener and target
 	// Ingress mode, forward to an IP
-	cfg := l
+
+	rawStream := ugate.GetStream(acceptedCon, acceptedCon)
+
+	// Track the original stream. Report error and bytes on the original.
+	ug.OnStream(rawStream)
+	defer ug.OnStreamDone(rawStream)
+
+	rawStream.Listener = l
+	rawStream.Type = l.Protocol
+
+
+	// Used to present the right cert
+	_, rawStream.ReadErr = ParseTLS(rawStream)
+	if rawStream.ReadErr != nil {
+		return
+	}
+
+	sni := rawStream.Dest
 
 	tlsTerm := false
+	cert := ""
 
-	// Get a buffered stream - this is used for sniffing.
-	// Most common case is TLS, we want the SNI.
-	bconn := ugate.GetBufferedStream(acceptedCon, acceptedCon)
-	ug.OnStream(bconn.Meta())
-	defer ug.OnStreamDone(bconn)
-	str := bconn.Meta()
-
-	// Special protocols, muxed on a single port - will extract real
-	// destination and port.
-	//
-	// First are specific to egress capture.
-	switch cfg.Protocol {
-	// TODO: costin: does not compile on android gomobile, missing syscall.
-	// remove dep, reverse it.
-	case ugate.ProtoSocks:
-		str.Egress = true
-		str.ReadErr = socks.ReadSocksHeader(bconn)
-	case ugate.ProtoHTTP:
-		str.ReadErr = ug.H2Handler.handleHTTPListener(l, bconn)
-		return
-	case ugate.ProtoHTTPS:
+	if rawStream.Dest == "" {
+		// No explicit destination - terminate here
 		tlsTerm = true
-		// Used to present the right cert
-		str.ReadErr = sni.SniffSNI(bconn)
-		if str.ReadErr != nil {
-			log.Println("XXX Failed to snif SNI", str.ReadErr)
-		}
-	case ugate.ProtoTLS:
-		str.ReadErr = sni.SniffSNI(bconn)
-		if str.ReadErr != nil {
-			log.Println("XXX Failed to snif SNI in TLS", str.ReadErr, l.Address, l.Protocol, bconn.Meta())
-		}
-		if str.Dest == "" {
-			// No destination - terminate here
-			// TODO: also if dest hostname == local name or VIP or ID
-			tlsTerm = true
-			str.Dest = l.ForwardTo
-		}
-		// TODO: https + TLS - if we have a cert, accept it
-		// Else - forward based on forwardTo or Host
-		//if ug.Auth.certMap[str.Dest] != nil {
-		//	tlsTerm = true
+	} else if rawStream.Dest == ug.Auth.ID {
+		tlsTerm = true
+	} else {
+		// Not sure if this is worth it, may be too complex
+		// TODO: try to find certificate for domain or parent.
+		//if ug.Auth.Config.Get("key/" + dest) {
+		//
 		//}
+		wild := ""
+		for cn, k := range l.Certs {
+			if cn == "*" {
+				wild = k
+			} else {
+				if cn[0] == '*' && len(cn) > 2 {
+					if strings.HasSuffix(sni, cn[2:]) {
+						tlsTerm = true
+						cert = k
+					}
+				} else if sni == cn {
+					tlsTerm = true
+					cert = k
+				}
+			}
+		}
+		if !tlsTerm && wild != "" {
+			tlsTerm = true
+			cert = wild
+		}
 	}
-	str.Listener = cfg
-	str.Type = cfg.Protocol
 
-	if str.ReadErr != nil {
-		return
+
+	if l.ForwardTo != "" {
+		// Explicit override - this is for listeners with type TLS and explicit
+		// forward, for example terminating MySQL.
+		// We still terminate TLS if we have a cert.
+		rawStream.Dest = l.ForwardTo
 	}
 
-	if cfg.ForwardTo != "" {
-		// Override - for explicit ports and virtual ports
-		// At listener level.
-		str.Dest = cfg.ForwardTo
-	}
 
-	tlsOrOrigStr := str
 	// Terminate TLS if the stream is detected as TLS and the matched config
 	// is configured for termination.
 	// Else it's just a proxied SNI connection.
 	if tlsTerm {
-		tc, err := ug.NewTLSConnIn(str.Context(),cfg,  bconn, ug.TLSConfig)
+		tlsCfg := ug.TLSConfig
+		if cert != "" {
+			// explicit cert based on listener config
+			// TODO: tlsCfg = ug.Auth.GetServerConfig(cert)
+		}
+		// TODO: present the right ALPN for the port ( if not set, use default)
+		tc, err := ug.NewTLSConnIn(rawStream.Context(),l, rawStream, tlsCfg)
 		if err != nil {
-			str.ReadErr = err
-			log.Println("TLS: ", str.RemoteAddr(), str.Dest, str.Listener, err)
+			rawStream.ReadErr = err
+			log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, rawStream.Listener, err)
 			return
 		}
-		tlsOrOrigStr = tc.Meta()
+		// Handshake done. Now we have access to the ALPN
+
+		rawStream.ReadErr = ug.HandleStream(tc)
+	} else {
+		// TODO: additional config for SNI proxying - what is allowed, etc - to avoid open relay
+		//
+		rawStream.ReadErr = ug.HandleStream(rawStream)
+	}
+}
+
+// Hamdle implements the common interface for handling accepted streams.
+// Will init and log the stream, then handle.
+//
+func (ug *UGate) Handle(s *ugate.Stream) {
+	ug.OnStream(s)
+	defer ug.OnStreamDone(s)
+
+	ug.HandleStream(s)
+}
+
+// A real accepted connection from port_listener - a real port, typically for
+// legacy protocols and 'whitebox'.
+func (ug *UGate) handleAcceptedConn(cfg *ugate.Listener, acceptedCon net.Conn) {
+
+	bconn := ugate.GetStream(acceptedCon, acceptedCon)
+	bconn.Listener = cfg
+	bconn.Type = cfg.Protocol
+
+	ug.OnStream(bconn)
+	defer ug.OnStreamDone(bconn)
+
+	if cfg.ForwardTo != "" {
+		bconn.Dest = cfg.ForwardTo
 	}
 
-	str.ReadErr = ug.HandleStream(tlsOrOrigStr)
+	bconn.ReadErr = ug.HandleStream(bconn)
 }
 
 // Auto-detect protocol on the wire, so routing info can be
@@ -176,7 +208,7 @@ func (ug *UGate) handleAcceptedConn(l *ugate.Listener, acceptedCon net.Conn) {
 // - SOCKS (5)
 // - H2
 // - TODO: HAproxy
-//func sniff(pl *ugate.Listener, br *stream.BufferedStream) error {
+//func sniff(pl *ugate.Listener, br *stream.StreamBuffer) error {
 //	br.Sniff()
 //	var proto string
 //

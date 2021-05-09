@@ -43,10 +43,10 @@ func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
 
 // Mirroring handleAcceptedConn in UGate
 func handleAcceptedConn(ug *ugatesvc.UGate, acceptedCon net.Conn, in bool) {
-	bconn := ugate.GetBufferedStream(acceptedCon, acceptedCon)
-	ug.OnStream(bconn.Meta())
+	bconn := ugate.GetStream(acceptedCon, acceptedCon)
+	ug.OnStream(bconn)
 	defer ug.OnStreamDone(bconn)
-	str := bconn.Meta()
+	str := bconn
 
 	//case ugate.ProtoIPTablesIn:
 	//	// iptables is replacing the conn - process before creating the buffer

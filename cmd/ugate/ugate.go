@@ -9,6 +9,7 @@ import (
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/dns"
 	"github.com/costinm/ugate/pkg/http_proxy"
+	"github.com/costinm/ugate/pkg/socks"
 	"github.com/costinm/ugate/pkg/udp"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
@@ -46,7 +47,7 @@ func main() {
 
 func Run(config ugate.ConfStore, g *ugate.GateCfg) (*ugatesvc.UGate, error){
 	// Start a Gate. Basic H2 and H2R services enabled.
-	ug := ugatesvc.NewGate(&net.Dialer{}, nil, g, config)
+	ug := ugatesvc.New(config, nil, g)
 
 	sf := []startFunc{}
 	if initHooks != nil {
@@ -64,20 +65,21 @@ func Run(config ugate.ConfStore, g *ugate.GateCfg) (*ugatesvc.UGate, error){
 	net.DefaultResolver.PreferGo = true
 	net.DefaultResolver.Dial = dns.DNSDialer(5223)
 
+	ug.DNS = dnss
 	// UDP Gate is used with TProxy and lwIP.
-	udpNat  := udp.NewUDPGate(dnss, dnss)
-	udpNat.InitMux(ug.Mux)
+	udp.New(ug)
 
 	hproxy := http_proxy.NewHTTPProxy(ug)
 	hproxy.HttpProxyCapture(fmt.Sprintf("127.0.0.1:%d", ug.Config.BasePort+ugate.PORT_HTTP_PROXY))
 
+	socks.New(ug)
 
 	go dnss.Serve()
 
 	for _, h := range sf {
 		go h(ug)
 	}
-
+	ug.Start()
 	log.Println("Started: ", ug.Auth.ID)
 	return ug, nil
 }

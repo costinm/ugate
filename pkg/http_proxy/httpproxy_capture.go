@@ -14,7 +14,7 @@ import (
 // Used for HTTP_PROXY=localhost:port, to intercept outbound traffic using http proxy protocol.
 // CONNECT too.
 
-// Experimental, not the main capture mode - TUN and SOCKS should be used if possible.
+// Android allows using HTTP_PROXY, and is used by browser - more efficient than TUN.
 
 // HTTPGate handles HTTP requests
 type HTTPGate struct {
@@ -133,12 +133,12 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//ra := proxyClient.RemoteAddr().(*net.TCPAddr)
-	str := ugate.GetBufferedStream(proxyClient, proxyClient)
+	str := ugate.GetStream(proxyClient, proxyClient)
 	defer gw.gw.OnStreamDone(str)
-	gw.gw.OnStream(str.Meta())
+	gw.gw.OnStream(str)
 
-	str.Stream.Dest = host
-	str.Stream.Egress = true
+	str.Dest = host
+	str.Egress = true
 	str.PostDialHandler = func(conn net.Conn, err error) {
 		if err != nil {
 			w.WriteHeader(503)
@@ -149,5 +149,5 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// TODO: add sniffing on the outbound
 
-	gw.gw.DialAndProxy(str.Meta())
+	gw.gw.DialAndProxy(str)
 }

@@ -2,6 +2,7 @@ package ugate
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"expvar"
 	"io"
@@ -75,11 +76,16 @@ type GateCfg struct {
 	Hosts map[string]*DMNode `json:"hosts,omitempty"`
 
 	// Egress gateways for reverse H2 - key is the domain name, value is the
-	// pubkey or root CA. If empty, public certificates are required.
-	H2R  map[string]string `json:"remoteAccept,omitempty"`
+	// pubkey or root CA. If IsEmpty, public certificates are required.
+	H2R map[string]string `json:"remoteAccept,omitempty"`
 
 	// ALPN to announce on the main BTS port
-	ALPN []string
+	ALPN     []string
+
+	// NoAccessLog enables logging HTTP and stream close stats (sort of access log)
+	NoAccessLog bool `json:"noAccessLog,omitempty"`
+
+	TunProto []string `json:"tunProto,omitempty"`
 }
 
 const (
@@ -91,7 +97,6 @@ const (
 	// SNI and HTTP could share the same port - would also
 	// reduce missconfig risks
 	PORT_HTTP_PROXY = 2
-	PORT_SNI = 3
 
 	// TLS/SNI, HTTPS (no client certs)
 	PORT_HTTPS = 4
@@ -99,6 +104,25 @@ const (
 	// H2, HTTPS, H2R
 	PORT_BTS = 7
 )
+
+// Statistics for streams and hosts
+type Stats struct {
+	Open time.Time
+
+	// last receive from local (and send to remote)
+	LastWrite time.Time
+
+	// last receive from remote (and send to local)
+	LastRead time.Time
+
+	// Sent from client to server ( client is initiator of the proxy )
+	SentBytes   int
+	SentPackets int
+
+	// Received from server to client
+	RcvdBytes   int
+	RcvdPackets int
+}
 
 // Keyed by Hostname:port (if found in dns tables) or IP:port
 type HostStats struct {
@@ -112,10 +136,8 @@ type HostStats struct {
 	RcvdBytes   int
 	SentPackets int
 	RcvdPackets int
-	Count       int
 
-	LastLatency time.Duration
-	LastBPS     int
+	Count       int
 }
 
 // Node information, based on registration info or discovery.
@@ -195,7 +217,7 @@ type DMNode struct {
 
 	// Will be set if there are problems connecting to the node
 	// (or if connection duration is too short)
-	Bacokff time.Duration `json:"-"`
+	Backoff time.Duration `json:"-"`
 
 	// IP4 address of last announce (link local) or connection
 	Last4 *net.UDPAddr `json:"-"`
@@ -231,6 +253,7 @@ const ProtoTLS = "tls"
 // autodetected for TLS.
 const ProtoH2 = "h2"
 const ProtoHTTP = "http" // 1.1
+const ProtoHTTPTrusted = "httpTrusted" // behind envoy or trusted gateway
 const ProtoHTTPS = "https"
 
 const ProtoHAProxy = "haproxy"
@@ -240,55 +263,55 @@ const ProtoSocks = "socks5"
 const ProtoIPTables = "iptables"
 const ProtoIPTablesIn = "iptables-in"
 
-// Listener represents the configuration for an acceptor on a port.
+// Listener represents the configuration for accepted streams.
 //
-// For each port, metadata is optionally extracted - in particular a 'hostname', which
-// is the destination IP or name:
+// uGate has a set of special listeners that multiplex requests:
 // - socks5 dest
 // - iptables original dst ( may be combined with DNS interception )
 // - NAT dst address
 // - SNI for TLS
 // - :host header for HTTP
+// - ALPN - after TLS handshake
 //
-// Stream Dest and meta will be set after metadata extraction.
+// Multiplexed channels do an additional lookup to find the listener
+// based on the channel address.
 //
-// Based on Istio/K8S Gateway models.
+// uGate doesn't use a 'route' - a real gateway should be used for
+// low level routes, or a handler.
 type Listener struct {
 
 	// Address address (ex :8080). This is the requested address.
-	// Addr() returns the actual address of the listener.
+	//
+	// BTS, SOCKS, HTTP_PROXY and IPTABLES have default ports and bindings, don't
+	// need to be configured here.
 	Address string `json:"address,omitempty"`
 
 	// Port can have multiple protocols:
-	// - iptables
-	// - iptables_in
-	// - socks5
-	// - tls - will use SNI to detect the host config, depending
-	// on that we may terminate or proxy
-	// - http - will auto-detect http/2, proxy
-	//
 	// If missing or other value, this is a dedicated port, specific to a single
 	// destination.
+	// Deprecated - use CERTS to indicate TLS.
 	Protocol string `json:"proto,omitempty"`
 
 	// ForwardTo where to forward the proxied connections.
 	// Used for accepting on a dedicated port. Will be set as Dest in
 	// the stream, can be mesh node.
-	// IP:port format, where IP can be a mesh VIP
+	// host:port format.
 	ForwardTo string `json:"forwardTo,omitempty"`
 
-	// Custom listener - not guaranteed to return TCPConn.
-	// After the listener is added, will be set to the port listener.
-	// For future use with IPFS
-	NetListener net.Listener `json:-`
-
 	// Must block until the connection is fully handled !
+	// @Deprecated - use ForwardTo -:NAME and register handlers
 	Handler ConHandler `json:-`
 
-	// ALPN to announce
+	// ALPN to announce, for TLS listeners
 	ALPN []string
+
 	//	gate *UGate `json:-`
+
+	// Certificates to use.
+	// Key is a domain, *.domain or *.
+	Certs map[string]string
 }
+
 
 // Mapping to Istio:
 // - gateway port -> listener conf
@@ -333,6 +356,21 @@ type ContextDialer interface {
 	DialContext(ctx context.Context, net, addr string) (net.Conn, error)
 }
 
+// StreamDialer is used to open a stream by address, optionally passing
+// metadata and starting to forward ( possibly as early data ) an input
+// stream. Generally implemented by multiplexer protocols that support
+// metadata, like H2, H3 or raw multiplexers using a startup header.
+type StreamDialer interface {
+	// DialStream is open the connection to the stream.
+	// addr is host:port format
+	// host can be a 32-byte base32 encoded string, or other IP or DNS name
+	//
+	// inStream.In, if not nil, will be automatically forwarded to new dialed stream.
+	// inStream in headers, if set, will be forwarded to the remote host.
+	//
+	DialStream(ctx context.Context, addr string, inStream *Stream) (*Stream, error)
+}
+
 // Muxer is the interface implemented by a multiplexed connection with metadata
 // http2.ClientConn is the default implementation used.
 type Muxer interface {
@@ -354,6 +392,21 @@ type MuxDialer interface {
 	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Stream)) (Muxer, error)
 }
 
+
+// Session (connection, association, mux) with a remote host.
+// Holds the net-level remote address, TLS info, etc
+// May be multiplexed or not.
+type Session struct {
+	// Set if the connection finished a TLS handshake.
+	// A 'dummy' value may be set if a sidecar terminated the connection.
+	TLS *tls.ConnectionState `json:"-"`
+
+	// Connection level address - typically the real IP. If not set, attempt to
+	// extract it from the connection.
+	RemoteAddr net.Addr
+	LocalAddr net.Addr
+}
+
 // StreamDialer is similar with RoundTrip, makes a single connection using a MUX.
 //
 // Unlike ContextDialer, also takes 'meta' and returns a Stream ( which implements net.Conn).
@@ -369,14 +422,28 @@ type MuxDialer interface {
 // ConHandler is a handler for net.Conn with metadata.
 // Lighter alternative to http.Handler
 type ConHandler interface {
-	Handle(conn MetaConn) error
+	Handle(conn *Stream) error
 }
 
 
-type ConHandlerF func(conn MetaConn) error
+type ConHandlerF func(conn *Stream) error
 
-func (c ConHandlerF) Handle(conn MetaConn) error {
+func (c ConHandlerF) Handle(conn *Stream) error {
 	return c(conn)
+}
+
+
+type HeaderEncoder interface {
+	// Marshall will encode the headers into the wBuffer.
+	// Flush will need to be called to send to s.Out
+	Marshal(s *Stream) error
+
+	AddHeader(s *Stream, k, v []byte)
+
+	// Unmarshall will decode from s.rBuffer. Fill() may need to be
+	// called to get additional data.
+	//
+	Unmarshal(s *Stream) (done bool, err error)
 }
 
 // For integration with TUN
@@ -410,23 +477,12 @@ type UdpWriter interface {
 //
 // Multiaddr: TLV
 
-// Internal use.
 
-// Deprecated
-type MetaConn interface {
-	net.Conn
-	Meta() *Stream
-}
-
+// CloseWriter is one of possible interfaces implemented by Out to send a FIN, without closing
+// the input. Some writers do this on Close.
 type CloseWriter interface {
 	CloseWrite() error
 }
-
-type CloseReader interface {
-	CloseRead() error
-}
-
-
 
 // Interface for very simple configuration and key loading.
 // Can have a simple in-memory, fs implementation, as well
@@ -563,15 +619,15 @@ func (n *DMNode) GWs() []*net.UDPAddr {
 }
 
 func (n *DMNode) BackoffReset() {
-	n.Bacokff = 0
+	n.Backoff = 0
 }
 func (n *DMNode) BackoffSleep() {
-	if n.Bacokff == 0 {
-		n.Bacokff = 5 * time.Second
+	if n.Backoff == 0 {
+		n.Backoff = 5 * time.Second
 	}
-	time.Sleep(n.Bacokff)
-	if n.Bacokff < 5*time.Minute {
-		n.Bacokff = n.Bacokff * 2
+	time.Sleep(n.Backoff)
+	if n.Backoff < 5*time.Minute {
+		n.Backoff = n.Backoff * 2
 	}
 }
 

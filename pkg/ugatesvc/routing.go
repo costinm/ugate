@@ -3,13 +3,13 @@ package ugatesvc
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/pipe"
 	"golang.org/x/net/http2"
 )
 
@@ -48,7 +48,7 @@ func (ug *UGate) DialTLS(ctx context.Context, addr string, alpn []string) (*ugat
 	if err != nil {
 		return nil, err
 	}
-	return t.Meta(), nil
+	return t, nil
 }
 
 
@@ -63,20 +63,17 @@ func (ug *UGate) DialTLS(ctx context.Context, addr string, alpn []string) (*ugat
 //
 
 func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
-	rw := str.HTTPResponse()
-	var r1 *http.Request
-	// We have a H2C connection or can make RT.
-	if rw != nil {
-		r1 = str.HTTPRequest()
-	}
 
-	nc, err := ug.dial(context.Background(), str.Dest, r1)
+	nc, err := ug.dial(context.Background(), str.Dest, str)
 	str.PostDial(nc, err)
 	if err != nil {
 		// postDial will take care of sending error code.
 		return err
 	}
 	defer nc.Close()
+
+	// Dial may begin streaming from input connection to the dialed.
+	// When dial return, the headers from dialed con are received.
 
 	if ncs, ok := nc.(*ugate.Stream) ; ok {
 		if ncs.OutHeader != nil {
@@ -93,10 +90,8 @@ func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
 // DialContext creates  connection to the remote addr, implements
 // x.net.proxy.ContextDialer and ugate.ContextDialer.
 //
-// Supports:
-// - tcp - normal tcp address, using the gate dialer.
-// - tls - tls connection, using the gate workload identity.
-// - h2r - h2r connection, suitable for reverse H2.
+// Used for integration with other libraries without dependencies.
+// Does not support metatada or 0-RTT sending or piping an existing stream.
 func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(addr)
 	n := ug.GetNode(host)
@@ -146,8 +141,14 @@ func (ug *UGate) OnMUX(node *ugate.DMNode) error {
 	return nil
 }
 
+// Using pipe: 345Mbps
+//
+// Not using: constant 440Mbps.
+// The QUIC read buffer is 8k
+const usePipe = false
+
 // Dial creates a stream to the given address.
-func (ug *UGate) dial(ctx context.Context, addr string, r1 *http.Request) (net.Conn, error) {
+func (ug *UGate) dial(ctx context.Context, addr string, s *ugate.Stream) (net.Conn, error) {
 	// sets clientEventContextKey - if ctx is used for a round trip, will
 	// set all data.
 	// Will also make sure DNSStart, Connect, etc are set (if we want to)
@@ -170,19 +171,27 @@ func (ug *UGate) dial(ctx context.Context, addr string, r1 *http.Request) (net.C
 
 		if rt != nil {
 			// We have an active reverse RoundTripper for the host.
-			p := pipe.New()
+			var in io.Reader
+			var out io.WriteCloser
+
 			h, port, _ :=  net.SplitHostPort(addr)
-			if r1 == nil {
-				// Regular TCP stream, upgraded to H2.
-				// This is a simple tunnel, so use the right URL
-				r1, err = http.NewRequestWithContext(ctx, "POST",
-					"https://" + h + "/dm/localhost:" + port, p)
-			} else {
-				r1.URL.Scheme = "https"
-				r1.URL.Host = dmn.ID // addr
-				r1.URL.Path = "/dm/localhost:" + port
-				r1.Body = p
+
+			if dd, ok := rt.(ugate.StreamDialer); ok {
+				return dd.DialStream(ctx, "127.0.0.1:" + port, s)
 			}
+
+			if usePipe || s == nil || s.In == nil {
+				in, out = io.Pipe() // pipe.New()
+				//in = p
+				//out = p
+			} else {
+				in = s.In
+			}
+
+			// Regular TCP stream, upgraded to H2.
+			// This is a simple tunnel, so use the right URL
+			r1, err := http.NewRequestWithContext(ctx, "POST",
+				"https://" + h + "/dm/127.0.0.1:" + port, in)
 
 			// RoundTrip Transport guarantees this is set
 			if r1.Header == nil {
@@ -196,7 +205,7 @@ func (ug *UGate) dial(ctx context.Context, addr string, r1 *http.Request) (net.C
 				return nil, err
 			}
 
-			rs := ugate.NewStreamRequestOut(r1, p, res, nil)
+			rs := ugate.NewStreamRequestOut(r1, out, res, nil)
 			if ugate.DebugClose {
 				log.Println("TUN: ", addr, r1.URL)
 			}

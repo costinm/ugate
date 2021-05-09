@@ -64,7 +64,7 @@ func TestSigFail(t *testing.T) {
 	//BJ1O2jWtG7oQS/7o+Sw9YCzrb1N1SkmeKNVWnFpxc7LBAPmh1NGfEVTPJpnfZ2/NY93Tv2zV4aTbm8zO7CYsC+E=
 	log.Println("Pub:", hex.EncodeToString(payloadhex[len(payloadhex)-64:]))
 	log.Println("Pub:", "9d4eda35ad1bba104bfee8f92c3d602ceb6f53754a499e28d5569c5a7173b2c100f9a1d4d19f1154cf2699df676fcd63ddd3bf6cd5e1a4db9bccceec262c0be1")
-	//buf := bytes.Buffer{}
+	//buf := bytes.RBuffer{}
 	//buf.Write(payloadhex)
 	//buf.Write(pub)
 

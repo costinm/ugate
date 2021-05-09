@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# Simplified istio iptables, for single port
-# Use a different GID to run the iperf3 or tests.
+# Simplified istio iptables
+# Use a different GID to run iperf3 or tests.
 
 # Defaults:
 # - capture all in and out traffic, unless:
@@ -15,12 +15,9 @@
 # Capturing with tproxy can be done with separate script, should
 # not be mixed in.
 
-
 # For testing iperf3, use:
 # PROXY_GROUP=costin INBOUND_PORTS_INCLUDE=5201 OUTBOUND_PORTS_INCLUDE=5201
 
-# also ENVOY_PORT - Istio doesn't have tests with othre ports
-# so can be assumed to be fixed.
 OUTBOUND_CAPTURE_PORT=${OUTBOUND_CAPTURE_PORT:-15001}
 INBOUND_CAPTURE_PORT=${INBOUND_CAPTURE_PORT:-15006}
 

@@ -12,6 +12,54 @@ import (
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
+// WIP: The e2e tests should work with either 'external' (already setup) servers or start
+// an equivalent set. The config and keys in this file are matching the
+// cmd/ugate/testdata/{alice,bob,carol}.
+// If tests need the status, they should use the debug endpoints.
+// For events, they should use the messaging endpoints.
+//
+// Some tests may start additional uGates for internal functionality testing.
+//
+
+// WIP: updating the ports and scenarios
+var (
+	// Base port 6000
+	// Uses H2R to connect to Gate
+	Alice *ugatesvc.UGate
+
+	// 6100
+	// Uses QUIC to connect to Gate
+	Bob *ugatesvc.UGate
+
+	// Client - in process.
+	// 6200
+	Carol *ugatesvc.UGate
+
+	// Gateway/control plane for Bob and Alice
+	// 6300
+	Gate *ugatesvc.UGate
+
+	// Echo - acts as a 'server' providing the echo service.
+	// 6400
+	Echo *ugatesvc.UGate
+)
+
+
+func InitEcho(port int) *ugatesvc.UGate {
+	cs := cfgfs.NewConf()
+	ug := ugatesvc.NewGate(&net.Dialer{}, nil, &ugate.GateCfg{
+		BasePort: port,
+	}, cs)
+
+	// Echo - TCP
+	ug.Add(&ugate.Listener{
+		Address:   fmt.Sprintf("0.0.0.0:%d", port + 12),
+		Handler:   &ugatesvc.EchoHandler{},
+	})
+	ug.Mux.Handle("/", &ugatesvc.EchoHandler{})
+	return ug
+}
+
 // InitTestServer creates a node with the given config.
 func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate)) *ugatesvc.UGate {
 	basePort := cfg.BasePort
@@ -27,12 +75,12 @@ func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate
 	}
 
 	// Echo - TCP
-	_, _, _ = ug.Add(&ugate.Listener{
+	ug.Add(&ugate.Listener{
 		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+11),
 		Protocol:  "tls",
 		Handler:   &ugatesvc.EchoHandler{},
 	})
-	_, _, _ = ug.Add(&ugate.Listener{
+	ug.Add(&ugate.Listener{
 		Address: fmt.Sprintf("0.0.0.0:%d", basePort+12),
 		Handler: &ugatesvc.EchoHandler{},
 	})
@@ -148,7 +196,7 @@ const ALICE_KEYS = `
   "clusters": [],
   "users": [
     {
-      "name": "default",
+      "name": "A3UCXD63FCFXMX7GH64FZM5EAHH3PGLKWRMBHPGY4AA3MGM6SXPQ",
       "user": {
         "client-certificate-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwekNDQVhtZ0F3SUJBZ0lSQUxRSWhRdytlL1h2RGhabjFjZkxwZkF3Q2dZSUtvWkl6ajBFQXdJd09URVcKTUJRR0ExVUVDaE1OYUM1M1pXSnBibVl1YVc1bWJ6RWZNQjBHQTFVRUF4TVdZMjl6ZEdsdU1UWXVhQzUzWldKcApibVl1YVc1bWJ6QWVGdzB5TVRBME1UVXhNekUwTXpsYUZ3MHlNakEwTVRVeE16RTBNemxhTURreEZqQVVCZ05WCkJBb1REV2d1ZDJWaWFXNW1MbWx1Wm04eEh6QWRCZ05WQkFNVEZtTnZjM1JwYmpFMkxtZ3VkMlZpYVc1bUxtbHUKWm04d1dUQVRCZ2NxaGtqT1BRSUJCZ2dxaGtqT1BRTUJCd05DQUFUU0ROL1UwZEk3UGpIdWx1V3BSdzR5akxmagpJblZiNE9uSEVRTGlVTkVUZW94SlZXQUVzRitCamo5Yzk2RU1YRElibitVZ3cvYVRldkJVOGF1SjdjRkdvMkl3CllEQU9CZ05WSFE4QkFmOEVCQU1DQmFBd0hRWURWUjBsQkJZd0ZBWUlLd1lCQlFVSEF3RUdDQ3NHQVFVRkJ3TUMKTUF3R0ExVWRFd0VCL3dRQ01BQXdJUVlEVlIwUkJCb3dHSUlXWTI5emRHbHVNVFl1YUM1M1pXSnBibVl1YVc1bQpiekFLQmdncWhrak9QUVFEQWdOSUFEQkZBaUJWcGNQUG94cjV4ZS8vSUdCcUVLVUsvZEhXNXlvc203RFdPNFN0CndVRkFaQUloQUp3NjExSXNBMmN1NFpQczdSQ2NmQ29EUlh2UWpQeUZQV1VZSzFFT1dOdTIKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=",
         "client-key-data": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ2FmWGdCYzkwVVBGNWJ4QjMKeC9JMWFTUXdGVkR0OXFlSmVIUjRLQ0NPUmlTaFJBTkNBQVRTRE4vVTBkSTdQakh1bHVXcFJ3NHlqTGZqSW5WYgo0T25IRVFMaVVORVRlb3hKVldBRXNGK0JqajljOTZFTVhESWJuK1Vndy9hVGV2QlU4YXVKN2NGRwotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
@@ -160,7 +208,7 @@ const ALICE_KEYS = `
       "name": "default",
       "context": {
         "cluster": "default",
-        "user": "default"
+        "user": "A3UCXD63FCFXMX7GH64FZM5EAHH3PGLKWRMBHPGY4AA3MGM6SXPQ"
       }
     }
   ],

@@ -56,13 +56,16 @@ import (
 // - use websocket - no multiplexing.
 // - binary messages, using websocket frames
 
-type Listener struct {
+type PortListener struct {
 	ugate.Listener
+
+	NetListener net.Listener
+	PortHandler ugate.ConHandler
 }
 
 // Creates a raw (port) TCP listener. Accepts connections
 // on a local port, forwards to a remote destination.
-func (cfg *Listener) start(gate *UGate) error {
+func (cfg *PortListener) Start(gate *UGate) error {
 	ll := cfg
 
 	if cfg.Address == "" {
@@ -106,27 +109,27 @@ func (cfg *Listener) start(gate *UGate) error {
 	return nil
 }
 
-func (pl *Listener) Close() error {
+func (pl *PortListener) Close() error {
 	pl.NetListener.Close()
 	return nil
 }
 
-func (pl Listener) Accept() (net.Conn, error) {
-	return pl.NetListener.Accept()
-}
-
-func (pl Listener) Addr() net.Addr {
-	if pl.NetListener == nil {
-		return nil
-	}
-	return pl.NetListener.Addr()
-}
+//func (pl PortListener) Accept() (net.Conn, error) {
+//	return pl.NetListener.Accept()
+//}
+//
+//func (pl PortListener) Addr() net.Addr {
+//	if pl.NetListener == nil {
+//		return nil
+//	}
+//	return pl.NetListener.Addr()
+//}
 
 // For -R, runs on the remote ssh server to accept connections and forward back to client, which in turn
 // will forward to a Port/app.
 // Blocking.
-func (pl *Listener) serve(gate *UGate) {
-	log.Println("Gateway: open on ", pl.Address, pl.ForwardTo, pl.Protocol)
+func (pl *PortListener) serve(gate *UGate) {
+	log.Println("uGate: listen ", pl.Address, pl.NetListener.Addr(), pl.ForwardTo, pl.Protocol, pl.Handler, pl.PortHandler)
 	for {
 		remoteConn, err := pl.NetListener.Accept()
 		ugate.VarzAccepted.Add(1)
@@ -141,7 +144,28 @@ func (pl *Listener) serve(gate *UGate) {
 			log.Println("Accept error, closing listener ", pl, err)
 			return
 		}
-		go gate.handleAcceptedConn(&pl.Listener, remoteConn)
+		if pl.PortHandler != nil {
+			go func() {
+				bconn := ugate.GetStream(remoteConn, remoteConn)
+				bconn.Listener = &pl.Listener
+				bconn.Type = pl.Protocol
+				gate.OnStream(bconn)
+				defer gate.OnStreamDone(bconn)
+
+				pl.PortHandler.Handle(bconn)
+			}()
+			return
+		}
+		switch pl.Protocol {
+		case ugate.ProtoTLS:
+			go gate.handleTLS(&pl.Listener, remoteConn)
+		case ugate.ProtoHTTPS:
+			go gate.handleTLS(&pl.Listener, remoteConn)
+		case ugate.ProtoHTTP:
+			go gate.H2Handler.handleHTTPListener(&pl.Listener, remoteConn)
+		default:
+			go gate.handleAcceptedConn(&pl.Listener, remoteConn)
+		}
 	}
 }
 

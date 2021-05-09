@@ -124,7 +124,7 @@ func (q *Quic) quicConfig() *quic.Config {
 		//RequestConnectionIDOmission: false,
 		// should be very large - but need to test recovery
 
-		MaxIdleTimeout: 15 * time.Minute, // default 30s
+		//MaxIdleTimeout: 15 * time.Minute, // default 30s
 
 		HandshakeIdleTimeout: 4 * time.Second, // default 10
 
@@ -138,6 +138,12 @@ func (q *Quic) quicConfig() *quic.Config {
 		//Versions:  []quic.VersionNumber{quic.VersionDraft29},
 
 		EnableDatagrams: true,
+
+		// Increasing it 10x doesn't seem to change the speed.
+		InitialStreamReceiveWindow: 4 * 1024 * 1024,
+		MaxStreamReceiveWindow: 16 * 1024 * 1024,
+		InitialConnectionReceiveWindow: 4 * 1024 * 1024,
+		MaxConnectionReceiveWindow:  64 * 1024 * 1024,
 	}
 }
 
@@ -151,39 +157,53 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Heade
 		NextProtos: []string{"h3r", "h3-29"},
 	}
 
-	// session.Context() is canceled when the session is closed.
-	session, err := quic.DialAddrEarlyContext(ctx, node.Addr, tlsConf, qd.quicConfig())
+	addr := node.Addr
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		return nil, err
 	}
 
-	// Exposed in fork only.
-	// Will call OpenUniStream, AcceptUniStream and OpenStream
-	rt := http3.NewClient(node.ID, session, qd.quicConfig())
+
+
+	// session.Context() is canceled when the session is closed.
+	session, err := quic.DialEarlyContext(ctx, udpConn, udpAddr, addr, tlsConf, qd.quicConfig())
+	if err != nil {
+		return nil, err
+	}
+
+	var rt http.RoundTripper
 	// TODO: use node.ID if available - Addr is a temp address and may
 	// be shared.
 	tok := qd.Auth.VAPIDToken(node.ID)
 
 	session.SendMessage([]byte(tok))
 
-	// TODO: use MASQUE ( with extension headers ? )
-	initReq, _ := http.NewRequest("GET", "https://" + node.ID + "/_dm/id/Q/" + qd.Auth.ID, nil)
-	initReq.Header.Add("authorization", tok)
+	if !UseRawStream {
+		// Exposed in fork only.
+		// Will call OpenUniStream, AcceptUniStream and OpenStream
+		rt = http3.NewClient(node.ID, session, qd.quicConfig())
 
-	res, err := rt.RoundTrip(initReq)
-	if err != nil {
-		return nil, err
+		// TODO: use MASQUE ( with extension headers ? )
+		initReq, _ := http.NewRequest("GET", "https://"+node.ID+"/_dm/id/Q/"+qd.Auth.ID, nil)
+		initReq.Header.Add("authorization", tok)
+		res, err := rt.RoundTrip(initReq)
+		if err != nil {
+			return nil, err
+		}
+		// TODO: parse the data, use MASQUE format for handshake
+		_, _ = ioutil.ReadAll(res.Body)
+		res.Body.Close()
+
+		if res != nil && res.StatusCode == 200 {
+			log.Println("H3R: start on ", qd.Auth.ID, "for", node.ID, session.RemoteAddr())
+		} else {
+			log.Println("H3: start on ", qd.Auth.ID, "for", node.ID, session.RemoteAddr())
+		}
 	}
-	// TODO: parse the data, use MASQUE format for handshake
-	_, _ = ioutil.ReadAll(res.Body)
-	res.Body.Close()
-
-	if res != nil && res.StatusCode == 200 {
-		log.Println("H3R: start on ", qd.Auth.ID, "for", node.ID, session.RemoteAddr())
-	} else {
-		log.Println("H3: start on ", qd.Auth.ID, "for", node.ID, session.RemoteAddr())
-	}
-
 	go func() {
 		<- session.Context().Done()
 		log.Println("H3: stop on ", qd.Auth.ID, "for", node.ID, session.RemoteAddr())
@@ -203,11 +223,15 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Heade
 				return
 			}
 
-			// Treat the remote (server) originated stream as a H3 reverse request.
-			// The server will process the session and dispatch to a handler.
-			go qd.server.HandleRequest(session, str, decoder, func() {
-				// Called when done
-			})
+			if UseRawStream {
+				go qd.handleRaw(str)
+			} else {
+				// Treat the remote (server) originated stream as a H3 reverse request.
+				// The server will process the session and dispatch to a handler.
+				go qd.server.HandleRequest(session, str, decoder, func() {
+					// Called when done
+				})
+			}
 		}
 	}()
 
@@ -252,23 +276,35 @@ func (qd *Quic) Start() error {
 			// not blocking
 			qd.handleMessages(ugc)
 
+			if UseRawStream {
+				go func() {
+					for {
+						str, err := s.AcceptStream(context.Background())
+						if err != nil {
+							log.Println("AcceptStream err", err)
+							return
+						}
+						go qd.handleRaw(str)
+					}
+				}()
+			} else {
+				// TODO: we need a way to pass the mux on the first
+				// request ( or the ID request ) to associate it with the node.
+				// At this point we don't have the identity.
+				// Currently we use x-quic-session as experiment.
+				go func() {
+					qd.server.HandleConn(s)
 
-			// TODO: we need a way to pass the mux on the first
-			// request ( or the ID request ) to associate it with the node.
-			// At this point we don't have the identity.
-			// Currently we use x-quic-session as experiment.
-			go func() {
-				qd.server.HandleConn(s)
+					if ugc.n != nil {
+						ugc.n.Muxer = nil
+						log.Println("H3R: stop on ", qd.Auth.ID, "for", ugc.n.ID, s.RemoteAddr())
+						qd.UG.OnMuxClose(ugc.n)
+					} else {
+						log.Println("H3: stop on ", qd.Auth.ID, s.RemoteAddr())
+					}
 
-				if ugc.n != nil {
-					ugc.n.Muxer = nil
-					log.Println("H3R: stop on ", qd.Auth.ID, "for", ugc.n.ID, s.RemoteAddr())
-					qd.UG.OnMuxClose(ugc.n)
-				} else {
-					log.Println("H3: stop on ", qd.Auth.ID, s.RemoteAddr())
-				}
-
-			}()
+				}()
+			}
 
 		}
 	}()
@@ -310,4 +346,5 @@ func (qd *Quic) handleMessages(ugc *QuicMUX) {
 		}
 	}()
 }
+
 

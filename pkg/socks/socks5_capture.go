@@ -3,11 +3,13 @@ package socks
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
 
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 // Egress capture. See also iptables, TUN, CONNECT proxy
@@ -20,6 +22,9 @@ import (
 // - send client data in advance, forward to the server
 // - resolve
 
+
+// Note: max DNS size is 255 ( including trailing 0, and len labels )
+//
 
 const (
 	ConnectCommand   = uint8(1)
@@ -77,136 +82,145 @@ const (
       DST.ADDR       desired destination address
       DST.PORT desired destination port in network octet order
 */
-
-// Extract the target from the SOCKS header, consume it, and register a post-dial
-// hook.
-func  ReadSocksHeader(acceptedCon *ugate.BufferedStream) error {
-	head := acceptedCon.Buf
-	str := acceptedCon.Meta()
-
-	n, err := acceptedCon.Read(head)
-	if err != nil {
-		acceptedCon.Close()
-		log.Println("Failed to read head")
-		return err
+func New(ug *ugatesvc.UGate) {
+	p := ug.Config.BasePort+ugate.PORT_SOCKS
+	ll := &ugatesvc.PortListener{
+		Listener: ugate.Listener{
+			Address:  fmt.Sprintf("127.0.0.1:%d", p),
+			Protocol: ugate.ProtoSocks,
+		},
+		PortHandler: &Socks{ug: ug},
 	}
 
+	err := ll.Start(ug)
+	if err != nil {
+		log.Println("Failed to start SOCKS, continue ", err)
+	}
+}
+
+type Socks struct {
+	ug *ugatesvc.UGate
+}
+
+func (s *Socks) String() string {
+	return "socks"
+}
+
+func (s *Socks) Handle(bconn *ugate.Stream) error{
+
+	bconn.Egress = true
+
+	_, bconn.ReadErr = Unmarshal(bconn)
+	if bconn.ReadErr != nil {
+		return bconn.ReadErr
+	}
+
+	// Dest is set, will be forwarded to the dest.
+	bconn.ReadErr = s.ug.HandleStream(bconn)
+	return bconn.ReadErr
+}
+
+func  Unmarshal(s *ugate.Stream) (done bool, err error) {
+	// Fill the read buffer with one Read.
+	// Typically 3-4 bytes unless client is eager.
+
+	head, err := s.Fill(3)
+	if err != nil {
+		return false, err
+	}
+
+	if head[0] != 5 {
+		return false, errors.New("invalid header")
+	}
 	// Client: 0x05 0x01 0x00
 	//         0x05 0x02  0x00 0x01
 	// Server: 0x05 0x00
-
-	if head[0] != 5 {
-		log.Print("Unexpected version ", head[0:n])
-		acceptedCon.Close()
-		return errors.New("Invalid head")
-	}
-
-	// 1 method, no auth
-	//if head[1] != 1 || head[2] != 0 {
-	//	log.Print("Unexpected auth ", head[1], head[2])
-	//	return errors.New("Invalid auth")
-	//}
-
-	acceptedCon.Write([]byte{5, 0})
-
-	off := 0
-
-	for {
-		n, err := acceptedCon.Read(head[off:])
+	off := 1
+	sz := int(head[off])
+	off++ // 2
+	if len(head) < off + sz{ // if it only read 2, probably malicious - 2 < 2 + 1
+		head, err = s.Fill(off + sz)
 		if err != nil {
-			acceptedCon.Close()
-			return err
+			return false, err
 		}
-		off += n
-		if off < 5 {
-			continue
-		}
-
-		atyp := head[3]
-		switch atyp {
-		case 1:
-			if off > 10 {
-				log.Println("SOCKS: Unexpected extra bytes", off)
-			}
-			if off < 10 {
-				continue
-			}
-		case 4:
-			if off > 22 {
-				log.Println("SOCKS: Unexpected extra bytes", off)
-			}
-			if off < 22 {
-				continue
-			}
-		case 3:
-			len := int(head[4])
-			if off > len+7 {
-				log.Println("SOCKS: Unexpected extra bytes", off)
-			}
-			if off < len+7 {
-				continue
-			}
-		}
-		break
 	}
-	// TODO: make sure the ip and string are read, read more
+	off += sz // 3
 
-	// Client: 0x05 0x01 (connect) 0x00 (RSV) ATYP DADDR DPORT
-	cmd := head[1]
-	if cmd != 1 {
-		log.Println("Only connect is supported")
-		acceptedCon.Close()
-		return nil
+	s.Write([]byte{5, 0})
+
+	// We may have bytes in the buffer, in case sender didn't wait
+	if len(head) <= off  + 6 {
+		head, err = s.Fill(off + sz)
+		if err != nil {
+			return false, err
+		}
 	}
+	// We have at least 6 bytes
+	if head[off] != 5 {
+		return false, errors.New("invalid header 2")
+	}
+	off++
+	if head[off] != 1 {
+		return false, errors.New("invalid method " + strconv.Itoa(int(head[off])))
+	}
+	off++
+	off++ // rsvd
 
-	atyp := head[3]
-	var dest net.IP
-	var destAddr string
-	isString := false
-	var port uint16
-	// TODO: copy the ip (head will be reused)
+	atyp := head[off + 3]
+	off++
+
+	destName :=  ""
+	var destIP []byte
+	// off should be 3 or 4
 	switch atyp {
-	case 1:
-		copy(acceptedCon.IpBuf, head[4:8])
-		dest = acceptedCon.IpBuf[0:4]
-		port = binary.BigEndian.Uint16(head[8:])
+		case 1:
+			if len(head) <= off + 6 {
+				head, err = s.Fill(off + 6)
+			}
+			destIP = 	make([]byte, 4)
+			copy(destIP, head[off:off+4])
+			off += 4
 	case 4:
-		copy(acceptedCon.IpBuf, head[4:20])
-		dest = acceptedCon.IpBuf[0:16]
-		port = binary.BigEndian.Uint16(head[20:])
-	case 3:
-		isString = true
-		len := int(head[4])
-		if len == 0 {
-			return errors.New("String address too short")
+			if len(head) <= off + 18 {
+				head, err = s.Fill(off + 18)
+			}
+			destIP = 	make([]byte, 16)
+			copy(destIP, head[off:off+16])
+			off += 16
+
+		case 3:
+			dlen := int(head[off])
+			off++
+			if len(head) <= off + dlen + 2 {
+				head, err = s.Fill(off + dlen + 2)
+			}
+			destName = string(head[off:off+dlen])
+			off += dlen
 		}
-		destAddr = string(head[5 : 5+len])
-		port = binary.BigEndian.Uint16(head[5+len:])
-	default:
-		acceptedCon.Close()
-		return errors.New("Unknown address")
+	if err != nil {
+		return false, err
 	}
+	port := binary.BigEndian.Uint16(head[off:])
+	off += 2
 
+	// Any reminding bytes are eager sent
+	s.Skip(off)
 
-	addr := ""
-	if isString {
-		addr = net.JoinHostPort(destAddr, strconv.Itoa(int(port)))
-		str.Type = "socks5"
+	if atyp == 3 {
+		s.Dest = net.JoinHostPort(destName, strconv.Itoa(int(port)))
+		s.Type = "socks5"
 	} else {
-		ta := &net.TCPAddr{IP: dest, Port: int(port)}
-		addr = ta.String()
-		str.DestAddr = ta
-		str.Type = "socks5IP"
+		s.DestAddr= &net.TCPAddr{IP: destIP, Port: int(port)}
+		s.Dest = s.DestAddr.String()
+		s.Type = "socks5IP"
 	}
-
-	str.Dest = addr
 
 	// Must be called before sending any data.
-	acceptedCon.PostDialHandler = func(conn net.Conn, err error) {
+	s.PostDialHandler = func(conn net.Conn, err error) {
 		if err != nil || conn == nil {
 			// TODO: write error code
-			acceptedCon.Write([]byte{5, 1})
-			acceptedCon.Close()
+			s.Write([]byte{5, 1})
+			s.Close()
 		}
 		// Not accurate for tcp-over-http.
 		// TODO: pass a 'on connect' callback
@@ -228,9 +242,8 @@ func  ReadSocksHeader(acceptedCon *ugate.BufferedStream) error {
 		}
 		binary.BigEndian.PutUint16(r[off:], uint16(tcpAddr.Port))
 		off += 2
-		acceptedCon.Write(r[0:off])
+		s.Write(r[0:off])
 	}
 
-	acceptedCon.Clean()
-	return nil
+	return true, nil
 }

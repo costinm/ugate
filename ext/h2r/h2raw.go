@@ -1,13 +1,11 @@
-package h2raw
+package h2r
 
 import (
 	"bytes"
 	"context"
 	"log"
-	"net"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/costinm/ugate"
 	"golang.org/x/net/http2"
@@ -24,31 +22,9 @@ import (
 // - client create a POST stream for accepted connections, over H2
 // -
 
-type SPDYConn struct {
-	//Raw MetaConn
-	m       sync.RWMutex
-	framer  *http2.Framer
-	streams map[uint32]*H2Stream
 
-	handleStream func(*H2Stream)
-
-	nextStreamID uint32
-}
-
-func NewSPDY(raw net.Conn, srv bool) (*SPDYConn, error) {
-	h2c := &SPDYConn{
-		framer:       http2.NewFramer(raw, raw),
-		streams:      map[uint32]*H2Stream{},
-		nextStreamID: 3,
-	}
-
-	// WIP: Settings frame exchange
-
-	return h2c, nil
-}
-
-// Open a client stream.
-func (c *SPDYConn) NewStream(ctx context.Context, req *http.Request) (*H2Stream, error) {
+// NewStream opens a H2 stream. No H2 header (empty) - this matches QUIC streams
+func (c *H2RMux) NewStream(ctx context.Context, req *http.Request) (*H2Stream, error) {
 	c.m.Lock()
 	id := c.nextStreamID
 	c.nextStreamID += 2
@@ -66,6 +42,7 @@ func (c *SPDYConn) NewStream(ctx context.Context, req *http.Request) (*H2Stream,
 		path = "/"
 	}
 
+	// TODO: support for 'PUSH' frames for webpush.
 	s.henc.WriteField(hpack.HeaderField{Name: ":authority", Value: host})
 	s.henc.WriteField(hpack.HeaderField{Name: ":method", Value: req.Method})
 	s.henc.WriteField(hpack.HeaderField{Name: ":path", Value: path})
@@ -90,7 +67,7 @@ func (c *SPDYConn) NewStream(ctx context.Context, req *http.Request) (*H2Stream,
 	return s, err
 }
 
-func (h2c *SPDYConn) serve() error {
+func (h2c *H2RMux) serve() error {
 	// TODO: Settings handshake
 
 	var str *H2Stream
@@ -161,13 +138,13 @@ func (h2c *SPDYConn) serve() error {
 	}
 }
 
-func (h2s *SPDYConn) closeStream(id uint32) {
+func (h2s *H2RMux) closeStream(id uint32) {
 	h2s.m.Lock()
 	delete(h2s.streams, id)
 	h2s.m.Unlock()
 }
 
-func (h2s *SPDYConn) addStream(id uint32, f *http2.HeadersFrame) *H2Stream {
+func (h2s *H2RMux) addStream(id uint32, f *http2.HeadersFrame) *H2Stream {
 	h2s.m.Lock()
 	// TODO: reuse
 	bb := &bytes.Buffer{}
@@ -186,7 +163,7 @@ func (h2s *SPDYConn) addStream(id uint32, f *http2.HeadersFrame) *H2Stream {
 
 }
 
-func (h2s *SPDYConn) stream(id uint32) *H2Stream {
+func (h2s *H2RMux) stream(id uint32) *H2Stream {
 	h2s.m.RLock()
 	if ss, f := h2s.streams[id]; f {
 		h2s.m.RUnlock()
@@ -196,12 +173,12 @@ func (h2s *SPDYConn) stream(id uint32) *H2Stream {
 	return nil
 }
 
-// H2Stream is a multiplexed stream. Implements ResponseWriter and Pusher.
+// H2Stream is a multiplexed stream.
 type H2Stream struct {
 	meta *ugate.Stream
 
 	id *uint32
-	s  *SPDYConn
+	s  *H2RMux
 
 	hbuf *bytes.Buffer // HPACK encoder writes into this
 	hdec *hpack.Decoder
@@ -215,19 +192,8 @@ type H2Stream struct {
 	unread     []byte
 }
 
-// TODO
-// target will be used as a 'stream ID' - a new stream will be created with that URL, appear
-// as accepted.
-func (h2s *H2Stream) Push(target string, opts *http.PushOptions) error {
-	return nil
-}
-
 func (str *H2Stream) Close() error {
 	return nil
-}
-
-func (str *H2Stream) Meta() *ugate.Stream {
-	return str.meta
 }
 
 func (str *H2Stream) Write(p []byte) (n int, err error) {

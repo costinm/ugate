@@ -4,6 +4,9 @@
     ":15101": {
       "forwardTo": "127.0.0.1:5201"
     },
+    "udp://:15101": {
+      "forwardTo": "127.0.0.1:5201"
+    },
     ":15104": {
       "forwardTo": "localhost:15101"
     },
@@ -16,9 +19,6 @@
     },
     ":15103": {
       "forwardTo": "localiperf"
-    },
-    ":9080": {
-      "proto": "http"
     },
     "-:443": {
       "proto": "https"

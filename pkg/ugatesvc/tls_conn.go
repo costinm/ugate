@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"log"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/costinm/ugate"
@@ -24,11 +26,11 @@ type TLSConn struct {
 	tls *tls.Conn
 }
 
-func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*TLSConn, error) {
+func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*ugate.Stream, error) {
 	lc := &TLSConn{
 	}
-	if mc, ok := nc.(ugate.MetaConn); ok {
-		lc.Stream = mc.Meta()
+	if mc, ok := nc.(*ugate.Stream); ok {
+		lc.Stream = mc
 		if rnc, ok := lc.Out.(net.Conn); ok {
 			nc = rnc
 		}
@@ -53,13 +55,13 @@ func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config
 	lc.Stream.TLS = &tcs
 	lc.tls = cs
 
-	return lc, err
+	return lc.Stream, err
 }
 
 // SecureInbound runs the TLS handshake as a server.
 // Accepts connections without client certificate - alternate form of auth will be used, either
 // an inner TLS connection or JWT in metadata.
-func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*TLSConn, error) {
+func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*ugate.Stream, error) {
 	config, keyCh := ConfigForPeer(ug.Auth, cfg, "")
 	if l.ALPN == nil {
 		config.NextProtos = []string{"h2r", "h2"}
@@ -69,8 +71,8 @@ func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Con
 
 	tc := &TLSConn{}
 	tc.Stream = ugate.NewStream()
-	if mc, ok := nc.(ugate.MetaConn); ok {
-		m := mc.Meta()
+	if mc, ok := nc.(*ugate.Stream); ok {
+		m := mc
 		// Sniffed, etc
 		tc.Listener = m.Listener
 		tc.Dest = m.Dest
@@ -87,7 +89,7 @@ func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Con
 	tc.Stream.In = tc.tls
 	tc.Stream.Out = tc.tls
 
-	return tc, err
+	return tc.Stream, err
 }
 
 func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
@@ -183,4 +185,175 @@ func (pl *TLSConn) handshake(
 	//t.Conn = tlsConn
 
 	return pl.tls, remotePubKey, nil
+}
+
+var sniErr = errors.New("Invalid TLS")
+
+type clientHelloMsg struct { // 22
+	vers                uint16
+	random              []byte
+	sessionId           []byte
+	cipherSuites        []uint16
+	compressionMethods  []uint8
+	nextProtoNeg        bool
+	serverName          string
+	ocspStapling        bool
+	scts                bool
+	supportedPoints     []uint8
+	ticketSupported     bool
+	sessionTicket       []uint8
+	secureRenegotiation []byte
+	alpnProtocols       []string
+}
+
+// TLS extension numbers
+const (
+	extensionServerName uint16 = 0
+)
+
+
+func ParseTLS(acc *ugate.Stream) (*clientHelloMsg,error) {
+	buf, err := acc.Fill(5)
+	if err != nil {
+		return nil, err
+	}
+	typ := buf[0] // 22 3 1 2 0
+	if typ != 22 {
+		return nil, sniErr
+	}
+	vers := uint16(buf[1])<<8 | uint16(buf[2])
+	if vers != 0x301 {
+		log.Println("Version ", vers)
+	}
+
+	rlen := int(buf[3])<<8 | int(buf[4])
+	if rlen > 4096 {
+		log.Println("RLen ", rlen)
+		return nil, sniErr
+	}
+
+	off := 5
+	m := clientHelloMsg{}
+
+	end := rlen + 5
+	buf, err = acc.Fill(end)
+	if err != nil {
+		return nil, err
+	}
+	clientHello := buf[5:end]
+	chLen := end - 5
+
+	if chLen < 38 {
+		log.Println("chLen ", chLen)
+		return nil, sniErr
+	}
+
+	// off is the last byte in the buffer - will be forwarded
+
+	m.vers = uint16(clientHello[4])<<8 | uint16(clientHello[5])
+	// random: data[6:38]
+
+	sessionIdLen := int(clientHello[38])
+	if sessionIdLen > 32 || chLen < 39+sessionIdLen {
+		log.Println("sLen ", sessionIdLen)
+		return nil, sniErr
+	}
+	m.sessionId = clientHello[39 : 39+sessionIdLen]
+	off = 39 + sessionIdLen
+
+	// cipherSuiteLen is the number of bytes of cipher suite numbers. Since
+	// they are uint16s, the number must be even.
+	cipherSuiteLen := int(clientHello[off])<<8 | int(clientHello[off+1])
+	off += 2
+	if cipherSuiteLen%2 == 1 || chLen-off < 2+cipherSuiteLen {
+		return nil, sniErr
+	}
+
+	//numCipherSuites := cipherSuiteLen / 2
+	//m.cipherSuites = make([]uint16, numCipherSuites)
+	//for i := 0; i < numCipherSuites; i++ {
+	//	m.cipherSuites[i] = uint16(data[2+2*i])<<8 | uint16(data[3+2*i])
+	//}
+	off += cipherSuiteLen
+
+	compressionMethodsLen := int(clientHello[off])
+	off++
+	if chLen-off < 1+compressionMethodsLen {
+		return nil, sniErr
+	}
+	//m.compressionMethods = data[1 : 1+compressionMethodsLen]
+	off += compressionMethodsLen
+
+	if off+2 > chLen {
+		// ClientHello is optionally followed by extension data
+		return nil, sniErr
+	}
+
+	extensionsLength := int(clientHello[off])<<8 | int(clientHello[off+1])
+	off = off + 2
+	if extensionsLength != chLen-off {
+		return nil, sniErr
+	}
+
+	for off < chLen {
+		extension := uint16(clientHello[off])<<8 | uint16(clientHello[off+1])
+		off += 2
+		length := int(clientHello[off])<<8 | int(clientHello[off+1])
+		off += 2
+		if off >= end {
+			return nil, sniErr
+		}
+
+		switch extension {
+		case extensionServerName:
+			d := clientHello[off : off+length]
+			if len(d) < 2 {
+				return nil, sniErr
+			}
+			namesLen := int(d[0])<<8 | int(d[1])
+			d = d[2:]
+			if len(d) != namesLen {
+				return nil, sniErr
+			}
+			for len(d) > 0 {
+				if len(d) < 3 {
+					return nil, sniErr
+				}
+				nameType := d[0]
+				nameLen := int(d[1])<<8 | int(d[2])
+				d = d[3:]
+				if len(d) < nameLen {
+					return nil, sniErr
+				}
+				if nameType == 0 {
+					m.serverName = string(d[:nameLen])
+					// An SNI value may not include a
+					// trailing dot. See
+					// https://tools.ietf.org/html/rfc6066#section-3.
+					if strings.HasSuffix(m.serverName, ".") {
+						return nil, sniErr
+					}
+					break
+				}
+				d = d[nameLen:]
+			}
+		default:
+			//log.Println("TLS Ext", extension, length)
+		}
+
+		off += length
+	}
+
+	// Does not contain port !!! Assume the port is 443, or map it.
+
+	// TODO: unmangle server name - port, mesh node
+
+	if m.serverName != "" {
+		//destAddr := m.serverName + ":443"
+		acc.Dest = m.serverName
+	}
+	acc.Type = ugate.ProtoTLS
+
+
+	return &m, nil
 }
