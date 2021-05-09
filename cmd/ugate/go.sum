@@ -99,6 +99,10 @@ github.com/costinm/go-tun2socks v1.16.12-0.20210328172757-88f6d54235cb h1:45NOoC
 github.com/costinm/go-tun2socks v1.16.12-0.20210328172757-88f6d54235cb/go.mod h1:wgB2BFT8ZaPKyKOQ/5dljMG/YIow+AIXyq4KBwJ5sGQ=
 github.com/costinm/gvisor v0.0.0-20210509154143-a94fe58cda62 h1:IHunRcT51kl72lxr1EuEOYM0DU5SxvVyTTNOw5h7wI0=
 github.com/costinm/gvisor v0.0.0-20210509154143-a94fe58cda62/go.mod h1:ucHEMlckp+S/YzKEpwwAyGBhAh807Wxq/8Erc6gFxCE=
+github.com/costinm/ugate/ext/gvisor v0.0.0-20210509234022-4f213a5560be h1:aL12PeeMphNwizUDiHwFVocYcLTdUPuO7rSk+JzpVSQ=
+github.com/costinm/ugate/ext/gvisor v0.0.0-20210509234022-4f213a5560be/go.mod h1:stbrEb5l0TYdEFDmO2E6OCKNgExBQZTEQxC1gHydKmk=
+github.com/costinm/ugate/ext/lwip v0.0.0-20210509234022-4f213a5560be h1:QG+ZE+IDMEpdvOqT0h0HKeS6NCD3cbJQ+j8yncgz9Ro=
+github.com/costinm/ugate/ext/lwip v0.0.0-20210509234022-4f213a5560be/go.mod h1:2AWmC9WBWNY2DJKVGKRCrS5jhveOB343BnACODztQBA=
 github.com/cpuguy83/go-md2man/v2 v2.0.0-20190314233015-f79a8a8ca69d/go.mod h1:maD7wRr/U5Z6m/iR4s+kqSMx2CaBsrgA7czyZG/E6dU=
 github.com/cpuguy83/go-md2man/v2 v2.0.0/go.mod h1:maD7wRr/U5Z6m/iR4s+kqSMx2CaBsrgA7czyZG/E6dU=
 github.com/davecgh/go-spew v0.0.0-20151105211317-5215b55f46b2/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -123,8 +127,6 @@ github.com/envoyproxy/go-control-plane v0.9.9-0.20201210154907-fd9021fe5dad/go.m
 github.com/envoyproxy/go-control-plane v0.9.9-0.20210217033140-668b12f5399d/go.mod h1:cXg6YxExXjJnVBQHBLXeUAgxn2UodCpnH306RInaBQk=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/evanphx/json-patch v4.2.0+incompatible/go.mod h1:50XU6AFN0ol/bzJsmQLiYLvXMP4fmwYFNcr97nuDLSk=
-github.com/eycorsican/go-tun2socks v1.16.12-0.20201107203946-301549c435ff h1:SRx8t8Kk8oPRLPC1Y09kwYgRdkc38O8QYXTbqwzRb5g=
-github.com/eycorsican/go-tun2socks v1.16.12-0.20201107203946-301549c435ff/go.mod h1:wgB2BFT8ZaPKyKOQ/5dljMG/YIow+AIXyq4KBwJ5sGQ=
 github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568/go.mod h1:xEzjJPgXI435gkrCt3MPfRiAkVrwSbHsst4LCFVfpJc=
 github.com/francoispqt/gojay v1.2.13/go.mod h1:ehT5mTG4ua4581f1++1WLG0vPdaA9HaiDsoyrBGkyDY=
 github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=
