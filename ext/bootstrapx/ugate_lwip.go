@@ -1,4 +1,4 @@
-// +build lwip
+// x+build lwip
 
 package bootstrapx
 
@@ -7,7 +7,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/costinm/ugate/ext/lwip"
+	tun "github.com/costinm/ugate/ext/lwip"
+
 	"github.com/costinm/ugate/pkg/udp"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/songgao/water"
@@ -30,7 +31,7 @@ func openTunLWIP(ifn string) (io.ReadWriteCloser, error) {
 }
 
 func init() {
-	initHooks = append(initHooks, func(ug *ugatesvc.UGate) startFunc {
+	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
 		dev := os.Getenv("LWIP")
 		if dev == "" {
 			return nil
@@ -43,8 +44,8 @@ func init() {
 		log.Println("Using LWIP tun", dev)
 
 		return func(ug *ugatesvc.UGate) {
-			tun := lwip.NewTUNFD(fd,ug, ug.UDPHandler)
-			udp.TransparentUDPWriter = tun
+			t := tun.NewTUNFD(fd,ug, ug.UDPHandler)
+			udp.TransparentUDPWriter = t
 		}
 		return func(ug *ugatesvc.UGate) {
 		}

@@ -13,7 +13,7 @@ import (
 
 // XDS and gRPC dependencies. Enabled for interop with Istio/XDS.
 func init() {
-	initHooks = append(initHooks, func(ug *ugatesvc.UGate) startFunc {
+	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
 		gs := xds.NewXDS(webpush.DefaultMux)
 		grpcS := grpc.NewServer()
 		ug.Mux.HandleFunc("/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources", func(writer http.ResponseWriter, request *http.Request) {

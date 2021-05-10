@@ -4,15 +4,15 @@ go 1.16
 
 replace github.com/costinm/ugate => ../../
 
-replace github.com/costinm/ugate/ext/webrtc => ../../ext/webrtc
+replace github.com/costinm/ugate/ext/webrtc => ../webrtc
 
 replace github.com/costinm/ugate/dns => ../../dns
 
-replace github.com/costinm/ugate/ext/xds => ../../ext/xds
+replace github.com/costinm/ugate/ext/xds => ../xds
 
-replace github.com/costinm/ugate/ext/h2r => ../../ext/h2r
+replace github.com/costinm/ugate/ext/h2r => ../h2r
 
-replace github.com/costinm/ugate/ext/quic => ../../ext/quic
+replace github.com/costinm/ugate/ext/quic => ../quic
 
 //replace github.com/lucas-clemente/quic-go => ../../../quic
 

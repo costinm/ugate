@@ -7,7 +7,7 @@ import (
 )
 
 func init() {
-	initHooks = append(initHooks, func(ug *ugatesvc.UGate) startFunc{
+	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
 		return nil
 	})
 }

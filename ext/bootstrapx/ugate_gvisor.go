@@ -1,4 +1,4 @@
-// +build gvisor
+///// +build gvisor
 
 package bootstrapx
 
@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/costinm/ugate/ext/gvisor"
+	gv "github.com/costinm/ugate/ext/gvisor"
 	"github.com/costinm/ugate/pkg/udp"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/songgao/water"
@@ -29,10 +29,10 @@ func openTun(ifn string) (io.ReadWriteCloser, error) {
 	return ifce.ReadWriteCloser, nil
 }
 
-var tun io.ReadWriteCloser
+var tunIO io.ReadWriteCloser
 
 func init() {
-	initHooks = append(initHooks, func(ug *ugatesvc.UGate) startFunc {
+	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
 		dev := os.Getenv("GVISOR")
 		if dev == "" {
 			return nil
@@ -41,12 +41,12 @@ func init() {
 		if err != nil {
 			return nil
 		}
-		tun = fd
+		tunIO = fd
 
 		log.Println("Using gVisor tun", dev)
 
 		return func(ug *ugatesvc.UGate) {
-			tun := gvisor.NewTUNFD(fd,ug, ug.UDPHandler)
+			tun := gv.NewTUNFD(fd,ug, ug.UDPHandler)
 			udp.TransparentUDPWriter = tun
 		}
 	})

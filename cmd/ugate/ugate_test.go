@@ -1,4 +1,4 @@
-package bootstrap
+package main
 
 import (
 	"context"
