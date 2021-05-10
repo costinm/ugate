@@ -8,7 +8,7 @@ replace github.com/costinm/ugate/ext/webrtc => ../../ext/webrtc
 
 replace github.com/costinm/ugate/dns => ../../dns
 
-replace github.com/costinm/ugate/ext/bootstrap => ../../ext/bootstrap
+//replace github.com/costinm/ugate/ext/bootstrap => ../../ext/bootstrap
 
 replace github.com/costinm/ugate/ext/xds => ../../ext/xds
 
@@ -27,7 +27,7 @@ replace github.com/lucas-clemente/quic-go => ../../../quic
 require (
 	github.com/costinm/ugate v0.0.0-20210425213441-05024f5e8910
 	github.com/costinm/ugate/dns v0.0.0-20210425213441-05024f5e8910
-	github.com/costinm/ugate/ext/bootstrap v0.0.0-00010101000000-000000000000
+	github.com/costinm/ugate/ext/bootstrap v0.0.0-20210510001934-3cec7b4617c7 // indirect
 	github.com/lucas-clemente/quic-go v0.20.1 // indirect
 	github.com/miekg/dns v1.1.41 // indirect
 )
