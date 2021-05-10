@@ -1,6 +1,6 @@
 // +build lwip
 
-package main
+package bootstrapx
 
 import (
 	"io"

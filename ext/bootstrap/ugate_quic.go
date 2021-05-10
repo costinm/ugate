@@ -1,16 +1,18 @@
 // +build !MIN
 
-package main
+package bootstrap
 
 import (
-	"github.com/costinm/ugate/ext/h2r"
+	"github.com/costinm/ugate/ext/quic"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 func init() {
 	initHooks = append(initHooks, func(ug *ugatesvc.UGate) startFunc {
+		qa := quic.New(ug)
 
-		h2r.New(ug)
-		return nil
+		return func(ug *ugatesvc.UGate) {
+			qa.Start()
+		}
 	})
 }

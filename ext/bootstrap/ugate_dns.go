@@ -1,6 +1,6 @@
 // +build !MIN
 
-package main
+package bootstrap
 
 import (
 	"github.com/costinm/ugate/pkg/ugatesvc"

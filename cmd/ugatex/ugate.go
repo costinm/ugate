@@ -15,6 +15,7 @@ import (
 	"github.com/costinm/ugate/pkg/ugatesvc"
 
 	_ "github.com/costinm/ugate/ext/bootstrap"
+	_ "github.com/costinm/ugate/ext/bootstrapx"
 )
 
 // Minimal TCP over H2 Gateway, defaulting to Istio ports and capture behavior.

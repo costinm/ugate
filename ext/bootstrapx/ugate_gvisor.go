@@ -1,6 +1,6 @@
 // +build gvisor
 
-package main
+package bootstrapx
 
 import (
 	"io"

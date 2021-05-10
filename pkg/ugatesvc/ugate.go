@@ -21,6 +21,9 @@ import (
 	msgs "github.com/costinm/ugate/webpush"
 )
 
+type StartFunc func(ug *UGate)
+var InitHooks []func(gate *UGate) StartFunc
+
 
 type UGate struct {
 	// Actual (real) port listeners, key is the host:port
