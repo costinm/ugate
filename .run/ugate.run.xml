@@ -1,6 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="ugate" type="CloudCodeCloudRunConfigurationType" factoryName="CloudCodeCloudDeployRunConfigurationFactory" show_console_on_std_err="false" show_console_on_std_out="false" gcpProject="{&quot;googleUsername&quot;:&quot;costin@gmail.com&quot;,&quot;projectId&quot;:&quot;dmeshgate&quot;,&quot;projectName&quot;:&quot;dmeshgate&quot;,&quot;projectNumber&quot;:584624515903}" imageBuilder="{&quot;name&quot;:&quot;Docker&quot;,&quot;payload&quot;:{&quot;path&quot;:&quot;Dockerfile&quot;}}">
     <option name="allowRunningInParallel" value="false" />
+    <option name="buildEnvironment" value="Local" />
     <option name="buildpacksEnv">
       <map />
     </option>
@@ -17,6 +18,9 @@
     <option name="environmentVariables">
       <map />
     </option>
+    <option name="gcbSettings">
+      <GoogleCloudBuildSettings />
+    </option>
     <option name="gkeClusterLocation" />
     <option name="gkeClusterName" />
     <option name="gkeClusterNamespace" value="default" />
@@ -29,12 +33,14 @@
     <option name="memoryAllocated" value="MIB_256" />
     <option name="minInstances" value="" />
     <option name="platform" value="FULLY_MANAGED" />
+    <option name="projectPathOnTarget" />
     <option name="selectedOptions">
       <list />
     </option>
     <option name="serviceAccount" value="" />
     <option name="serviceName" value="ugate" />
     <option name="timeout" value="900" />
+    <option name="vpcConnector" value="" />
     <method v="2" />
   </configuration>
 </component>

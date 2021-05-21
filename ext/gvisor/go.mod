@@ -4,9 +4,9 @@ go 1.16
 
 // go get -d -u   github.com/costinm/gvisor@tungate
 // latest
-replace gvisor.dev/gvisor => github.com/costinm/gvisor v0.0.0-20210509154143-a94fe58cda62
+//replace gvisor.dev/gvisor => github.com/costinm/gvisor v0.0.0-20210509154143-a94fe58cda62
 
-//replace gvisor.dev/gvisor => ../../../gvisor
+replace gvisor.dev/gvisor => ../../../gvisor
 
 replace github.com/costinm/ugate => ../..
 

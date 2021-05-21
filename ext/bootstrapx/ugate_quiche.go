@@ -1,6 +1,6 @@
 // +build !MIN
 
-package bootstrap
+package bootstrapx
 
 func init() {
 	//initHooks = append(initHooks, func(ug *ugatesvc.UGate) startFunc {

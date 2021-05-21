@@ -219,7 +219,7 @@ func (t *H2R) HandleH2R(w http.ResponseWriter, r *http.Request) {
 	upData, _ := ioutil.ReadAll(res0.Body)
 	res0.Body.Close()
 
-	log.Println("H2R start on ", t.ug.Auth.ID, "for", n.ID, k, ra, " -> ", string(upData))
+	log.Println(str.StreamId, "H2R start on ", t.ug.Auth.ID, "for", n.ID, k, ra, " -> ", string(upData))
 
 	//go func() {
 	//	for {

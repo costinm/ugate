@@ -205,6 +205,10 @@ func (gw *UGate) HttpTCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HttpNodesFilter returns the list of directly connected nodes.
+//
+// Optional 't' parameter is a timestamp used to filter recently seen nodes.
+// Uses NodeByID table.
 func (gw *UGate) HttpNodesFilter(w http.ResponseWriter, r *http.Request) {
 	gw.m.RLock()
 	defer gw.m.RUnlock()
@@ -264,16 +268,17 @@ func (gw *UGate) HandleID(w http.ResponseWriter, r *http.Request) {
 // HandleTCPPRoxy is called for CONNECT and /dm/ADDRESS
 // TODO: also handle /ipfs/... for compat.
 func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(r.RequestURI, "/")
-	//
-	//r1 := CreateUpstreamRequest(w, r)
-	//r1.Host = parts[2]
-	//r1.URL.Scheme = "https"
-	//r1.URL.Host = r1.Host
-	//r1.URL.Path = "/" + strings.Join(parts[3:], "/")
 
+	// Create a stream, used for proxy with caching.
 	str := ugate.NewStreamRequest(r, w, nil)
-	str.Dest = parts[2]
+
+	if r.Method == "CONNECT" {
+		str.Dest = r.Host
+	} else {
+		parts := strings.Split(r.RequestURI, "/")
+		str.Dest = parts[2]
+	}
+
 	str.PostDialHandler = func(conn net.Conn, err error) {
 		if err != nil {
 			w.Header().Add("Error", err.Error())
@@ -281,12 +286,23 @@ func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
 			w.(http.Flusher).Flush()
 			return
 		}
-		w.Header().Set("Trailer", "X-Close")
+		//w.Header().Set("Trailer", "X-Close")
 		w.WriteHeader(200)
 		w.(http.Flusher).Flush()
 	}
-	str.Dest = parts[2]
+	defer func() {
+		// Handler is done - even if it didn't call close, prevent calling it again.
+		if ugate.DebugClose {
+			log.Println("HTTP.Close - handler done, no close ", str.Dest)
+		}
+		str.ServerClose = true
+	}()
 
+	// Treat it as regular stream forwarding
 	gw.HandleVirtualIN(str)
+
+	if ugate.DebugClose {
+		log.Println("Handler closed for ", r.RequestURI)
+	}
 
 }

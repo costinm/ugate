@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"golang.org/x/crypto/ssh"
 )
@@ -103,6 +104,14 @@ func NewSSHTransport(signer ssh.Signer) (*SSHTransport, error) {
 			},
 		},
 	}, nil
+}
+
+func SignSSHHost(a *auth.Auth, hn string) {
+
+}
+
+func SignSSHUser(a *auth.Auth, hn string) {
+
 }
 
 // NewConn wraps a net.Conn using SSH for MUX and security.

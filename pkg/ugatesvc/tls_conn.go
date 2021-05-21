@@ -212,13 +212,19 @@ const (
 )
 
 
+// TODO: if a session ID is provided, use it as a cookie and attempt
+// to find the corresponding host.
+// On server side generate session IDs !
+//
+// TODO: in mesh, use one cypher suite (TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
+// maybe 2 ( since keys are ECDSA )
 func ParseTLS(acc *ugate.Stream) (*clientHelloMsg,error) {
 	buf, err := acc.Fill(5)
 	if err != nil {
 		return nil, err
 	}
 	typ := buf[0] // 22 3 1 2 0
-	if typ != 22 {
+	if typ != 0x16 {
 		return nil, sniErr
 	}
 	vers := uint16(buf[1])<<8 | uint16(buf[2])

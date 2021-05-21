@@ -9,15 +9,17 @@
 export TUNUSER=${TUNUSER:-istio-proxy}
 export N=${N:-0}
 
-echo Create dmesh${N}. owned by ${TUNUSER}
-echo Address: 10.11.${N}.1
-echo 10.10.${N}.0/24 will be routed to dmesh${N}
-
 # Create a TUN device.
 setupTUN() {
+  echo Create dmesh${N}. owned by ${TUNUSER}
+  echo Address: TUN=10.11.${N}.1 GVISOR=10.11.${N}.2
+  echo 10.10.${N}.0/24 will be routed to dmesh${N}
+
   ip tuntap add dev dmesh${N} mode tun user ${TUNUSER} group ${TUNUSER}
   ip addr add 10.11.${N}.1/24 dev dmesh${N}
-  # No IP6 address - confuses linux
+  # IP6 address may confuse linux
+  ip -6 addr add fd::1:${N}/64 dev dmesh${N}
+
   ip link set dmesh${N} up
 
   # Route various ranges to dmesh1 - the gate can't initiate its own
@@ -25,12 +27,32 @@ setupTUN() {
   # ip route add fd::/8 dev ${N}
   ip route add 10.10.${N}.0/24 dev dmesh${N}
 
+
   # Don't remember why this was required
   echo 2 > /proc/sys/net/ipv4/conf/dmesh${N}/rp_filter
   sysctl -w net.ipv4.ip_forward=1
 }
 
-# Setup routes
+cleanup() {
+  # App must be stopped
+  ip tuntap del dev dmesh${N} mode tun
+
+  ip rule delete  fwmark 1{N}1 priority 10  lookup 1{N}1
+  ip route del default dev dmesh${N} table 1{N}1
+
+  ip rule del fwmark 1{N}0 lookup 1{N}0
+  ip rule del iif dmesh${N} lookup 1{N}0
+  ip route del local 0.0.0.0/0 dev lo table 1{N}0
+}
+
+
+# Setup custom rules for egress capture using TUN.
+# Mesh, DNS and VIP addresses should be routed to TUN directly, if
+# DNS provides right modifications this is not needed.
+#
+# This is critical for UDP, where iptables doesn't work.
+# iptables interception for TCP is still faster.
+#
 # - add a routing table (1338) to dmesh
 # - all packets with mark 1338 will use the new routing table
 # - route 10.10.0.0/16 via the tun
@@ -50,17 +72,6 @@ setup() {
   #ip route add local ::/0 dev lo table ${N}0
 }
 
-cleanup() {
-  # App must be stopped
-  ip tuntap del dev dmesh${N} mode tun
-
-  ip rule delete  fwmark 1{N}1 priority 10  lookup 1{N}1
-  ip route del default dev dmesh${N} table 1{N}1
-
-  ip rule del fwmark 1{N}0 lookup 1{N}0
-  ip rule del iif dmesh${N} lookup 1{N}0
-  ip route del local 0.0.0.0/0 dev lo table 1{N}0
-}
 
 
 stop() {
@@ -107,8 +118,9 @@ start() {
   iptables -t mangle -A OUTPUT -j DMESH_MANGLE_OUT${N}
 }
 
-if [ "$1" = "setup" ] ; then
+if [ "$1" = "init" ] ; then
   setupTUN
+elif [ "$1" = "setup" ] ; then
   setup
 elif [ "$1" = "start" ] ; then
   start

@@ -2,11 +2,9 @@
   <configuration default="false" name="ugate/Dockerfile" type="docker-deploy" factoryName="dockerfile" server-name="Docker">
     <deployment type="dockerfile">
       <settings>
-        <option name="imageTag" value="costinm/ugate:latest" />
-        <option name="buildCliOptions" value="" />
-        <option name="command" value="" />
+        <option name="imageTag" value="gcr.io/dmeshgate/ugate:latest" />
+        <option name="buildOnly" value="true" />
         <option name="containerName" value="ugate" />
-        <option name="entrypoint" value="" />
         <option name="envVars">
           <list>
             <DockerEnvVarImpl>

@@ -1,13 +1,13 @@
 apiVersion: policy/v1beta1
 kind: PodDisruptionBudget
 metadata:
-  name: wps
-  namespace: wps
+  name: ugate
+  namespace: ugate
   labels:
-    release: wps
+    release: ugate
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: wps
-      release: wps
+      app: ugate
+      release: ugate

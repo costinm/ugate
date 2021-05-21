@@ -1,0 +1,89 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dev
+  namespace: dev
+spec:
+  ports:
+    - port: 8384
+      name: syncthing
+  selector:
+    app: dev
+---
+# Runs a docker-mounted dev image.
+# Can build images in the node's docker.
+#apiVersion: v1
+#kind: ReplicationController
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev
+  namespace: dev
+  labels:
+    app: dev
+spec:
+  replicas: 1
+  #  strategy:
+  #    rollingUpdate:
+  #      maxSurge: 1
+  #      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: dev
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: dev
+      annotations:
+        sidecar.istio.io/proxyImage: gcr.io/istio-testing/proxyv2:latest
+        #sidecar.istio.io/proxyImage: costinm/proxyv2:latest
+    spec:
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsUser: 1000
+      containers:
+        - name: ubuntu
+          image: costinm/istio-build-code:latest
+          command: ["/usr/bin/code-server"]
+          args: ["--auth", "none"]
+          volumeMounts:
+            - mountPath: /var/run/docker.sock
+              name: docker-socket-volume
+            - mountPath: /work
+              name: src
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 8080
+              name: https
+              protocol: TCP
+
+        - name: sync
+          image: syncthing/syncthing
+          # Entrypoint expects to run as root
+          command: [ "/bin/syncthing", "-home", "/var/syncthing/config"]
+          ports:
+            - containerPort: 22000
+              name: http
+              protocol: TCP
+            - containerPort: 8384
+              name: tcp-sync
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /var/syncthing
+              name: src
+      volumes:
+        - name: envcfg
+          configMap:
+            name: codeenv
+            optional: true
+        - name: docker-socket-volume
+          hostPath:
+            path: /var/run/docker.sock
+            type: File
+        - name: src
+          persistentVolumeClaim:
+            claimName: src

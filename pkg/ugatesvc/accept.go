@@ -47,13 +47,8 @@ func (ug *UGate) HandleTUN(conn net.Conn, ra *net.TCPAddr, la *net.TCPAddr) erro
 
 	bconn.Session = &ugate.Session{RemoteAddr: ra, LocalAddr: la}
 
-	//la := conn.LocalAddr()
-
 	// Testing/debugging - localhost is captured by table local, rule 0.
 	if bconn.Dest == "" {
-			if ra.Port == 5201 {
-				ra.IP = []byte{0x7f, 0, 0, 1}
-			}
 			bconn.Dest = ra.String()
 			log.Println("LTUN ", ra, la, bconn.Dest)
 	}
@@ -115,28 +110,129 @@ func (ug *UGate) handleTLS(l *ugate.Listener, acceptedCon net.Conn) {
 		//if ug.Auth.Config.Get("key/" + dest) {
 		//
 		//}
-		wild := ""
-		for cn, k := range l.Certs {
-			if cn == "*" {
-				wild = k
-			} else {
-				if cn[0] == '*' && len(cn) > 2 {
-					if strings.HasSuffix(sni, cn[2:]) {
+		_, ok := ug.Auth.CertMap[sni]
+		if ok {
+			tlsTerm = true
+			cert = sni
+		} else {
+			// Check certs defined for the listener
+			wild := ""
+			for cn, k := range l.Certs {
+				if cn == "*" {
+					wild = k
+				} else {
+					if cn[0] == '*' && len(cn) > 2 {
+						if strings.HasSuffix(sni, cn[2:]) {
+							tlsTerm = true
+							cert = k
+						}
+					} else if sni == cn {
 						tlsTerm = true
 						cert = k
 					}
-				} else if sni == cn {
-					tlsTerm = true
-					cert = k
 				}
 			}
-		}
-		if !tlsTerm && wild != "" {
-			tlsTerm = true
-			cert = wild
+			if !tlsTerm && wild != "" {
+				tlsTerm = true
+				cert = wild
+			}
 		}
 	}
 
+	sniCfg := ug.Listeners[rawStream.Dest]
+	if sniCfg != nil {
+		if sniCfg.ForwardTo != "" {
+			rawStream.Dest = sniCfg.ForwardTo
+		}
+	}
+
+	// Terminate TLS if the stream is detected as TLS and the matched config
+	// is configured for termination.
+	// Else it's just a proxied SNI connection.
+	if tlsTerm {
+		tlsCfg := ug.TLSConfig
+		if cert != "" {
+			// explicit cert based on listener config
+			// TODO: tlsCfg = ug.Auth.GetServerConfig(cert)
+		}
+		// TODO: present the right ALPN for the port ( if not set, use default)
+		tc, err := ug.NewTLSConnIn(rawStream.Context(),l, rawStream, tlsCfg)
+		if err != nil {
+			rawStream.ReadErr = err
+			log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, rawStream.Listener, err)
+			return
+		}
+
+		// Handshake done. Now we have access to the ALPN.
+		rawStream.ReadErr = ug.HandleBTSStream(tc)
+	} else {
+		// Default stream handling is proxy.
+		rawStream.ReadErr = ug.HandleStream(rawStream)
+	}
+}
+
+// Dedicated BTS handler, for accepted connections with TLS.
+// Port 443 (if root or redirected), or BASE + 7
+//
+// curl https://$NAME/ --connect-to $NAME:443:127.0.0.1:15007
+func (ug *UGate) handleBTS(l *ugate.Listener, acceptedCon net.Conn) {
+	// Attempt to determine the Listener and target
+	// Ingress mode, forward to an IP
+
+	rawStream := ugate.GetStream(acceptedCon, acceptedCon)
+
+	// Track the original stream. Report error and bytes on the original.
+	ug.OnStream(rawStream)
+	defer ug.OnStreamDone(rawStream)
+
+	rawStream.Listener = l
+	rawStream.Type = l.Protocol
+
+
+	// Used to present the right cert
+	_, rawStream.ReadErr = ParseTLS(rawStream)
+	if rawStream.ReadErr != nil {
+		return
+	}
+
+	sni := rawStream.Dest
+
+	// 2 main cases:
+	// - terminated here - if we have a cert
+	// - SNI routed - no termination.
+	tlsTerm := false
+	cert := ""
+
+	if rawStream.Dest == "" {
+		// No explicit destination - terminate here
+		tlsTerm = true
+	} else if rawStream.Dest == ug.Auth.ID {
+		tlsTerm = true
+	} else {
+		// Not sure if this is worth it, may be too complex
+		// TODO: try to find certificate for domain or parent.
+		//if ug.Auth.Config.Get("key/" + dest) {
+		//
+		//}
+		_, ok := ug.Auth.CertMap[sni]
+		if ok {
+			tlsTerm = true
+			cert = sni
+		}
+	}
+
+	sniCfg := ug.Listeners[rawStream.Dest]
+	if sniCfg == nil {
+		idx :=  strings.Index(rawStream.Dest, ".")
+		if idx > 0 {
+			sniCfg = ug.Listeners[rawStream.Dest[0:idx]]
+		}
+	}
+	if sniCfg != nil {
+		if sniCfg.ForwardTo != "" {
+			rawStream.Dest = sniCfg.ForwardTo
+		}
+	}
 
 	if l.ForwardTo != "" {
 		// Explicit override - this is for listeners with type TLS and explicit
@@ -162,13 +258,13 @@ func (ug *UGate) handleTLS(l *ugate.Listener, acceptedCon net.Conn) {
 			log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, rawStream.Listener, err)
 			return
 		}
-		// Handshake done. Now we have access to the ALPN
 
-		rawStream.ReadErr = ug.HandleStream(tc)
+		// Handshake done. Now we have access to the ALPN.
+
+		rawStream.ReadErr = ug.HandleBTSStream(tc)
 	} else {
-		// TODO: additional config for SNI proxying - what is allowed, etc - to avoid open relay
-		//
-		rawStream.ReadErr = ug.HandleStream(rawStream)
+		// Default stream handling is proxy.
+		rawStream.ReadErr = ug.HandleSNIStream(rawStream)
 	}
 }
 

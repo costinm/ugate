@@ -1,22 +1,25 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: wps
-  namespace: wps
+  name: ugate
+#  namespace: ugate
   labels:
-    app: wps
+    app: ugate
 spec:
-  strategy:
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 1
+  podManagementPolicy: Parallel
+  replicas: 1
+  serviceName: ugate
+#  strategy:
+#    rollingUpdate:
+#      maxSurge: 1
+#      maxUnavailable: 1
   selector:
     matchLabels:
-      app: wps
+      app: ugate
   template:
     metadata:
       labels:
-        app: wps
+        app: ugate
     spec:
       serviceAccountName: default
       containers:
@@ -24,8 +27,8 @@ spec:
           #image: costinm/wps:latest
           #image: localhost:5000/wps:2020-05-24
           # For skaffold
-          #image: wps:latest
-          image: gcr.io/dmeshgate/ugate:latest
+          #image: ugate:latest
+          image: {{ .Values.image }}
           imagePullPolicy: Always
           ports:
             - containerPort: 5222
@@ -36,7 +39,7 @@ spec:
               name: tls
           #          envFrom:
           #          - configMapRef:
-          #              name: wps
+          #              name: ugate
           #              optional: true
           env:
             - name: GOTRACEBACK
@@ -47,7 +50,7 @@ spec:
               memory: 256Mi
           volumeMounts:
             # Default 'RO' config source
-            - name: wps
+            - name: ugate
               mountPath: /var/lib/dmesh
               readOnly: true
 
@@ -64,64 +67,64 @@ spec:
               readOnly: true
 
         # Co-located istio Gateway
-        - name: istio-proxy
-          image: costinm/proxyv2:latest
-          args:
-            - "proxy"
-            - "router"
-            - "--serviceCluster"
-            - "wps"
-          env:
-            - name: XDS_SAVE
-              value: /etc/istio/proxy/
-            - name: XDS_LOCAL
-              value: 0.0.0.0:15015
-            # Save the workload secret to file
-            - name: OUTPUT_CERTS
-              value: /etc/istio/proxy/
-            # Override default ca addr - use real istiod
-            # This will save the certs to a dir, available to local istiod
-            #            - name: CA_ADDR
-            #              value: istiod.istio-system.svc:15012
-            - name: PROXY_CONFIG
-              value: |-
-                discoveryAddress: istiod.istio-system.svc:15012
-                zipkin:
-                  address: ""
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  apiVersion: v1
-                  fieldPath: metadata.name
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  apiVersion: v1
-                  fieldPath: metadata.namespace
-
-          resources:
-            requests:
-              cpu: 10m
-              memory: 256Mi
-          ports:
-            # Creates on each host a port forwarder:
-            # -A CNI-DN-78555e74edb8054e88910 -p tcp -m tcp --dport 5000 -j DNAT --to-destination 10.48.0.156:5000
-            - containerPort: 15012
-              name: docker
-              protocol: TCP
-          volumeMounts:
-            - mountPath: /var/run/secrets/istio
-              name: istiod-ca-cert
-            - name: istio-envoy
-              mountPath: /etc/istio/proxy
-            - name: istio-token
-              mountPath: /var/run/secrets/tokens
-              readOnly: true
-            # Not creating those directories disables Secret watching
-            #            - name: ingressgatewaysdsudspath
-            #              mountPath: /var/run/ingress_gateway
-            - name: podinfo
-              mountPath: /etc/istio/pod
+#        - name: istio-proxy
+#          image: costinm/proxyv2:latest
+#          args:
+#            - "proxy"
+#            - "router"
+#            - "--serviceCluster"
+#            - "wps"
+#          env:
+#            - name: XDS_SAVE
+#              value: /etc/istio/proxy/
+#            - name: XDS_LOCAL
+#              value: 0.0.0.0:15015
+#            # Save the workload secret to file
+#            - name: OUTPUT_CERTS
+#              value: /etc/istio/proxy/
+#            # Override default ca addr - use real istiod
+#            # This will save the certs to a dir, available to local istiod
+#            #            - name: CA_ADDR
+#            #              value: istiod.istio-system.svc:15012
+#            - name: PROXY_CONFIG
+#              value: |-
+#                discoveryAddress: istiod.istio-system.svc:15012
+#                zipkin:
+#                  address: ""
+#            - name: POD_NAME
+#              valueFrom:
+#                fieldRef:
+#                  apiVersion: v1
+#                  fieldPath: metadata.name
+#            - name: POD_NAMESPACE
+#              valueFrom:
+#                fieldRef:
+#                  apiVersion: v1
+#                  fieldPath: metadata.namespace
+#
+#          resources:
+#            requests:
+#              cpu: 10m
+#              memory: 256Mi
+#          ports:
+#            # Creates on each host a port forwarder:
+#            # -A CNI-DN-78555e74edb8054e88910 -p tcp -m tcp --dport 5000 -j DNAT --to-destination 10.48.0.156:5000
+#            - containerPort: 15012
+#              name: docker
+#              protocol: TCP
+#          volumeMounts:
+#            - mountPath: /var/run/secrets/istio
+#              name: istiod-ca-cert
+#            - name: istio-envoy
+#              mountPath: /etc/istio/proxy
+#            - name: istio-token
+#              mountPath: /var/run/secrets/tokens
+#              readOnly: true
+#            # Not creating those directories disables Secret watching
+#            #            - name: ingressgatewaysdsudspath
+#            #              mountPath: /var/run/ingress_gateway
+#            - name: podinfo
+#              mountPath: /etc/istio/pod
 
       securityContext:
         runAsUser: 0
@@ -184,7 +187,7 @@ spec:
                   audience: istio-ca
 
         # WPS Config map
-        - name: wps
+        - name: ugate
           secret:
-            secretName: wps
+            secretName: ugate
             optional: true

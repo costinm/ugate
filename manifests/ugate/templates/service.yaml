@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ugate
+  namespace: ugate
+  labels:
+    release: ugate
+spec:
+  ports:
+    - port: 15007
+      name: h2-bts
+  selector:
+    app: ugate
+---

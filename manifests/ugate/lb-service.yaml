@@ -1,0 +1,17 @@
+# External address for ugate.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ugate-lb
+  namespace: ugate
+  labels:
+    release: ugate
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 443
+      targetPort: 15007
+      name: h2-bts
+  selector:
+    app: ugate
+---

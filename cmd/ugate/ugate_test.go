@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/costinm/ugate"
+	_ "github.com/costinm/ugate/ext/bootstrap"
 	"github.com/costinm/ugate/pkg/cfgfs"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/costinm/ugate/test"
@@ -13,7 +14,7 @@ import (
 
 func TestFull(t *testing.T) {
 	// Fixed key, config from filesystem. Base is 14000
-	alice, err := Run(cfgfs.NewConf("testdata/s1/"), nil)
+	alice, err := Run(cfgfs.NewConf("testdata/alice/"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,13 +39,13 @@ func TestFull(t *testing.T) {
 	cl1 := ugatesvc.New(nil, nil, nil)
 	cl2 := ugatesvc.New(nil, nil, nil)
 
-	con, err := cl1.DialContext(context.Background(), "tcp", "localhost:14011")
+	con, err := cl1.DialContext(context.Background(), "tcp", "127.0.0.1:14011")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = test.CheckEcho(con, con)
 
-	con, err = cl2.DialContext(context.Background(), "tcp", "localhost:14111")
+	con, err = cl2.DialContext(context.Background(), "tcp", "127.0.0.1:14111")
 	if err != nil {
 		t.Fatal(err)
 	}

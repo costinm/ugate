@@ -1,17 +1,17 @@
 apiVersion: autoscaling/v2beta1
 kind: HorizontalPodAutoscaler
 metadata:
-  name: wps
-  namespace: wps
+  name: ugate
+  namespace: ugate
   labels:
-    release: wps
+    release: ugate
 spec:
   maxReplicas: 1
   minReplicas: 1
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: wps
+    name: ugate
   metrics:
     - type: Resource
       resource:

@@ -254,7 +254,7 @@ const ProtoTLS = "tls"
 const ProtoH2 = "h2"
 const ProtoHTTP = "http" // 1.1
 const ProtoHTTPTrusted = "httpTrusted" // behind envoy or trusted gateway
-const ProtoHTTPS = "https"
+const ProtoBTS = "bts"
 
 const ProtoHAProxy = "haproxy"
 

@@ -18,8 +18,6 @@ github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDk
 github.com/coreos/go-systemd v0.0.0-20181012123002-c6f51f82210d/go.mod h1:F5haX7vjVVG0kc13fIWeqUViNPyEJxv/OmvnBo0Yme4=
 github.com/costinm/quic v0.5.1-0.20210425150008-d8e6379c24ed h1:5XrmfhoSsRDs36a4CgBV+2KcEKulAo/f/PFiTRWzQg8=
 github.com/costinm/quic v0.5.1-0.20210425150008-d8e6379c24ed/go.mod h1:fZq/HUDIM+mW6X6wtzORjC0E/WDBMKe5Hf9bgjISwLk=
-github.com/costinm/ugate v0.0.0-20210425213441-05024f5e8910 h1:Li91KjkSnBH3iYxMZfF3YTJnmRoup92UlfCJJkcoAGg=
-github.com/costinm/ugate v0.0.0-20210425213441-05024f5e8910/go.mod h1:RkhqsMK4MVwcK7sPt5yjYCp1Z8RPS4ICw/THM1iFVmo=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.0.0/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
 github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568/go.mod h1:xEzjJPgXI435gkrCt3MPfRiAkVrwSbHsst4LCFVfpJc=

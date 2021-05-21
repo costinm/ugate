@@ -159,8 +159,8 @@ func (pl *PortListener) serve(gate *UGate) {
 		switch pl.Protocol {
 		case ugate.ProtoTLS:
 			go gate.handleTLS(&pl.Listener, remoteConn)
-		case ugate.ProtoHTTPS:
-			go gate.handleTLS(&pl.Listener, remoteConn)
+		case ugate.ProtoBTS:
+			go gate.handleBTS(&pl.Listener, remoteConn)
 		case ugate.ProtoHTTP:
 			go gate.H2Handler.handleHTTPListener(&pl.Listener, remoteConn)
 		default:

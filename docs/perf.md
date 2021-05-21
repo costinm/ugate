@@ -33,6 +33,10 @@ txqueuelen 10000
 
 https://events.static.linuxfound.org/sites/events/files/slides/LinuxConJapan2016_makita_160712.pdf
 - many optimizations for UDP
+- SO_REUSEPORT
+- SO_ATTACH_REUSEPORT_EBPF
+- disable source IP validation, auditd, iptables, GRO
+- interrupt coalescence
 
 # MTU
 

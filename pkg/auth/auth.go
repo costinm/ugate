@@ -58,7 +58,7 @@ type Auth struct {
 	// Trust domain, should be 'cluster.local' or a real domain with OIDC keys.
 	Domain string
 
-	// User friendly name - not trusted
+	// User name, based on service account or uid.
 	Name string
 
 	// base64URL encoding of the primary public key.
@@ -81,6 +81,7 @@ type Auth struct {
 	cfg        *KubeConfig
 
 	// Explicit certificates (lego), key is hostname from file
+	//
 	CertMap map[string]*tls.Certificate
 }
 
@@ -119,6 +120,12 @@ func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 		} else {
 			name, _ = os.Hostname()
 		}
+	}
+	if domain == "" {
+		domain = os.Getenv("DOMAIN")
+	}
+	if domain == "" {
+		domain = "c1.webinf.info"
 	}
 
 	auth := &Auth{
@@ -199,13 +206,19 @@ func (auth *Auth) GenerateTLSConfigServer() *tls.Config {
 	}
 }
 
-// From a CNI or Host/:authority header, extract a node ID key.
+// Host2ID concerts a Host/:authority or path parameter hostname to a node ID.
+//
 func (auth *Auth) Host2ID(host string) string {
-	col := strings.Index(host, ":")
+	col := strings.Index(host, ".")
 	if col > 0 {
 		host = host[0:col]
+	} else {
+		col = strings.Index(host, ":")
+		if col > 0 {
+			host = host[0:col]
+		}
 	}
-	return host
+	return strings.ToUpper(host)
 }
 
 // Get all known certificates from local files. This is used to support
@@ -908,6 +921,9 @@ func GetSAN(c *x509.Certificate) ([]string, error) {
 // Get an ID token from platform (GCP, etc)
 // curl "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=[AUDIENCE]" \
 //  -H "Metadata-Flavor: Google"
+//
+// May fail and need retry
+// TODO: how to detect if running supported ? env ?
 func GetMDSIDToken(aud string) string {
 	req, _ := http.NewRequest("GET",
 		"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=" +

@@ -1,11 +1,9 @@
-#FROM golang:latest AS build
 FROM golang:alpine AS build
+
 #RUN apk add --no-cache git
 
 RUN env
 
-# Default is /go directory, which is set a GOPATH
-# That doesn't work with go.mod
 WORKDIR /ws
 
 ENV GO111MODULE=on
@@ -13,24 +11,25 @@ ENV CGO_ENABLED=0
 ENV GOOS=linux
 ENV GOPROXY=https://proxy.golang.org
 
-COPY . .
+COPY go.* ./
+COPY cmd cmd
+COPY dns dns
+COPY webpush webpush
+COPY pkg pkg
+COPY ext ext
+COPY *.go ./
+
+# COPY . .
 
 # Runs in /go directory
-RUN go build -a -gcflags='all=-N -l' -ldflags '-extldflags "-static"' \
-  -o ugate ./cmd/ugate
+RUN cd cmd/ugate && go build -a -gcflags='all=-N -l' -ldflags '-extldflags "-static"' \
+  -o ../../ugate ./
 
 FROM alpine:latest
 
-## Same base as Istio debug
-#FROM ubuntu:bionic AS wps
-# Or distroless
-#FROM docker.io/istio/base:default AS wps
-#RUN apt-get update && apt install less net-tools
-
 COPY --from=build /ws/ugate /usr/local/bin/ugate
-COPY --from=build /ws/cmd/ugate/iptables.sh /usr/local/bin/
+COPY --from=build /ws/cmd/iptables.sh /usr/local/bin/
 COPY --from=build /ws/cmd/ugate/run.sh /usr/local/bin/
-#COPY --from=build /ws/dlv /usr/local/bin/dlv
 
 RUN apk add iptables ip6tables make &&\
     mkdir -p /var/lib/istio && \
@@ -49,11 +48,12 @@ RUN mkdir -p /etc/certs && \
     chown -R 1337 /etc/certs /etc/istio /var/lib/istio
 
 EXPOSE 15007
+EXPOSE 8081
 EXPOSE 8080
 EXPOSE 15009
 EXPOSE 15003
 
-ENV PORT=8080
+#ENV PORT=8080
 
 # Defaults
 #COPY ./var/lib/istio /var/lib/istio/

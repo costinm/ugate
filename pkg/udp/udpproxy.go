@@ -101,7 +101,7 @@ import (
 // - o-o.myaddr.l.google.com. [o-o.myaddr.l.google.com.	60	IN	TXT	"73.158.64.15"]
 
 
-const DumpUdp = false
+const DumpUdp = true
 
 
 var (
@@ -127,14 +127,15 @@ type UdpNat struct {
 	// bound to a local port (on the real network).
 	UDP *net.UDPConn
 
-	Closed    bool
+	Closed bool
 
 	// For captured traffic / NAT
-	LocalIP    net.IP
+	LocalIP   net.IP
 	LocalPort int
 
 	LastRemoteIP    net.IP
 	LastsRemotePort uint16
+	ReverseSrcAddr  *net.UDPAddr
 }
 
 // Capture return - sends packets back to client app.
@@ -231,7 +232,7 @@ func (udpg *UDPGate) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
 // udpN is the 'dialed connection' -
 func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *net.UDPConn, udpN *UdpNat, writer ugate.UdpWriter) {
 	if DumpUdp {
-		log.Println("Starting read loop for ", localAddr)
+		log.Println("Starting remote loop for ", localAddr, udpN.ReverseSrcAddr, udpN.DestAddr, udpN.Dest)
 	}
 	buffer := bufferPoolUdp.Get().([]byte)
 	defer bufferPoolUdp.Put(buffer)
@@ -252,11 +253,16 @@ func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *n
 		// TODO: for android dmesh, we may need to take zone into account.
 		if writer != nil {
 			if DumpUdp {
-				log.Println("UDP Res: ", srcAddr, "->", localAddr)
+				log.Println("UDP Reverse: ", srcAddr, "->", localAddr)
 			}
-			n, err := writer.WriteTo(buffer[:size], localAddr, srcAddr)
+			rsa := srcAddr
+			if udpN.ReverseSrcAddr != nil {
+				// For UDP, must match the original address used by client
+				rsa = udpN.ReverseSrcAddr
+			}
+			n, err := writer.WriteTo(buffer[:size], localAddr, rsa)
 			if DumpUdp {
-				log.Println("UDP Res DPME: ", srcAddr, "->", localAddr, n, err)
+				log.Println("UDP Res DPME: ", rsa, "->", localAddr, n, err)
 			}
 		} else {
 			if DumpUdp {
@@ -406,7 +412,6 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 		udpCon, err := net.ListenUDP("udp", &net.UDPAddr{
 			Port: 0,
 		})
-		setReceiveBuffer(udpCon, bufferSize)
 
 		if err != nil {
 			log.Println("udp proxy failed to listen", err)
@@ -414,12 +419,26 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 			return
 		}
 
+		setReceiveBuffer(udpCon, bufferSize)
+
 		udpN = &UdpNat{
 			UDP: udpCon,
 		}
-		udpN.DestAddr = &net.UDPAddr{
-			IP: dstAddr,
-			Port: int(dstPort),
+
+		l := udpg.cfg.FindListener(dstAddr, dstPort, "udp://")
+		if l.ForwardTo != "" {
+			udpN.DestAddr, err = net.ResolveUDPAddr("udp", l.ForwardTo)
+			if err != nil {
+				log.Println("Failed to resolve ", l.ForwardTo, err)
+				return
+			}
+			udpN.ReverseSrcAddr = &net.UDPAddr{IP:dstAddr, Port: int(dstPort)}
+		} else {
+			// Original destination
+			udpN.DestAddr = &net.UDPAddr{
+				IP:   dstAddr,
+				Port: int(dstPort),
+			}
 		}
 
 		udpN.LocalPort = udpCon.LocalAddr().(*net.UDPAddr).Port
@@ -435,8 +454,7 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 		go remoteConnectionReadLoop(udpg, src, udpCon, udpN, w)
 	}
 
-	dst := &net.UDPAddr{Port: int(dstPort), IP: dstAddr}
-	n, err := udpN.UDP.WriteTo(data, dst)
+	n, err := udpN.UDP.WriteTo(data, udpN.DestAddr)
 
 	udpN.LastWrite = time.Now()
 	udpN.SentPackets++
@@ -446,11 +464,11 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 
 	if DumpUdp {
 		if found {
-			log.Println("UDP OFW ", src, "->", dst, n)
+			log.Println("UDP OFW ", src, "->", udpN.DestAddr, n)
 		} else {
-			log.Println("UDP open ", src, "->", udpN.UDP.LocalAddr(), "->", dst, n, err)
+			log.Println("UDP open ", src, "->", udpN.UDP.LocalAddr(), "->", udpN.DestAddr, n, err)
 		}
-		log.Println("UDP open ", src, "->", udpN.UDP.LocalAddr(), "->", dst, n)
+		log.Println("UDP open ", src, "->", udpN.UDP.LocalAddr(), "->", udpN.DestAddr, n)
 	}
 }
 

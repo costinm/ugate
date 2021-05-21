@@ -63,6 +63,15 @@ type JWT struct {
 
 	// Max 24h
 	Exp int64 `json:"exp"`
+
+	// Issuer - for example kubernetes/serviceaccount.
+	Iss string `json:"iss"`
+
+	Namespace string `json:"kubernetes.io/serviceaccount/namespace"`
+
+	Name string `json:"kubernetes.io/serviceaccount/service-account.name"`
+
+	Raw string `json:-`
 }
 
 // VAPIDToken creates a token with the specified endpoint, using configured Sub id
@@ -165,6 +174,7 @@ func JwtRawParse(tok string) (*JWTHead, *JWT, []byte, []byte, error) {
 	}
 	b := &JWT{}
 	json.Unmarshal(payload, b)
+	b.Raw = string(payload)
 
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {

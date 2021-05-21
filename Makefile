@@ -1,28 +1,30 @@
-OUT=${PWD}/build
-
-#include ${HOME}/.hosts.mk
 ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-
-run/home:
-	HOST=ugate $(MAKE) run
-
-run/c1:
-	HOST=v $(MAKE) run
-
-# Must have a $HOME/ugate dir
-run:
-	(cd ./cmd/ugate; CGO_ENABLED=0 go build -o ${OUT}/ugate .)
-	ssh ${HOST} pkill ugate || true
-	scp ${OUT}/ugate ${HOST}:/x/ugate
-	ssh  ${HOST} "cd /x/ugate; HOME=/x/ugate /x/ugate/ugate"
-
-update:
-	yq -j < cmd/ugate/testdata/ugate.yaml > cmd/ugate/testdata/ugate.json
+OUT=${ROOT_DIR}/out
 
 IMAGE ?= gcr.io/dmeshgate/ugate
+KO_DOCKER_REPO ?= gcr.io/dmeshgate/ugate
+#KO_DOCKER_REPO ?= costinm/ugate
+export KO_DOCKER_REPO
+
+
+
+deploy: deploy/cloudrun deploy/helm
+
+deploy/cloudrun: docker push/ugate run/cloudrun
+
+deploy/helm: docker push/ugate run/helm
 
 docker:
 	docker build -t ${IMAGE}:latest .
+
+docker/dev:
+	docker build -t ${IMAGE}-dev:latest -f tools/dev/Dockerfile .
+
+push/dev:
+	docker push ${IMAGE}-dev:latest
+
+run/dev:
+	 docker run -it --entrypoint /bin/bash gcr.io/dmeshgate/ugate-dev:latest
 
 run/docker-image:
 	docker run -P -v /ws/dmesh-src/work/s1:/var/lib/istio \
@@ -43,41 +45,36 @@ run/docker-test:
 	   ${IMAGE}:latest \
 	   /ws/build/run.sh
 
-export KO_DOCKER_REPO=gcr.io/dmeshgate
-#export KO_DOCKER_REPO=costinm
-
-push/ko:
-	ko publish ./cmd/ugate -B
 
 push/docker.ugate: docker push/ugate
 
 push/ugate:
 	docker push ${IMAGE}:latest
 
-build/android:
-	cd android && gomobile bind -a -ldflags '-s -w' -target android -o android/ugate.aar .
-
 
 # Using Intellij plugin: missing manifest features
 # Build with buildpack: 30 sec to deploy
 # Build with docker: 26 sec
 # Both use skaffold
+# Faster than docker.
+push/ko:
+	(cd  cmd/ugate && ko publish . --bare)
 
 # Run ugate in cloudrun.
 # Storage: Env variables, GCP resources (buckets,secrets,k8s)
 # Real cert, OIDC tokens via metadata server.
-cr/run: #push/docker.ugate
-	gcloud beta run services replace k8s/cr.yaml --platform managed --project dmeshgate --region us-central1
+# https://ugate-yydsuf6tpq-uc.a.run.app
+run/cloudrun: #push/docker.ugate
+	gcloud beta run services replace manifests/knative-ugate.yaml --platform managed --project dmeshgate --region us-central1
 	gcloud run services update-traffic ugate --to-latest --platform managed --project dmeshgate --region us-central1
 
-gcp/secret:
-	# projects/584624515903/secrets/ugate-key
-	gcloud secrets create <SECRET-NAME> \
-		--data-file <PATH-TO-SECRET-FILE> \
-		--replication-policy user-managed \
-		--project dmeshgate \
-		--format json \
-		--quiet
+run/cloudrun2: #push/docker.ugate
+	gcloud beta run services replace manifests/knative-ugate.yaml --platform managed --project dmeshgate --region us-central1
+	gcloud run services update-traffic ugate --to-latest --platform managed --project dmeshgate --region us-central1
+
+run/helm:
+	helm upgrade --install --create-namespace ugate --namespace ugate manifests/ugate/
+
 
 test/run-iptables:
 	docker run -P  \
@@ -92,26 +89,45 @@ test/run-iptables:
 
 # Should be run in docker, as root
 test/iptables:
+	mkdir build
 	./cmd/ugate/iptables.sh
-	iptables-save |grep ISTIO > build/iptables_def.out
-	diff build/iptables_def.out cmd/ugate/testdata/iptables/iptables_def.out
+	iptables-save |grep ISTIO > ${OUT}/iptables_def.out
+	diff ${OUT}/iptables_def.out cmd/ugate/testdata/iptables/iptables_def.out
 
 	INBOUND_PORTS_EXCLUDE=1000,1001 OUTBOUND_PORTS_EXCLUDE=2000,2001 ./cmd/ugate/iptables.sh
-	iptables-save |grep ISTIO > build/iptables_ex.out
-	diff build/iptables_ex.out cmd/ugate/testdata/iptables/iptables_ex.out
+	iptables-save |grep ISTIO > ${OUT}/iptables_ex.out
+	diff ${OUT}/iptables_ex.out cmd/ugate/testdata/iptables/iptables_ex.out
 
 	IN=443 ./cmd/ugate/iptables.sh
-	iptables-save |grep ISTIO > build/iptables_443.out
-	diff build/iptables_443.out cmd/ugate/testdata/iptables/iptables_443.out
+	iptables-save |grep ISTIO > ${OUT}/iptables_443.out
+	diff ${OUT}/iptables_443.out cmd/ugate/testdata/iptables/iptables_443.out
 
 	IN=80,443 OUT=5201,5202 ./cmd/ugate/iptables.sh
-	iptables-save |grep ISTIO > build/iptables_443_5201.out
-	diff build/iptables_443_5201.out cmd/ugate/testdata/iptables/iptables_443_5201.out
+	iptables-save |grep ISTIO > ${OUT}/iptables_443_5201.out
+	diff ${OUT}/iptables_443_5201.out cmd/ugate/testdata/iptables/iptables_443_5201.out
 
+okteto:
+	#icurl https://get.okteto.com -sSfL | sh
+	okteto up
 
-image/stargz:
-	#go install github.com/google/crfs/stargz/stargzify@latest
-	#stargzify file:/tmp/input.tgz file:out.tgz
-	#stargzify -insecure ubuntu http://registry:5000:/path/ubuntu:stargz
-	#stargzify -flatten ubuntu gcr.io/costinm/path/ubuntu:flatstargz
-	stargzify -upgrade ${IMAGE}
+HOSTS=c1 home
+
+## For debug
+run/home:
+	HOST=ugate $(MAKE) remote/_run
+
+run/c1:
+	HOST=v $(MAKE) remote/_run
+
+build:
+	(cd ./cmd/ugate; CGO_ENABLED=0 go build -o ${OUT}/ugate .)
+
+# Must have a $HOME/ugate dir
+remote/_run: build
+	ssh ${HOST} pkill ugate || true
+	scp ${OUT}/ugate ${HOST}:/x/ugate
+	ssh  ${HOST} "cd /x/ugate; HOME=/x/ugate /x/ugate/ugate"
+
+update:
+	yq -j < cmd/ugate/testdata/ugate.yaml > cmd/ugate/testdata/ugate.json
+

@@ -369,12 +369,12 @@ func NewGvisorTunCapture(ep *stack.LinkEndpoint, handler TUNHandler, udpNat ugat
 	// NIC 2 - IP4, IP6 - the TUN device
 	t.IPStack.CreateNIC(2, ep1)
 
-	addr2 := "\x0a\x0c\x00\x01"
+	addr2 := "\x0a\x0b\x00\x02"
 	if err := t.IPStack.AddAddress(2, ipv4.ProtocolNumber, tcpip.Address(addr2)); err != nil {
 		log.Print("Can't add address", err)
 		return t
 	}
-	addr3, _ := net.ResolveIPAddr("ip", "fd::01")
+	addr3, _ := net.ResolveIPAddr("ip", "fd::1:2")
 	if err := t.IPStack.AddAddress(2, ipv6.ProtocolNumber, tcpip.Address(addr3.IP)); err != nil {
 		log.Print("Can't add address", err)
 		return t
@@ -405,6 +405,7 @@ func NewGvisorTunCapture(ep *stack.LinkEndpoint, handler TUNHandler, udpNat ugat
 
 func (nt *GvisorTun) WriteTo(data []byte, dst *net.UDPAddr, src *net.UDPAddr) (int, error) {
 	addrb := []byte(dst.IP)
+	srcaddrb := []byte(src.IP)
 	// TODO: how about from ?
 	// TODO: do we need to make a copy ? netstack passes ownership, we may reuse buffers
 	n, err := nt.DefUDP.Write(bytes.NewBuffer(data),
@@ -414,10 +415,10 @@ func (nt *GvisorTun) WriteTo(data []byte, dst *net.UDPAddr, src *net.UDPAddr) (i
 				Addr: tcpip.Address(addrb),
 			},
 			// TODO(costin): PATCH
-			//From: &tcpip.FullAddress{
-			//	Port: uint16(src.Port),
-			//	Addr: tcpip.Address(srcaddrb),
-			//},
+			From: &tcpip.FullAddress{
+				Port: uint16(src.Port),
+				Addr: tcpip.Address(srcaddrb),
+			},
 		})
 	if err != nil {
 		return 0, errors.New(err.String())
@@ -455,7 +456,6 @@ func (nt *GvisorTun) defUdpServer() error {
 	go func() {
 		for {
 			// Will have the peer address
-			add := tcpip.FullAddress{}
 			//ep.SetSockOpt()
 			// Add is send address. Control should include the dest addr ( for raw )
 			bb := &bytes.Buffer{}
@@ -472,7 +472,7 @@ func (nt *GvisorTun) defUdpServer() error {
 			if nt.UDPHandler != nil {
 				nt.UDPHandler.HandleUdp(net.IP(rr.ControlMessages.OriginalDstAddress.Addr),
 					rr.ControlMessages.OriginalDstAddress.Port,
-					net.IP(add.Addr), add.Port,
+					net.IP(rr.RemoteAddr.Addr), rr.RemoteAddr.Port,
 					bb.Bytes())
 			}
 		}

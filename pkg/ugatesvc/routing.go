@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/costinm/ugate"
@@ -86,6 +87,28 @@ func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
 
 	return str.ProxyTo(nc)
 }
+
+// Stream received via a BTS SNI route.
+// Similar with dialAndProxy
+func (ug *UGate) HandleSNIStream(str *ugate.Stream) error {
+	idx :=  strings.Index(str.Dest, ".")
+	if idx > 0 {
+		// Only SNI route to mesh nodes, ignore the domain name
+		str.Dest = str.Dest[0:idx]
+	}
+
+	nc, err := ug.dial(context.Background(), str.Dest, str)
+	str.PostDial(nc, err)
+
+	if err != nil {
+		// postDial will take care of sending error code.
+		return err
+	}
+	defer nc.Close()
+
+	return str.ProxyTo(nc)
+}
+
 
 // DialContext creates  connection to the remote addr, implements
 // x.net.proxy.ContextDialer and ugate.ContextDialer.
@@ -207,7 +230,7 @@ func (ug *UGate) dial(ctx context.Context, addr string, s *ugate.Stream) (net.Co
 
 			rs := ugate.NewStreamRequestOut(r1, out, res, nil)
 			if ugate.DebugClose {
-				log.Println("TUN: ", addr, r1.URL)
+				log.Println(rs.StreamId, "dial.TUN: ", addr, r1.URL)
 			}
 			return rs, nil
 		}
@@ -215,8 +238,6 @@ func (ug *UGate) dial(ctx context.Context, addr string, s *ugate.Stream) (net.Co
 		if dmn.Addr != "" {
 			addr = dmn.Addr
 		}
-
-
 	}
 
 	// TODO: if it is a mesh node, create a connection !

@@ -2,7 +2,7 @@ package quic
 
 import (
 	"context"
-	"io"
+	//"io"
 	"log"
 	"net"
 	"net/http"
@@ -63,7 +63,7 @@ func (q *Quic) handleRaw(qs quic.Stream) {
 }
 
 func (ugs *QuicMUX) DialStream(ctx context.Context, addr string, inStream *ugate.Stream) (*ugate.Stream, error) {
-	if UseRawStream {
+	//if UseRawStream {
 		s, err := ugs.s.OpenStream()
 		if err != nil {
 			return nil, err
@@ -100,39 +100,39 @@ func (ugs *QuicMUX) DialStream(ctx context.Context, addr string, inStream *ugate
 		log.Println("QUIC out stream res", str.StreamId, addr, str.InHeader)
 
 		return str, nil
-	} else {
-		var in io.Reader
-		var out io.WriteCloser
-		if inStream == nil {
-			in, out = io.Pipe()
-		} else {
-			in = inStream
-		}
+	//} else {
+		//var in io.Reader
+		//var out io.WriteCloser
+		//if inStream == nil {
+		//	in, out = io.Pipe()
+		//} else {
+		//	in = inStream
+		//}
+		//
+		//// Regular TCP stream, upgraded to H2.
+		//// This is a simple tunnel, so use the right URL
+		//r1, err := http.NewRequestWithContext(ctx, "POST",
+		//	"https://"+ugs.hostname+"/dm/"+addr, in)
+		//
+		//// RoundTrip Transport guarantees this is set
+		//if r1.Header == nil {
+		//	r1.Header = make(http.Header)
+		//}
+		//
+		//// RT client - forward the request.
+		//res, err := ugs.RoundTrip(r1)
+		//if err != nil {
+		//	log.Println("H2R error", addr, err)
+		//	return nil, err
+		//}
+		//
+		//rs := ugate.NewStreamRequestOut(r1, out, res, nil)
+		//if ugate.DebugClose {
+		//	log.Println("TUN: ", addr, r1.URL)
+		//}
+		//return rs, nil
 
-		// Regular TCP stream, upgraded to H2.
-		// This is a simple tunnel, so use the right URL
-		r1, err := http.NewRequestWithContext(ctx, "POST",
-			"https://"+ugs.hostname+"/dm/"+addr, in)
-
-		// RoundTrip Transport guarantees this is set
-		if r1.Header == nil {
-			r1.Header = make(http.Header)
-		}
-
-		// RT client - forward the request.
-		res, err := ugs.RoundTrip(r1)
-		if err != nil {
-			log.Println("H2R error", addr, err)
-			return nil, err
-		}
-
-		rs := ugate.NewStreamRequestOut(r1, out, res, nil)
-		if ugate.DebugClose {
-			log.Println("TUN: ", addr, r1.URL)
-		}
-		return rs, nil
-
-	}
+	//}
 }
 
 // RoundTrip is used for forwarding HTTP connections back to the client (normal) or
@@ -148,7 +148,25 @@ func (ugs *QuicMUX) RoundTrip(request *http.Request) (*http.Response, error) {
 			log.Println("H3: RT-start", request.URL, ugs.client)
 		}
 	}
-	res, err := ugs.rt.RoundTrip(request)
+	var res *http.Response
+	var err error
+	if ugs.rt != nil {
+		res, err = ugs.rt.RoundTrip(request)
+	} else {
+		// Replacement for the lack of support in QUIC for using the H3 request programmatically.
+		// This only works with h3s servers.
+		s := ugate.NewStream()
+		s.Request = request
+		s.In = request.Body
+		rs, err1 := ugs.DialStream(request.Context(), request.URL.Host, s)
+		if err1 != nil {
+			return nil, err1
+		}
+		res = &http.Response{
+			Body:   rs.In,
+			Header: rs.InHeader,
+		}
+	}
 	if ugate.DebugClose {
 		log.Println("H3: RT-done", request.URL, ugs.client, err)
 		if err == nil {

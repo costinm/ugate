@@ -515,6 +515,14 @@ func (s *Stream) Close() error {
 		return nil
 	}
 	s.Closed = true
+	if !s.ServerClose {
+		if DebugClose {
+			log.Println(s.StreamId, "Close without out.close() ", s.Dest, s.InHeader)
+		}
+		// For HTTP - this also happens in cleanup, after response is done.
+		//s.CloseWrite()
+	}
+
 	if s.Closer != nil {
 		s.Close()
 	}
@@ -522,9 +530,6 @@ func (s *Stream) Close() error {
 		s.ctxCancel()
 	}
 
-	if !s.ServerClose {
-		s.CloseWrite()
-	}
 	if s.rbuffer != nil {
 		defer func() {
 			s.rbuffer.Recycle()
@@ -573,7 +578,7 @@ func (s *Stream) CloseWrite() error {
 				if DebugClose {
 					log.Println(s.StreamId, "CloseWrite using HTTP trailer ",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 				}
-				// This works for H2 with the current library.
+				// This works for H2 with the current library - but very tricky, if not set as trailer.
 				rw.Header().Set("X-Close", "0")
 				rw.(http.Flusher).Flush()
 			} else {
@@ -887,6 +892,7 @@ func (s *Stream) ProxyTo(nc net.Conn) error {
 	go s.proxyFromClient(nc, errCh)
 	// Blocking, returns when all data is read from In, or error
 	var err1 error
+
 	if ncs, ok := nc.(*Stream); ok {
 		if ncs.Out != nil {
 			err1 = s.proxyToClient(nc, errCh)

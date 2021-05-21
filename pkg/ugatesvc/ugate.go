@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -129,7 +130,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	Get(cs, "ugate", cfg)
 
 	if cfg.Domain == "" {
-		cfg.Domain = ugate.ConfStr(cs, "DOMAIN", "h.webinf.info")
+		cfg.Domain = ugate.ConfStr(cs, "DOMAIN", "c1.webinf.info")
 		if len(cfg.H2R) == 0 {
 			cfg.H2R[cfg.Domain] = ""
 		}
@@ -153,6 +154,10 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 		DefaultListener: &ugate.Listener{
 		},
 		Msg: msgs.DefaultMux,
+	}
+
+	if l, ok := cfg.Listeners["*"]; ok {
+		ug.DefaultListener = l
 	}
 
 
@@ -234,6 +239,9 @@ func NewDMNode() *ugate.DMNode {
 	}
 }
 
+// GetNode returns a node, using an encoded id string.
+//
+//
 func (ug *UGate) GetNode(id string) *ugate.DMNode {
 	ug.m.RLock()
 	n := ug.NodesByID[id]
@@ -327,10 +335,10 @@ func (ug *UGate) OnStreamDone(str *ugate.Stream) {
 	}
 
 	if ugate.NoEOF(str.ReadErr) != nil || str.WriteErr != nil {
-		log.Println("AE:", str.StreamId, "Err in:", str.ReadErr, str.WriteErr)
+		log.Println(str.StreamId, "AE:", "Err in:", str.ReadErr, str.WriteErr)
 	}
 	if ugate.NoEOF(str.ProxyReadErr) != nil || str.ProxyWriteErr != nil {
-		log.Println("AE:", str.StreamId, "Err out:", str.ProxyReadErr, str.ProxyWriteErr)
+		log.Println(str.StreamId, "AE:", "Err out:", str.ProxyReadErr, str.ProxyWriteErr)
 	}
 	if !str.Closed {
 		str.Close()
@@ -413,7 +421,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 	// Use iptables to redirect, or an explicit config for port 443 if running as root.
 	ug.Add(&ugate.Listener{
 		Address:  btsAddr,
-		Protocol: ugate.ProtoHTTPS,
+		Protocol: ugate.ProtoBTS,
 		ALPN: []string{"h2","h2r"},
 	})
 
@@ -423,14 +431,51 @@ func (ug *UGate) DefaultPorts(base int) error {
 // Based on the port in the Dest, find the Listener config.
 // Used when the dest IP:port is extracted from the metadata
 func (ug *UGate) FindCfgIptablesIn(m *ugate.Stream) *ugate.Listener {
+	l := ug.Config.Listeners[m.Dest]
+	if l != nil {
+		return l
+	}
+
 	_, p, _ := net.SplitHostPort(m.Dest)
-	l := ug.Config.Listeners["-:"+p]
+	l = ug.Config.Listeners[":"+p]
+	if l != nil {
+		return l
+	}
+
+	l = ug.Config.Listeners["-:"+p]
 	if l != nil {
 		return l
 	}
 	return ug.DefaultListener
 }
 
+func (ug *UGate) FindListener(dstaddr net.IP, p uint16, prefix string) *ugate.Listener {
+	port := ":" + strconv.Itoa(int(p))
+	l := ug.Config.Listeners[prefix + dstaddr.String() + port]
+	if l != nil {
+		return l
+	}
+
+	l = ug.Config.Listeners[prefix + port]
+	if l != nil {
+		return l
+	}
+
+	l = ug.Config.Listeners[prefix + "-" + port]
+	if l != nil {
+		return l
+	}
+	return ug.DefaultListener
+}
+
+func (ug *UGate) HandleBTSStream(str *ugate.Stream) error {
+	if str.Listener == nil {
+		str.Listener = ug.FindCfgIptablesIn(str)
+	}
+
+	str.PostDial(str, nil)
+	return ug.H2Handler.HandleHTTPS(str)
+}
 // HandleStream is called for accepted (incoming) streams.
 //
 // Multiplexed streams ( H2 ) also call this method.
@@ -447,13 +492,24 @@ func (ug *UGate) FindCfgIptablesIn(m *ugate.Stream) *ugate.Listener {
 // This is a blocking method.
 func (ug *UGate) HandleStream(str *ugate.Stream) error {
 	if str.Listener == nil {
-		str.Listener = ug.DefaultListener
+		str.Listener = ug.FindCfgIptablesIn(str)
 	}
 	cfg := str.Listener
 
-	if cfg.Protocol == ugate.ProtoHTTPS {
+	if cfg.Protocol == ugate.ProtoBTS {
 		str.PostDial(str, nil)
 		return ug.H2Handler.HandleHTTPS(str)
+	}
+
+	if cfg.ForwardTo != "" {
+		str.Dest = cfg.ForwardTo
+	}
+
+	if cfg.Handler == nil && strings.HasPrefix(cfg.ForwardTo, "/") {
+		// TODO: register handlers
+		if cfg.ForwardTo == "/echo" {
+			cfg.Handler = &EchoHandler{}
+		}
 	}
 
 	// Config has an in-process handler - not forwarding (or the handler may
@@ -471,6 +527,7 @@ func (ug *UGate) HandleStream(str *ugate.Stream) error {
 	// By default, dial out
 	return ug.DialAndProxy(str)
 }
+
 
 
 func (gw *UGate) OnMuxClose(dm *ugate.DMNode) {
@@ -493,7 +550,7 @@ func (gw *UGate) OnHClose(s string, id string, san string, r *http.Request, sinc
 func (gw *UGate) OnSClose(str *ugate.Stream, addr net.Addr) {
 	if !gw.Config.NoAccessLog {
 		if str.ReadErr != nil || str.WriteErr != nil {
-			log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v %v %v",
+			log.Printf("%d AC: src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v %v %v",
 				str.StreamId,
 				str.Type, addr,
 				str.Dest,

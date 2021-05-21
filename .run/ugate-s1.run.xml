@@ -1,0 +1,14 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="ugate-s1" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="dmesh" />
+    <working_directory value="$PROJECT_DIR$/../ugate/cmd/ugate/testdata/s1" />
+    <envs>
+      <env name="XGODEBUG" value="http2debug=2" />
+    </envs>
+    <kind value="DIRECTORY" />
+    <package value="github.com/costinm/ugate/cmd/ugate" />
+    <directory value="$PROJECT_DIR$/../ugate/cmd/ugate/" />
+    <filePath value="$PROJECT_DIR$/../ugate/cmd/ugate/ugate.go" />
+    <method v="2" />
+  </configuration>
+</component>
