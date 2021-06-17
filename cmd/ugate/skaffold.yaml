@@ -29,9 +29,15 @@ build:
             - "go.sum"
 
 deploy:
-  kubectl:
-    manifests:
-      - ../../k8s/ugate/templates/*
+#  kubectl:
+#    manifests:
+#      - ../../k8s/ugate/templates/*
+  helm:
+    releases:
+      - name: ugate
+        namespace: ugate
+        createNamespace: true
+        chartPath: ../../manifests/charts/ugate
 
 portForward:
   - resourceType: deployment
@@ -51,3 +57,27 @@ portForward:
     resourceName: wps
     port: 15000
     localPort: 14000
+
+  - resourceType: service
+    namespace: mon
+    resourceName: prometheus-1-grafana
+    port: 80
+    localPort: 3000
+
+  - resourceType: service
+    namespace: mon
+    resourceName: prometheus-1-prometheus
+    port: 9090
+    localPort: 9090
+  # Registry, for skaffold
+#  - resourceType: replicationcontroller
+#    namespace: kube-registry
+#    resourceName: kube-registry-v0
+#    port: 5000
+#    localPort: 5000
+  # Istio
+#  - resourceType: service
+#    namespace: istio-system
+#    resourceName: istiod
+#    port: 15010
+#    localPort: 16010

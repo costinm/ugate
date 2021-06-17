@@ -1,8 +1,0 @@
-apiVersion: v1
-name: ugate-dev
-version: 0.7
-tillerVersion: ">=2.7.2"
-description: Developer env for ugate. Includes debug and build tools.
-keywords:
-  - ugate
-engine: gotpl

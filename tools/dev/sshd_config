@@ -5,7 +5,7 @@ ListenAddress ::
 Protocol 2
 LogLevel INFO
 
-HostKey /run/ssh/ssh_host_rsa_key
+#HostKey /run/ssh/ssh_host_rsa_key
 #HostKey /run/ssh/ssh_host_dsa_key
 HostKey /run/ssh/ssh_host_ecdsa_key
 #HostKey /run/ssh/ssh_host_ed25519_key
@@ -14,7 +14,7 @@ PermitRootLogin yes
 
 AuthorizedKeysFile	/run/ssh/authorized_keys
 
-PasswordAuthentication no
+PasswordAuthentication yes
 PermitUserEnvironment yes
 
 AcceptEnv LANG LC_*

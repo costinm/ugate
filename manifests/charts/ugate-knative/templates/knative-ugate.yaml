@@ -21,6 +21,8 @@ spec:
       timeoutSeconds: 900
       containers:
         - image: gcr.io/dmeshgate/ugate:latest
+          # Ugate is built with ko, which overrides command to be
+          # /ko-app/ugate.
           command: /usr/local/bin/run.sh
           env:
             - name: test

@@ -1,25 +1,24 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: ugate
-#  namespace: ugate
+  name: {{ .Release.Name }}
   labels:
-    app: ugate
+    app: {{ .Release.Name }}
 spec:
   podManagementPolicy: Parallel
   replicas: 1
-  serviceName: ugate
+  serviceName: {{ .Release.Name }}
 #  strategy:
 #    rollingUpdate:
 #      maxSurge: 1
 #      maxUnavailable: 1
   selector:
     matchLabels:
-      app: ugate
+      app: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: ugate
+        app: {{ .Release.Name }}
     spec:
       serviceAccountName: default
       containers:

@@ -6,7 +6,7 @@ KO_DOCKER_REPO ?= gcr.io/dmeshgate/ugate
 #KO_DOCKER_REPO ?= costinm/ugate
 export KO_DOCKER_REPO
 
-
+all/cr: docker/dev push/dev push/ko  run/cloudrun
 
 deploy: deploy/cloudrun deploy/helm
 
@@ -60,6 +60,9 @@ push/ugate:
 push/ko:
 	(cd  cmd/ugate && ko publish . --bare)
 
+deps/ko:
+	go install github.com/google/ko@latest
+
 # Run ugate in cloudrun.
 # Storage: Env variables, GCP resources (buckets,secrets,k8s)
 # Real cert, OIDC tokens via metadata server.
@@ -72,9 +75,21 @@ run/cloudrun2: #push/docker.ugate
 	gcloud beta run services replace manifests/knative-ugate.yaml --platform managed --project dmeshgate --region us-central1
 	gcloud run services update-traffic ugate --to-latest --platform managed --project dmeshgate --region us-central1
 
-run/helm:
-	helm upgrade --install --create-namespace ugate --namespace ugate manifests/ugate/
+run/cloudrun3:
+	gcloud alpha run deploy  ugatevm --sandbox=minivm  --platform managed --project dmeshgate \
+ 		--region us-central1 --image gcr.io/dmeshgate/ugate:latest --command /usr/local/bin/run.sh --allow-unauthenticated --use-http2 --set-env-vars="SSH_AUTH=$(cat ~/.ssh/id_ecdsa.pub)" --use-http2
 
+run/sshcr:
+	 ssh -v  -o StrictHostKeyChecking=no -o ProxyCommand='hbone https://ugatevm-yydsuf6tpq-uc.a.run.app:443/dm/127.0.0.1:22'  \
+ 		root@ugate-yydsuf6tpq-uc.a.run.app:443
+
+run/helm:
+	helm upgrade --install --create-namespace ugate \
+		--namespace ugate manifests/charts/ugate/
+
+run/helm-istio-system:
+	helm upgrade --install --create-namespace ugate-istio-system \
+		--namespace istio-system manifests/charts/ugate/
 
 test/run-iptables:
 	docker run -P  \
@@ -107,7 +122,7 @@ test/iptables:
 	diff ${OUT}/iptables_443_5201.out cmd/ugate/testdata/iptables/iptables_443_5201.out
 
 okteto:
-	#icurl https://get.okteto.com -sSfL | sh
+	# curl https://get.okteto.com -sSfL | sh
 	okteto up
 
 HOSTS=c1 home

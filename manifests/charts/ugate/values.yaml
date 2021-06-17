@@ -2,6 +2,6 @@
 # Install example:
 # helm upgrade --install --create-namespace ugate --namespace ugate k8s/ugate/
 
-image: gcr.io/dmeshgate/ugate-dev:latest
+image: gcr.io/dmeshgate/ugate:latest
 
 

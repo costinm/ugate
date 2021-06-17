@@ -317,16 +317,28 @@ func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.Clie
 		// Real address -
 		addr = dmn.Addr
 	}
+	var tc *ugate.Stream
+	var err error
 	// TODO: use local announces
 	// TODO: use VPN server for all or for mesh
+	if req.URL.Scheme == "http" {
+		rc, err := t.ug.DialContext(req.Context(), "tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		tc = ugate.NewStream()
+		tc.In = rc
+		tc.Out = rc
+	} else {
+		tc, err = t.ug.DialTLS(req.Context(), addr, []string{"h2"})
+		if err != nil {
+			return nil, err
+		}
+	}
 
 
 	// TODO: reuse connection or use egress server
 	// TODO: track it by addr
-	tc, err := t.ug.DialTLS(req.Context(), addr, []string{"h2"})
-	if err != nil {
-		return nil, err
-	}
 
 	cc, err := t.ug.H2Handler.h2t.NewClientConn(tc)
 

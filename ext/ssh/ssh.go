@@ -12,11 +12,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// SSHTransport is the actual go-libp2p transport
 type SSHTransport struct {
 	Prefix string
 	// Could be just an interface
-	gate *ugatesvc.UGate
+	gate         *ugatesvc.UGate
 	serverConfig *ssh.ServerConfig
 	clientConfig *ssh.ClientConfig
 	signer       ssh.Signer
@@ -58,10 +57,11 @@ const sshVersion = "SSH-2.0-dmesh"
 // NewWsSshTransport creates a new transport using Websocket and SSH
 // Based on QUIC transport.
 //
-func NewSSHTransport(signer ssh.Signer) (*SSHTransport, error) {
+func NewSSHTransport(ug *ugatesvc.UGate, auth *auth.Auth) (*SSHTransport, error) {
+	signer, _ := ssh.NewSignerFromKey(auth.Cert.PrivateKey)
 
 	return &SSHTransport{
-
+		gate: ug,
 		signer: signer,
 		clientConfig: &ssh.ClientConfig{
 			Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -213,6 +213,15 @@ func (t *SSHTransport) NewConn(nc net.Conn, isServer bool) (*SSHConn, error) {
 
 	return c, nil
 
+}
+
+func (t *SSHTransport) Start() {
+	s := &Server{
+		Port: t.gate.Config.BasePort + 22,
+		Shell: "/bin/bash",
+	}
+
+	go s.ListenAndServe(t.signer)
 }
 
 // OpenStream creates a new stream.

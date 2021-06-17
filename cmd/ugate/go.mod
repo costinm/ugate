@@ -10,9 +10,12 @@ replace github.com/costinm/ugate/ext/bootstrap => ../../ext/bootstrap
 
 replace github.com/costinm/ugate/ext/quic => ../../ext/quic
 
+replace github.com/costinm/ugate/ext/ssh => ../../ext/ssh
+
 require (
 	github.com/costinm/ugate v0.0.0-20210425213441-05024f5e8910
 	github.com/costinm/ugate/dns v0.0.0-20210425213441-05024f5e8910
 	github.com/costinm/ugate/ext/bootstrap v0.0.0-20210510001934-3cec7b4617c7
+	github.com/costinm/ugate/ext/ssh v0.0.0-20210521213237-2cd041481a3c // indirect
 	github.com/miekg/dns v1.1.41 // indirect
 )

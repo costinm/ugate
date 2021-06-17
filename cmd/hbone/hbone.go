@@ -14,20 +14,22 @@ import (
 
 
 var (
-	verbose = flag.Bool("v", false, "Verbose messages")
+	// WIP:
+	//	port = flag.Int("l", 0, "local port")
+	//debugPort = flag.Int("d", 0, "debug/status port")
 )
+
+
 
 var hc *http.Client
 
 // Create a HBONE tunnel to a given URL.
 //
-// Current client is authenticated using local credentials, or a kube.json file. If no kube.json is found, one
-// will be generated.
-//
-//
+// Current client is authenticated for HBONE using local credentials, or a kube.json file.
+// If no kube.json is found, one will be generated.
 //
 // Example:
-// ssh -v -o ProxyCommand='wp -nc https://c1.webinf.info:443/dm/PZ5LWHIYFLSUZB7VHNAMGJICH7YVRU2CNFRT4TXFFQSXEITCJUCQ:22'  root@PZ5LWHIYFLSUZB7VHNAMGJICH7YVRU2CNFRT4TXFFQSXEITCJUCQ
+// ssh -v -o ProxyCommand='hbone https://c1.webinf.info:443/dm/PZ5LWHIYFLSUZB7VHNAMGJICH7YVRU2CNFRT4TXFFQSXEITCJUCQ:22'  root@PZ5LWHIYFLSUZB7VHNAMGJICH7YVRU2CNFRT4TXFFQSXEITCJUCQ
 //
 // Bug: %h:%p doesn't work, ssh uses lower case and confuses the map.
 func main() {
@@ -42,24 +44,23 @@ func main() {
 		Transport: ug,
 	}
 
-
-	url := ""
-	if len(os.Args) > 1 {
-		url = os.Args[1]
-	}
-	if url == "" {
+	if len(flag.Args()) == 0 {
 		log.Fatal("Expecting URL")
 	}
-
-	Netcat(ug, url)
+	url := flag.Arg(0)
+	err := Netcat(ug, url)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
-func Netcat(ug *ugatesvc.UGate, s string) {
+// Netcat copies stdin/stdout to a HBONE stream.
+func Netcat(ug *ugatesvc.UGate, s string) error {
 	i, o := io.Pipe()
 	r, _ := http.NewRequest("POST", s, i)
 	res, err := ug.RoundTrip(r)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	nc := ugate.NewStreamRequestOut(r, o, res, nil)
 	go func() {
@@ -76,9 +77,10 @@ func Netcat(ug *ugatesvc.UGate, s string) {
 	for {
 		n, err := os.Stdin.Read(b1)
 		if err != nil {
-			log.Fatal("Stding read err", err)
+			return err
 		}
 		nc.Write(b1[0:n])
 	}
+	return nil
 }
 

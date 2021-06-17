@@ -13,9 +13,10 @@ function start_ssh() {
   mkdir -p /run/ssh /run/sshd
 
   # TODO: custom call to get a cert for SSH.
-  if ! test -f /run/ssh/ssh_host_rsa_key; then
-      ssh-keygen -q -f /run/ssh/ssh_host_rsa_key -N '' -t rsa
-  fi
+  # File will exist in k8s if a secret is mounted
+#  if ! test -f /run/ssh/ssh_host_rsa_key; then
+#      ssh-keygen -q -f /run/ssh/ssh_host_rsa_key -N '' -t rsa
+#  fi
 
   if ! test -f /run/ssh/ssh_host_ecdsa_key; then
       ssh-keygen -q -f /run/ssh/ssh_host_ecdsa_key -N '' -t ecdsa
@@ -26,7 +27,9 @@ function start_ssh() {
 #  fi
 
   # TODO: support certificates for client auth
-  echo ${SSH_AUTH} > /run/ssh/authorized_keys
+  if ! test -f /run/ssh/authorized_keys; then
+      echo ${SSH_AUTH} >> /run/ssh/authorized_keys
+  fi
 
   # Set correct right to ssh keys
   chown -R root:root /run/ssh /run/sshd
