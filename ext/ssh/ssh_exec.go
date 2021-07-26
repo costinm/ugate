@@ -22,6 +22,8 @@ import (
 // Based on okteto code: https://raw.githubusercontent.com/okteto/remote/main/pkg/ssh/ssh.go
 // Removed deps on logger, integrated with ugate.
 
+// Handles PTY/noPTY shell sessions and sftp.
+
 var (
 	idleTimeout = 60 * time.Second
 
@@ -29,12 +31,6 @@ var (
 	ErrEOF = errors.New("EOF")
 )
 
-// Server holds the ssh server configuration
-type Server struct {
-	Port           int
-	Shell          string
-	AuthorizedKeys []ssh.PublicKey
-}
 
 func getExitStatusFromError(err error) int {
 	if err == nil {
@@ -218,35 +214,6 @@ func (srv *Server) connectionHandler(s ssh.Session) {
 	s.Exit(0)
 }
 
-// LoadAuthorizedKeys loads path as an array.
-// It will return nil if path doesn't exist.
-func LoadAuthorizedKeys(path string) ([]ssh.PublicKey, error) {
-	authorizedKeysBytes, err := ioutil.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-
-		return nil, err
-	}
-
-	authorizedKeys := []ssh.PublicKey{}
-	for len(authorizedKeysBytes) > 0 {
-		pubKey, _, _, rest, err := ssh.ParseAuthorizedKey(authorizedKeysBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		authorizedKeys = append(authorizedKeys, pubKey)
-		authorizedKeysBytes = rest
-	}
-
-	if len(authorizedKeys) == 0 {
-		return nil, fmt.Errorf("%s was empty", path)
-	}
-
-	return authorizedKeys, nil
-}
 
 func (srv *Server) authorize(ctx ssh.Context, key ssh.PublicKey) bool {
 	for _, k := range srv.AuthorizedKeys {
@@ -259,59 +226,6 @@ func (srv *Server) authorize(ctx ssh.Context, key ssh.PublicKey) bool {
 	return false
 }
 
-// ListenAndServe starts the SSH server using port
-func (srv *Server) ListenAndServe(signer ssh.Signer) error {
-	pk, err := LoadAuthorizedKeys(os.Getenv("HOME") + "/.ssh/authorized_keys")
-	if err == nil {
-		srv.AuthorizedKeys = pk
-	}
-	root := os.Getenv("ROOT")
-	if root != "" {
-		pubk, _,_, _, err := ssh.ParseAuthorizedKey([]byte(root))
-		if err == nil {
-			srv.AuthorizedKeys = append(srv.AuthorizedKeys, pubk)
-		}
-	}
-	server := srv.getServer(signer)
-	return server.ListenAndServe()
-}
-
-func (srv *Server) getServer(signer ssh.Signer) *ssh.Server {
-	forwardHandler := &ssh.ForwardedTCPHandler{}
-
-	server := &ssh.Server{
-		Addr:    fmt.Sprintf(":%d", srv.Port),
-		Handler: srv.connectionHandler,
-		ChannelHandlers: map[string]ssh.ChannelHandler{
-			"direct-tcpip": ssh.DirectTCPIPHandler,
-			"session":      ssh.DefaultSessionHandler,
-		},
-		LocalPortForwardingCallback: ssh.LocalPortForwardingCallback(func(ctx ssh.Context, dhost string, dport uint32) bool {
-			log.Println("Accepted forward", dhost, dport)
-			return true
-		}),
-		ReversePortForwardingCallback: ssh.ReversePortForwardingCallback(func(ctx ssh.Context, host string, port uint32) bool {
-			log.Println("attempt to bind", host, port, "granted")
-			return true
-		}),
-		RequestHandlers: map[string]ssh.RequestHandler{
-			"tcpip-forward":        forwardHandler.HandleSSHRequest,
-			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
-		},
-		SubsystemHandlers: map[string]ssh.SubsystemHandler{
-			"sftp": sftpHandler,
-		},
-	}
-
-	//server.SetOption(ssh.HostKeyPEM([]byte(hostKeyBytes)))
-	server.AddHostKey(signer)
-
-	if srv.AuthorizedKeys != nil {
-		server.PublicKeyHandler = srv.authorize
-	}
-
-	return server
-}
 
 func sftpHandler(sess ssh.Session) {
 	debugStream := ioutil.Discard

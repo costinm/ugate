@@ -60,8 +60,8 @@ func (b *StreamBuffer) TrimFront(count int)  {
 }
 
 func (b *StreamBuffer) Recycle() {
-	b.owner = BufferedConPool
-	BufferedConPool.Put(b)
+	b.owner = bufferedConPool
+	bufferedConPool.Put(b)
 }
 
 func (b *StreamBuffer) IsEmpty() bool {

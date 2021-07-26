@@ -226,7 +226,7 @@ var (
 	}}
 )
 
-var BufferedConPool = sync.Pool{New: func() interface{} {
+var bufferedConPool = sync.Pool{New: func() interface{} {
 	// Should hold a TLS handshake message
 	return &StreamBuffer{
 		buf: make([]byte, bufSize),
@@ -250,7 +250,7 @@ func (s *Stream) RBuffer() *StreamBuffer {
 	if s.rbuffer != nil {
 		return s.rbuffer
 	}
-	br := BufferedConPool.Get().(*StreamBuffer)
+	br := bufferedConPool.Get().(*StreamBuffer)
 	br.off = 0
 	br.end = 0
 	br.owner = nil
@@ -263,7 +263,7 @@ func (s *Stream) WBuffer() *StreamBuffer {
 	if s.wbuffer != nil {
 		return s.wbuffer
 	}
-	br := BufferedConPool.Get().(*StreamBuffer)
+	br := bufferedConPool.Get().(*StreamBuffer)
 	br.off = 0
 	br.end = 0
 	br.owner = nil

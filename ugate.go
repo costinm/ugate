@@ -300,7 +300,7 @@ type Listener struct {
 
 	// Must block until the connection is fully handled !
 	// @Deprecated - use ForwardTo -:NAME and register handlers
-	Handler ConHandler `json:-`
+	Handler Handler `json:-`
 
 	// ALPN to announce, for TLS listeners
 	ALPN []string
@@ -418,48 +418,52 @@ type Session struct {
 //	DialStream(ctx context.Context, netw string, addr string, meta http.Header) (*Stream, error)
 //}
 
-
-// ConHandler is a handler for net.Conn with metadata.
+// Handler is a handler for net.Conn with metadata.
 // Lighter alternative to http.Handler
-type ConHandler interface {
+type Handler interface {
 	Handle(conn *Stream) error
 }
 
+// Wrap a function as a stream handler.
+type HandlerFunc func(conn *Stream) error
 
-type ConHandlerF func(conn *Stream) error
-
-func (c ConHandlerF) Handle(conn *Stream) error {
+func (c HandlerFunc) Handle(conn *Stream) error {
 	return c(conn)
 }
 
-
+// HeaderEncoder abstracts the encoding of metadata.
+// Standard HTTP/2 or QUIC, proto, other formats may be used.
+//
+// This interface uses the Stream buffer and encodes/decodes the
+// metadata associated with the stream.
 type HeaderEncoder interface {
 	// Marshall will encode the headers into the wBuffer.
 	// Flush will need to be called to send to s.Out
 	Marshal(s *Stream) error
 
+	// AddHeader directly to the stream buffer - without adding it to the meta.
 	AddHeader(s *Stream, k, v []byte)
 
-	// Unmarshall will decode from s.rBuffer. Fill() may need to be
-	// called to get additional data.
-	//
+	// Unmarshall will decode from s.rBuffer. s.Fill() may be called to get
+	// additional data. The decoded headers will be set on the stream.
 	Unmarshal(s *Stream) (done bool, err error)
+}
+
+
+// IPResolver uses DNS cache or lookups to return the name
+// associated with an IP, for metrics/stats/logs
+type IPResolver interface {
+	IPResolve(ip string) string
 }
 
 // For integration with TUN
 // TODO: use same interfaces.
 
-
-type HostResolver interface {
-	// HostByAddr returns the last lookup address for an IP, or the original
-	// address. The IP is expressed as a string ( ip.String() ).
-	HostByAddr(addr string) (string, bool)
-}
-
 // Used by the TUN interface
 type UDPHandler interface {
 	HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte)
 }
+
 // UdpWriter is the interface implemented by the TunTransport, to send
 // packets back to the virtual interface. TUN or TProxy raw support this.
 // Required for 'transparent' capture of UDP - otherwise use STUN/TURN/etc.
@@ -479,7 +483,7 @@ type UdpWriter interface {
 
 
 // CloseWriter is one of possible interfaces implemented by Out to send a FIN, without closing
-// the input. Some writers do this on Close.
+// the input. Some writers only do this when Close is called.
 type CloseWriter interface {
 	CloseWrite() error
 }
@@ -527,12 +531,6 @@ func ConfInt(cs ConfStore, name string, def int) int {
 		return def
 	}
 	return v
-}
-
-// IPResolver uses DNS cache or lookups to return the name
-// associated with an IP, for metrics/stats/logs
-type IPResolver interface {
-	IPResolve(ip string) string
 }
 
 // Information about a node.

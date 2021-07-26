@@ -35,6 +35,7 @@ import (
 )
 
 // Support for ID and authn using certificates.
+//
 // Private key, certificates and associated helpers.
 // An IPv6 address is derived from the public key.
 //

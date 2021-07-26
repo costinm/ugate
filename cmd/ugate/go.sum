@@ -47,6 +47,8 @@ github.com/costinm/ugate/ext/webrtc v0.0.0-20210425213441-05024f5e8910 h1:W1jVbu
 github.com/costinm/ugate/ext/webrtc v0.0.0-20210425213441-05024f5e8910/go.mod h1:VYvT/VW5e+5wP6FdC1dO1wbi6d09/KS7MLsoLvNaK2I=
 github.com/costinm/ugate/ext/xds v0.0.0-20210425213441-05024f5e8910 h1:z/Dj7eo0f8PQjoCVijl0PBH1f5R0UbmJ/jQiksrFUpo=
 github.com/costinm/ugate/ext/xds v0.0.0-20210425213441-05024f5e8910/go.mod h1:gNg9xkrySEYYmE1q61/1g18+dfnlTS8+N05YA83gpxk=
+github.com/costinm/ugate/ext/xds v0.0.0-20210617045128-ebd612515d2b h1:6uyfRR/Ry5z726bMtgsRPm0XbgEc1YVtSctYZ75u3dQ=
+github.com/costinm/ugate/ext/xds v0.0.0-20210617045128-ebd612515d2b/go.mod h1:P0Es2m9Hm9Z668jKJnfz4c6v96mPH4lYMA1S/200pCk=
 github.com/creack/pty v1.1.13 h1:rTPnd/xocYRjutMfqide2zle1u96upp1gm6eUHKi7us=
 github.com/creack/pty v1.1.13/go.mod h1:MOBLtS5ELjhRRrroQr9kyvTxUAFNvYEK993ew/Vr4O4=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

@@ -60,7 +60,7 @@ type PortListener struct {
 	ugate.Listener
 
 	NetListener net.Listener
-	PortHandler ugate.ConHandler
+	PortHandler ugate.Handler
 }
 
 // Creates a raw (port) TCP listener. Accepts connections
