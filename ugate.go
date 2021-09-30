@@ -56,15 +56,19 @@ type GateCfg struct {
 	Domain string `json:"domain,omitempty"`
 
 	// TODO: other trusted domains/meshes (federation, migration, etc)
-	//DomainAliases []string `json:"domainAliases,omitempty"`
+	DomainAliases []string `json:"domainAliases,omitempty"`
 
 	// Additional port listeners.
-	// Egress: listen on 127.0.0.1:port
+	// Routes: listen on 127.0.0.1:port
 	// Ingress: listen on 0.0.0.0:port (or actual IP)
 	//
 	// Port proxies: will register a listener for each port, forwarding to the
 	// given address.
 	Listeners map[string]*Listener `json:"listeners,omitempty"`
+
+	//Local map[string]*Route `json:"local,omitempty"`
+
+	Routes map[string]*Route `json:"routes,omitempty"`
 
 	// Configured hosts, key is a domain name without port.
 	// This includes public keys, active addresses. Discovery and on-demand
@@ -75,7 +79,7 @@ type GateCfg struct {
 	// secure - Wireguard or IPsec equivalent).
 	Hosts map[string]*DMNode `json:"hosts,omitempty"`
 
-	// Egress gateways for reverse H2 - key is the domain name, value is the
+	// Routes gateways for reverse H2 - key is the domain name, value is the
 	// pubkey or root CA. If IsEmpty, public certificates are required.
 	H2R map[string]string `json:"remoteAccept,omitempty"`
 
@@ -103,6 +107,9 @@ const (
 
 	// H2, HTTPS, H2R
 	PORT_BTS = 7
+
+	// H2C
+	PORT_BTSC = 8
 )
 
 // Statistics for streams and hosts
@@ -249,12 +256,17 @@ type DMNode struct {
 }
 
 const ProtoTLS = "tls"
+const ProtoSNI = "sni"
 
 // autodetected for TLS.
 const ProtoH2 = "h2"
 const ProtoHTTP = "http" // 1.1
 const ProtoHTTPTrusted = "httpTrusted" // behind envoy or trusted gateway
 const ProtoBTS = "bts"
+const ProtoBTSC = "btsc"
+
+const ProtoTCPOut = "tcpOut"
+const ProtoTCPIn = "tcpIn"
 
 const ProtoHAProxy = "haproxy"
 
@@ -263,8 +275,7 @@ const ProtoSocks = "socks5"
 const ProtoIPTables = "iptables"
 const ProtoIPTablesIn = "iptables-in"
 
-// Listener represents the configuration for accepted streams.
-//
+// Listener represents the configuration for a real port listener.
 // uGate has a set of special listeners that multiplex requests:
 // - socks5 dest
 // - iptables original dst ( may be combined with DNS interception )
@@ -275,9 +286,6 @@ const ProtoIPTablesIn = "iptables-in"
 //
 // Multiplexed channels do an additional lookup to find the listener
 // based on the channel address.
-//
-// uGate doesn't use a 'route' - a real gateway should be used for
-// low level routes, or a handler.
 type Listener struct {
 
 	// Address address (ex :8080). This is the requested address.
@@ -299,7 +307,6 @@ type Listener struct {
 	ForwardTo string `json:"forwardTo,omitempty"`
 
 	// Must block until the connection is fully handled !
-	// @Deprecated - use ForwardTo -:NAME and register handlers
 	Handler Handler `json:-`
 
 	// ALPN to announce, for TLS listeners
@@ -310,6 +317,39 @@ type Listener struct {
 	// Certificates to use.
 	// Key is a domain, *.domain or *.
 	Certs map[string]string
+
+	NetListener net.Listener `json:-`
+	PortHandler Handler `json:-`
+}
+
+// Route controls the routing in the gate.
+// Address is used to match the destination of a stream:
+// - VIP or IP from iptables capture
+// -
+type Route struct {
+	// Address address (ex :8080). This is the requested address.
+	//
+	// BTS, SOCKS, HTTP_PROXY and IPTABLES have default ports and bindings, don't
+	// need to be configured here.
+	Address string `json:"address,omitempty"`
+
+	// How to connect. Default: original dst
+	Protocol string `json:"proto,omitempty"`
+
+	// ForwardTo where to forward the proxied connections.
+	// Used for accepting on a dedicated port. Will be set as Dest in
+	// the stream, can be mesh node.
+	// host:port format.
+	ForwardTo string `json:"forwardTo,omitempty"`
+
+	// Must block until the connection is fully handled !
+	// @Deprecated - use ForwardTo -:NAME and register handlers
+	Handler Handler `json:-`
+
+
+	//SAN []string
+
+	//Endpoints []string
 }
 
 
@@ -338,7 +378,7 @@ type Listener struct {
 
 // ContextDialer is same with x.net.proxy.ContextDialer
 // Used to create the actual connection to an address using the mesh.
-// The result may have metadata, and be an instance of ugate.Stream.
+// The result may have metadata, and be an instance of ugate.Conn.
 //
 // A uGate implements this interface, it is the primary interface
 // for creating streams where the caller does not want to pass custom
@@ -368,7 +408,7 @@ type StreamDialer interface {
 	// inStream.In, if not nil, will be automatically forwarded to new dialed stream.
 	// inStream in headers, if set, will be forwarded to the remote host.
 	//
-	DialStream(ctx context.Context, addr string, inStream *Stream) (*Stream, error)
+	DialStream(ctx context.Context, addr string, inStream *Conn) (*Conn, error)
 }
 
 // Muxer is the interface implemented by a multiplexed connection with metadata
@@ -389,7 +429,7 @@ type MuxDialer interface {
 	// For non-mesh nodes the H2 connection may not allow incoming streams or
 	// messages. Mesh nodes emulate incoming streams using /h2r/ and send/receive
 	// messages using /.dm/msg/
-	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Stream)) (Muxer, error)
+	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Conn)) (Muxer, error)
 }
 
 
@@ -409,44 +449,44 @@ type Session struct {
 
 // StreamDialer is similar with RoundTrip, makes a single connection using a MUX.
 //
-// Unlike ContextDialer, also takes 'meta' and returns a Stream ( which implements net.Conn).
+// Unlike ContextDialer, also takes 'meta' and returns a Conn ( which implements net.Conn).
 //
 // UGate implements ContextDialer, so it can be used in other apps as a library without
 // dependencies to the API. The context can be used for passing metadata.
 // It also implements RoundTripper, since streams are mapped to HTTP.
 //type StreamDialer interface {
-//	DialStream(ctx context.Context, netw string, addr string, meta http.Header) (*Stream, error)
+//	DialStream(ctx context.Context, netw string, addr string, meta http.Header) (*Conn, error)
 //}
 
 // Handler is a handler for net.Conn with metadata.
 // Lighter alternative to http.Handler
 type Handler interface {
-	Handle(conn *Stream) error
+	Handle(conn *Conn) error
 }
 
 // Wrap a function as a stream handler.
-type HandlerFunc func(conn *Stream) error
+type HandlerFunc func(conn *Conn) error
 
-func (c HandlerFunc) Handle(conn *Stream) error {
+func (c HandlerFunc) Handle(conn *Conn) error {
 	return c(conn)
 }
 
 // HeaderEncoder abstracts the encoding of metadata.
 // Standard HTTP/2 or QUIC, proto, other formats may be used.
 //
-// This interface uses the Stream buffer and encodes/decodes the
+// This interface uses the Conn buffer and encodes/decodes the
 // metadata associated with the stream.
 type HeaderEncoder interface {
 	// Marshall will encode the headers into the wBuffer.
 	// Flush will need to be called to send to s.Out
-	Marshal(s *Stream) error
+	Marshal(s *Conn) error
 
 	// AddHeader directly to the stream buffer - without adding it to the meta.
-	AddHeader(s *Stream, k, v []byte)
+	AddHeader(s *Conn, k, v []byte)
 
 	// Unmarshall will decode from s.rBuffer. s.Fill() may be called to get
 	// additional data. The decoded headers will be set on the stream.
-	Unmarshal(s *Stream) (done bool, err error)
+	Unmarshal(s *Conn) (done bool, err error)
 }
 
 
@@ -586,7 +626,7 @@ type NodeAnnounce struct {
 //	// On return, the stream ServerOut and ServerIn will be
 //	// populated, and connected to stream Dest.
 //	// deprecated:  use CreateStream
-//	DialProxy(tp *Stream) error
+//	DialProxy(tp *Conn) error
 //
 //	// The VIP of the remote host, after authentication.
 //	RemoteVIP() net.IP

@@ -10,6 +10,8 @@ replace github.com/costinm/ugate/ext/bootstrap => ../../ext/bootstrap
 
 replace github.com/costinm/ugate/ext/quic => ../../ext/quic
 
+replace github.com/costinm/ugate/ext/h2r => ../../ext/h2r
+
 replace github.com/costinm/ugate/ext/ssh => ../../ext/ssh
 
 require (

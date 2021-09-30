@@ -77,7 +77,7 @@ func TestSrv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mc := ab.(*ugate.Stream)
+		mc := ab.(*ugate.Conn)
 		log.Println("Result ", res, mc)
 	})
 

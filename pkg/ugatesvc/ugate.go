@@ -27,10 +27,6 @@ var InitHooks []func(gate *UGate) StartFunc
 
 
 type UGate struct {
-	// Actual (real) port listeners, key is the host:port
-	// Typically host is 0.0.0.0 or 127.0.0.1 - may also be one of the
-	// local addresses.
-	Listeners map[string]*PortListener
 
 	Config *ugate.GateCfg
 
@@ -41,10 +37,8 @@ type UGate struct {
 	// integration.
 	parentDialer ugate.ContextDialer
 
-	// Configurations, keyed by host + port and URL.
-	Conf map[string]*ugate.Listener
 
-	DefaultListener *ugate.Listener
+	DefaultRoute *ugate.Route
 
 	// Handlers for incoming connections - local accept or forwarding.
 	Mux *http.ServeMux
@@ -63,17 +57,18 @@ type UGate struct {
 
 	// Active connection by internal stream ID.
 	// Tracks incoming Streams - if the stream is getting proxied to
-	// a net.Conn or Stream, the dest will not be tracked here.
-	ActiveTcp map[int]*ugate.Stream
+	// a net.Conn or Conn, the dest will not be tracked here.
+	ActiveTcp map[int]*ugate.Conn
 
 	m    sync.RWMutex
+
 	Auth *auth.Auth
 
 	Msg *msgs.Mux
 
-	MuxDialers map[string]ugate.MuxDialer
-	DNS        ugate.UDPHandler
-	UDPHandler ugate.UDPHandler
+	MuxDialers    map[string]ugate.MuxDialer
+	DNS           ugate.UDPHandler
+	UDPHandler    ugate.UDPHandler
 }
 
 func NewConf(base ...string) ugate.ConfStore {
@@ -101,6 +96,9 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 	if d != nil {
 		ug.parentDialer = d
 	}
+	go ug.H2Handler.UpdateReverseAccept()
+	ug.DefaultPorts(ug.Config.BasePort)
+
 	ug.Start()
 	return ug
 }
@@ -125,6 +123,9 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	if cfg.Listeners == nil {
 		cfg.Listeners = map[string]*ugate.Listener{}
 	}
+	if cfg.Routes == nil {
+		cfg.Routes = map[string]*ugate.Route{}
+	}
 
 	// Merge 'ugate' JSON config, from config store.
 	Get(cs, "ugate", cfg)
@@ -141,23 +142,22 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	}
 
 	ug := &UGate{
-		Listeners:    map[string]*PortListener{},
 		parentDialer: &net.Dialer{},
 		MuxDialers: map[string]ugate.MuxDialer{},
 		Config:       cfg,
 		NodesByID:    map[string]*ugate.DMNode{},
 		Nodes:        map[uint64]*ugate.DMNode{},
-		Conf:         map[string]*ugate.Listener{},
 		Mux:          http.NewServeMux(),
 		Auth:         a,
-		ActiveTcp:    map[int]*ugate.Stream{},
-		DefaultListener: &ugate.Listener{
+		ActiveTcp:    map[int]*ugate.Conn{},
+		DefaultRoute: &ugate.Route{
+			Protocol: "OriginalDST",
 		},
 		Msg: msgs.DefaultMux,
 	}
 
-	if l, ok := cfg.Listeners["*"]; ok {
-		ug.DefaultListener = l
+	if l, ok := cfg.Routes["*"]; ok {
+		ug.DefaultRoute = l
 	}
 
 
@@ -204,23 +204,19 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 
 // Start listening on all configured ports.
 func (ug *UGate) Start() {
-	go ug.H2Handler.UpdateReverseAccept()
-	ug.DefaultPorts(ug.Config.BasePort)
-
 	// Explicit TCP forwarders.
 	for k, t := range ug.Config.Listeners {
 		if strings.HasPrefix(k, "udp://") {
 			continue
 		}
 		t.Address = k
-		ug.Add(t)
+		ug.StartListener(t)
 	}
 
 	log.Println("Starting uGate ", ug.Config.Name,
 		ug.Config.BasePort,
 		auth.IDFromPublicKey(auth.PublicKey(ug.Auth.Cert.PrivateKey)),
 		ug.Auth.VIP6)
-
 }
 
 
@@ -284,7 +280,7 @@ func (ug *UGate) GetOrAddNode(id string) *ugate.DMNode {
 }
 
 // All streams must call this method, and defer OnStreamDone
-func (ug *UGate) OnStream(s *ugate.Stream) {
+func (ug *UGate) OnStream(s *ugate.Conn) {
 	ug.m.Lock()
 	ug.ActiveTcp[s.StreamId] = s
 	ug.m.Unlock()
@@ -296,7 +292,7 @@ func (ug *UGate) OnStream(s *ugate.Stream) {
 // Called at the end of the connection handling. After this point
 // nothing should use or refer to the connection, both proxy directions
 // should already be closed for write or fully closed.
-func (ug *UGate) OnStreamDone(str *ugate.Stream) {
+func (ug *UGate) OnStreamDone(str *ugate.Conn) {
 
 	ug.m.Lock()
 	delete(ug.ActiveTcp, str.StreamId)
@@ -350,7 +346,7 @@ func (ug *UGate) OnStreamDone(str *ugate.Stream) {
 
 // RemoteID returns the node ID based on authentication.
 //
-func RemoteID(s *ugate.Stream)  string {
+func RemoteID(s *ugate.Conn)  string {
 	if s.TLS == nil {
 		return ""
 	}
@@ -365,33 +361,27 @@ func RemoteID(s *ugate.Stream)  string {
 	return auth.IDFromPublicKey(pk)
 }
 
-
-// Add and Start a real port listener on a port.
-// Virtual listeners can be added to ug.Conf or the mux.
-func (ug *UGate) Add(cfg *ugate.Listener) error {
-	ll := &PortListener{Listener: *cfg}
-	err := ll.Start(ug)
-	if err != nil {
-		return err
-	}
-	ug.Listeners[cfg.Address] = ll
-	return nil
-}
-
 func (ug *UGate) Close() error {
 	var err error
-	for _, p := range ug.Listeners {
-		e := p.Close()
-		if e != nil {
-			err = err
+	for _, p := range ug.Config.Listeners {
+		if p.NetListener != nil {
+			e := p.NetListener.Close()
+			if e != nil {
+				err = err
+			}
+			p.NetListener = nil
 		}
-		delete(ug.Listeners, p.Address)
 	}
 	return err
 }
 
 // Setup default ports, using base port.
-// For Istio, should be 15000
+// For Istio, should be 15000. If running in Knative, use PORT and start
+// only a H2 listener.
+//
+// Will run:
+// - plaintext HTTP/1 or H2 - on PORT or base (15000)
+// - BTS on 15007 (or 443 if running as root)
 func (ug *UGate) DefaultPorts(base int) error {
 	// Set if running in a knative env, or if an Envoy runs as a sidecar to handle
 	// TLS, QUIC, H2. In this mode only standard H2/MASQUE are supported, with
@@ -405,84 +395,106 @@ func (ug *UGate) DefaultPorts(base int) error {
 	}
 	// ProtoHTTP detects H1/H2 and sends to ug.H2Handler
 	// That deals with auth and dispatches to ugate.Mux
-	ug.Add(&ugate.Listener{
+	ug.StartListener(&ugate.Listener{
 		Address: haddr,
 		Protocol: ugate.ProtoHTTP,
 	})
 
 	// KNative doesn't support other ports by default - but still register them
 	btsAddr := fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_BTS)
-	if os.Getuid() == 0 {
-		btsAddr = ":443"
-	}
+	btscAddr := fmt.Sprintf("0.0.0.0:%d", base+ugate.PORT_BTSC)
 
 	// Main BTS port, with TLS certificates
 	// Normally should be 443 for SNI gateways, when running as root
 	// Use iptables to redirect, or an explicit config for port 443 if running as root.
-	ug.Add(&ugate.Listener{
+	ug.StartListener(&ugate.Listener{
 		Address:  btsAddr,
 		Protocol: ugate.ProtoBTS,
 		ALPN: []string{"h2","h2r"},
 	})
+	ug.StartListener(&ugate.Listener{
+		Address:  btscAddr,
+		Protocol: ugate.ProtoBTSC,
+	})
+	if os.Getuid() == 0 {
+		ug.StartListener(&ugate.Listener{
+			Address:  "0.0.0.0:443",
+			Protocol: ugate.ProtoTLS,
+			ALPN: []string{"h2","h2r"},
+		})
+		ug.StartListener(&ugate.Listener{
+			Address:  "0.0.0.0:80",
+			Protocol: ugate.ProtoHTTP,
+		})
+	}
 
 	return nil
 }
 
 // Based on the port in the Dest, find the Listener config.
 // Used when the dest IP:port is extracted from the metadata
-func (ug *UGate) FindCfgIptablesIn(m *ugate.Stream) *ugate.Listener {
-	l := ug.Config.Listeners[m.Dest]
-	if l != nil {
-		return l
-	}
+func (ug *UGate) FindRouteIn(m *ugate.Conn) *ugate.Route {
+	//_, p, _ := net.SplitHostPort(m.Dest)
+	//l := ug.Config.Listeners[":"+p]
+	//if l != nil {
+	//	return l
+	//}
 
-	_, p, _ := net.SplitHostPort(m.Dest)
-	l = ug.Config.Listeners[":"+p]
-	if l != nil {
-		return l
-	}
-
-	l = ug.Config.Listeners["-:"+p]
-	if l != nil {
-		return l
-	}
-	return ug.DefaultListener
+	//l := ug.Config.Listeners["-:"+p]
+	//if l != nil {
+	//	return &l.Route
+	//}
+	return ug.DefaultRoute
 }
 
-func (ug *UGate) FindListener(dstaddr net.IP, p uint16, prefix string) *ugate.Listener {
+// FindRouteOut will use the IP in Dest, and find the cluster
+// and endpoints.
+func (ug *UGate) FindRouteOut(m *ugate.Conn) *ugate.Route {
+	l := ug.Config.Routes[m.Dest]
+	if l != nil {
+		return l
+	}
+
+	h, p, _ := net.SplitHostPort(m.Dest)
+	l = ug.Config.Routes[h]
+	if l != nil {
+		return l
+	}
+	l = ug.Config.Routes[":"+p]
+	if l != nil {
+		return l
+	}
+	return ug.DefaultRoute
+}
+
+func (ug *UGate) FindRoutePrefix(dstaddr net.IP, p uint16, prefix string) *ugate.Route {
 	port := ":" + strconv.Itoa(int(p))
-	l := ug.Config.Listeners[prefix + dstaddr.String() + port]
+	l := ug.Config.Routes[prefix + dstaddr.String() + port]
 	if l != nil {
 		return l
 	}
 
-	l = ug.Config.Listeners[prefix + port]
+	l = ug.Config.Routes[prefix + port]
 	if l != nil {
 		return l
 	}
 
-	l = ug.Config.Listeners[prefix + "-" + port]
+	l = ug.Config.Routes[prefix + "-" + port]
 	if l != nil {
 		return l
 	}
-	return ug.DefaultListener
+	return ug.DefaultRoute
 }
 
-func (ug *UGate) HandleBTSStream(str *ugate.Stream) error {
-	if str.Listener == nil {
-		str.Listener = ug.FindCfgIptablesIn(str)
-	}
 
-	str.PostDial(str, nil)
-	return ug.H2Handler.HandleHTTPS(str)
-}
 // HandleStream is called for accepted (incoming) streams.
 //
-// Multiplexed streams ( H2 ) also call this method.
+// Multiplexed streams ( H2, SNI ) also call this method.
 //
 // At this point the stream has the metadata:
 //
-// - Dest and Listener are set.
+// - Listener - actual port that accepted connection.
+// - Dest - SNI, Host, original dest for iptables, listener's forward addr
 // - RequestURI
 // - Host
 // - Headers
@@ -490,36 +502,38 @@ func (ug *UGate) HandleBTSStream(str *ugate.Stream) error {
 //
 // In addition TrackStreamIn has been called.
 // This is a blocking method.
-func (ug *UGate) HandleStream(str *ugate.Stream) error {
-	if str.Listener == nil {
-		str.Listener = ug.FindCfgIptablesIn(str)
+func (ug *UGate) HandleStream(str *ugate.Conn) error {
+	if str.Route == nil {
+		str.Route = ug.FindRouteOut(str)
 	}
-	cfg := str.Listener
+	route := str.Route
 
-	if cfg.Protocol == ugate.ProtoBTS {
-		str.PostDial(str, nil)
-		return ug.H2Handler.HandleHTTPS(str)
+	//if route.Protocol == ugate.ProtoBTS || route.Protocol == ugate.ProtoBTSC {
+	//	panic("Should not happen")
+	//	str.PostDial(str, nil)
+	//	// TLS is already wrapped for BTS
+	//	return ug.H2Handler.HandleHTTPS(str)
+	//}
+
+	if route.ForwardTo != "" {
+		str.Dest = route.ForwardTo
 	}
 
-	if cfg.ForwardTo != "" {
-		str.Dest = cfg.ForwardTo
-	}
-
-	if cfg.Handler == nil && strings.HasPrefix(cfg.ForwardTo, "/") {
+	if route.Handler == nil && strings.HasPrefix(route.ForwardTo, "/") {
 		// TODO: register handlers
-		if cfg.ForwardTo == "/echo" {
-			cfg.Handler = &EchoHandler{}
+		if route.ForwardTo == "/echo" {
+			route.Handler = &EchoHandler{}
 		}
 	}
 
 	// Config has an in-process handler - not forwarding (or the handler may
 	// forward).
-	if cfg.Handler != nil {
+	if route.Handler != nil {
 		// SOCKS and others need to send something back - we don't
 		// have a real connection, faking it.
 		str.PostDial(str, nil)
-		str.Dest = fmt.Sprintf("%v", cfg.Handler)
-		err:= cfg.Handler.Handle(str)
+		str.Dest = fmt.Sprintf("%v", route.Handler)
+		err:= route.Handler.Handle(str)
 		str.Close()
 		return err
 	}
@@ -547,7 +561,7 @@ func (gw *UGate) OnHClose(s string, id string, san string, r *http.Request, sinc
 	}
 }
 
-func (gw *UGate) OnSClose(str *ugate.Stream, addr net.Addr) {
+func (gw *UGate) OnSClose(str *ugate.Conn, addr net.Addr) {
 	if !gw.Config.NoAccessLog {
 		if str.ReadErr != nil || str.WriteErr != nil {
 			log.Printf("%d AC: src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v %v %v",

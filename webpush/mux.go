@@ -299,7 +299,7 @@ func (r *rw) WriteHeader(statusCode int) {
 	r.Code = statusCode
 }
 
-// Add a local handler for a specific message type.
+// StartListener a local handler for a specific message type.
 // Special topics: *, /open, /close
 func (mux *Mux) AddHandler(path string, cp MessageHandler) {
 	mux.mutex.Lock()

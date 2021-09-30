@@ -175,7 +175,7 @@ func (h2s *H2RMux) stream(id uint32) *H2Stream {
 
 // H2Stream is a multiplexed stream.
 type H2Stream struct {
-	meta *ugate.Stream
+	meta *ugate.Conn
 
 	id *uint32
 	s  *H2RMux

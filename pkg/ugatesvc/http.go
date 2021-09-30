@@ -2,7 +2,6 @@ package ugatesvc
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -67,95 +66,15 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 	ug.Mux.HandleFunc("/_dm/", ug.HandleID)
 	ug.Mux.HandleFunc("/dm/", ug.HandleTCPProxy)
 
+	ug.Mux.HandleFunc("/hbone/", ug.HandleTCPProxy)
+	ug.Mux.HandleFunc("/hbonec/", ug.HandleTLSoverH2)
+	ug.Mux.HandleFunc("/_hb/", ug.HandleTCPProxy)
+	ug.Mux.HandleFunc("/_hbc/", ug.HandleTLSoverH2)
+
 	// Plain HTTP requests - we only care about CONNECT/ws
 	go http.Serve(h2.httpListener, h2)
 
 	return h2, nil
-}
-
-// UpdateReverseAccept updates the upstream accept connections, based on config.
-// Should be called when the config changes
-func (t *H2Transport) UpdateReverseAccept() {
-	ev := make(chan string)
-	for addr, key := range t.ug.Config.H2R {
-		// addr is a hostname
-		dm := t.ug.GetOrAddNode(addr)
-		if dm.Addr == "" {
-			if key == "" {
-				dm.Addr = net.JoinHostPort(addr, "443")
-			} else {
-				dm.Addr = net.JoinHostPort(addr, "15007")
-			}
-		}
-
-		go t.maintainPinnedConnection(dm, ev)
-	}
-	<- ev
-	log.Println("maintainPinned connected for ", t.ug.Auth.VIP6)
-
-}
-
-// Reverse Accept dials a connection to addr, and registers a H2 SERVER
-// conn on it. The other end will register a H2 client, and create streams.
-// The client cert will be used to associate incoming streams, based on config or direct mapping.
-// TODO: break it in 2 for tests to know when accept is in effect.
-func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string) {
-	// maintain while the host is in the 'pinned' list
-	if _, f := t.ug.Config.H2R[dm.ID]; !f {
-		return
-	}
-
-	//ctx := context.Background()
-	if dm.Backoff == 0 {
-		dm.Backoff = 1000 * time.Millisecond
-	}
-
-	ctx := context.TODO()
-	//ctx, ctxCancel := context.WithTimeout(ctx, 5*time.Second)
-	//defer ctxCancel()
-
-	protos := t.ug.Config.TunProto
-	if len(protos) == 0 {
-		protos = []string{"quic", "h2r"}
-	}
-	var err error
-	var muxer ugate.Muxer
-	for _, k := range protos {
-		muxer, err = t.ug.DialMUX(ctx, k, dm, nil)
-		if err == nil {
-			break;
-		}
-	}
-	if err == nil {
-		log.Println("UP: ", dm.Addr, muxer)
-		// wait for mux to be closed
-		dm.Backoff = 1000 * time.Millisecond
-		return
-	}
-
-	log.Println("UP: err", dm.Addr, err, dm.Backoff)
-	// Failed to connect
-	if dm.Backoff < 15*time.Minute {
-		dm.Backoff = 2 * dm.Backoff
-	}
-
-	time.AfterFunc(dm.Backoff, func() {
-		t.maintainPinnedConnection(dm, ev)
-	})
-
-	// p := str.TLS.NegotiatedProtocol
-	//if p == "h2r" {
-	//	// Old code used the 'raw' TLS connection to create a  server connection
-	//	t.h2Server.ServeConn(
-	//		str,
-	//		&http2.ServeConnOpts{
-	//			Handler: t, // Also plain text, needs to be upgraded
-	//			Context: str.Context(),
-	//
-	//			//Context: // can be used to cancel, pass meta.
-	//			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
-	//		})
-	//}
 }
 
 
@@ -223,7 +142,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tls := r.TLS
 	// If the request was handled by normal uGate listener.
 	us := r.Context().Value("ugate.stream")
-	if ugs, ok := us.(*ugate.Stream); ok {
+	if ugs, ok := us.(*ugate.Conn); ok {
 		tls = ugs.TLS
 		r.TLS = tls
 	}
@@ -277,10 +196,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Will sniff H2 and http/1.1 and use the right handler.
 //
 // Ex: curl localhost:9080/debug/vars --http2-prior-knowledge
-func (t *H2Transport) handleHTTPListener(pl *ugate.Listener, acceptedCon net.Conn) error {
-	bconn := ugate.GetStream(acceptedCon, acceptedCon)
-	t.ug.OnStream(bconn)
-	defer t.ug.OnStreamDone(bconn)
+func (t *H2Transport) handleHTTPListener(bconn *ugate.Conn) error {
 
 	err := SniffH2(bconn)
 	if err != nil {
@@ -321,7 +237,7 @@ var (
 )
 
 
-func SniffH2(s *ugate.Stream) error {
+func SniffH2(s *ugate.Conn) error {
 	var proto string
 
 	for {
@@ -354,15 +270,14 @@ func SniffH2(s *ugate.Stream) error {
 // listeners.
 //
 // Blocking.
-func (t *H2Transport) HandleHTTPS(c *ugate.Stream) error {
+func (t *H2Transport) HandleHTTPS(str *ugate.Conn) error {
 	// http2 and http expect a net.Listener, and do their own accept()
-	str := c
 	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2" {
 		t.h2Server.ServeConn(
-			c,
+			str,
 			&http2.ServeConnOpts{
 				Handler: t,                  // Also plain text, needs to be upgraded
-				Context: c.Context(), // associated with the stream, with cancel
+				Context: str.Context(), // associated with the stream, with cancel
 
 				//Context: // can be used to cancel, pass meta.
 				// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
@@ -371,12 +286,13 @@ func (t *H2Transport) HandleHTTPS(c *ugate.Stream) error {
 	}
 
 	// Else: HTTP/1.1
-	t.httpListener.incoming <- c
+	t.httpListener.incoming <- str
 	// TODO: wait for connection to be closed.
 	<-str.Context().Done()
 
 	return nil
 }
+
 
 func (l *H2Transport) Close() error {
 	return nil
@@ -433,26 +349,26 @@ func (l *listener) Accept() (net.Conn, error) {
 	}
 }
 
-type HttpClientStream struct {
-	ugate.Stream
-	*http.Response
-	request *http.Request
-}
-
-func NewHttpClientStream(s *ugate.Stream) *HttpClientStream {
-	h := &HttpClientStream{
-	}
-	return h
-}
-
-type HttpServerStream struct {
-	ugate.Stream
-	http.ResponseWriter
-	request *http.Request
-}
-
-func NewHttpServerStream(s *ugate.Stream) *HttpServerStream {
-	h := &HttpServerStream{
-	}
-	return h
-}
+//type HttpClientStream struct {
+//	ugate.Conn
+//	*http.Response
+//	request *http.Request
+//}
+//
+//func NewHttpClientStream(s *ugate.Conn) *HttpClientStream {
+//	h := &HttpClientStream{
+//	}
+//	return h
+//}
+//
+//type HttpServerStream struct {
+//	ugate.Conn
+//	http.ResponseWriter
+//	request *http.Request
+//}
+//
+//func NewHttpServerStream(s *ugate.Conn) *HttpServerStream {
+//	h := &HttpServerStream{
+//	}
+//	return h
+//}

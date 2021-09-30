@@ -14,7 +14,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// After a Stream ( TCP+meta or HTTP ) is accepted/captured, we need to route it based on
+// After a Conn ( TCP+meta or HTTP ) is accepted/captured, we need to route it based on
 // the config.
 //
 // Use cases:
@@ -37,7 +37,7 @@ func (ug *UGate) Dial(netw, addr string) (net.Conn, error) {
 //
 // Used internally to create the raw TLS connections to both mesh
 // and non-mesh nodes.
-func (ug *UGate) DialTLS(ctx context.Context, addr string, alpn []string) (*ugate.Stream, error) {
+func (ug *UGate) DialTLS(ctx context.Context, addr string, alpn []string) (*ugate.Conn, error) {
 	ctx1, cf := context.WithTimeout(ctx, 5*time.Second)
 	defer cf()
 	tcpC, err := ug.parentDialer.DialContext(ctx1, "tcp", addr)
@@ -63,7 +63,7 @@ func (ug *UGate) DialTLS(ctx context.Context, addr string, alpn []string) (*ugat
 // str.Dest is the destination hostname:port or hostname.
 //
 
-func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
+func (ug *UGate) DialAndProxy(str *ugate.Conn) error {
 
 	nc, err := ug.dial(context.Background(), str.Dest, str)
 	str.PostDial(nc, err)
@@ -76,7 +76,7 @@ func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
 	// Dial may begin streaming from input connection to the dialed.
 	// When dial return, the headers from dialed con are received.
 
-	if ncs, ok := nc.(*ugate.Stream) ; ok {
+	if ncs, ok := nc.(*ugate.Conn) ; ok {
 		if ncs.OutHeader != nil {
 			CopyResponseHeaders(str.Header(), ncs.OutHeader)
 		}
@@ -88,9 +88,9 @@ func (ug *UGate) DialAndProxy(str *ugate.Stream) error {
 	return str.ProxyTo(nc)
 }
 
-// Stream received via a BTS SNI route.
+// Conn received via a BTS SNI route.
 // Similar with dialAndProxy
-func (ug *UGate) HandleSNIStream(str *ugate.Stream) error {
+func (ug *UGate) HandleSNIStream(str *ugate.Conn) error {
 	idx :=  strings.Index(str.Dest, ".")
 	if idx > 0 {
 		// Only SNI route to mesh nodes, ignore the domain name
@@ -147,7 +147,7 @@ func (ug *UGate) DialContext(ctx context.Context, netw, addr string) (net.Conn, 
 //
 // If it has real endpoint address - we can use the associated protocol.
 // Else we can try all supported protos.
-func (ug *UGate) DialMUX(ctx context.Context, net string, node *ugate.DMNode, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
+func (ug *UGate) DialMUX(ctx context.Context, net string, node *ugate.DMNode, ev func(t string, stream *ugate.Conn)) (ugate.Muxer, error) {
 	// TODO: list, try them all.
 	rd := ug.MuxDialers[net]
 	if rd == nil {
@@ -171,7 +171,7 @@ func (ug *UGate) OnMUX(node *ugate.DMNode) error {
 const usePipe = false
 
 // Dial creates a stream to the given address.
-func (ug *UGate) dial(ctx context.Context, addr string, s *ugate.Stream) (net.Conn, error) {
+func (ug *UGate) dial(ctx context.Context, addr string, s *ugate.Conn) (net.Conn, error) {
 	// sets clientEventContextKey - if ctx is used for a round trip, will
 	// set all data.
 	// Will also make sure DNSStart, Connect, etc are set (if we want to)
@@ -317,7 +317,7 @@ func (t *H2Transport) GetClientConn(req *http.Request, addr string) (*http2.Clie
 		// Real address -
 		addr = dmn.Addr
 	}
-	var tc *ugate.Stream
+	var tc *ugate.Conn
 	var err error
 	// TODO: use local announces
 	// TODO: use VPN server for all or for mesh

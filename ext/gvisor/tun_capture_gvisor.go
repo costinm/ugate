@@ -457,7 +457,7 @@ func (nt *GvisorTun) defUdpServer() error {
 		for {
 			// Will have the peer address
 			//ep.SetSockOpt()
-			// Add is send address. Control should include the dest addr ( for raw )
+			// StartListener is send address. Control should include the dest addr ( for raw )
 			bb := &bytes.Buffer{}
 			rr, err := ep.Read(bb, ro)
 			//v, _, err := ep.(UdpLocalReader).ReadLocal(&add)

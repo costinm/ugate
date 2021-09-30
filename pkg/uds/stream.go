@@ -35,7 +35,7 @@ import (
 // first line: METHOD param:val ...
 // 'subject', '
 
-//type Stream struct {
+//type Conn struct {
 //	Reader *bufio.Reader
 //
 //	delim byte

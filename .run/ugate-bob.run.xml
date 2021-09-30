@@ -9,7 +9,7 @@
     </envs>
     <kind value="DIRECTORY" />
     <package value="github.com/costinm/ugate/cmd/ugate" />
-    <directory value="$PROJECT_DIR$/../ugate/cmd/ugatex/" />
+    <directory value="$PROJECT_DIR$/../ugate/cmd/ugate/" />
     <filePath value="$PROJECT_DIR$/../ugate/cmd/ugate/ugate.go" />
     <method v="2" />
   </configuration>

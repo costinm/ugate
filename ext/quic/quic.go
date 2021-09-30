@@ -142,7 +142,7 @@ func (q *Quic) quicConfig() *quic.Config {
 	}
 }
 
-func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
+func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Conn)) (ugate.Muxer, error) {
 	tlsConf := &tls.Config{
 		// VerifyPeerCertificate used instead
 		InsecureSkipVerify: true,
@@ -184,7 +184,7 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Heade
 	//
 	//	// TODO: use MASQUE ( with extension headers ? )
 	//	initReq, _ := http.NewRequest("GET", "https://"+node.ID+"/_dm/id/Q/"+qd.Auth.ID, nil)
-	//	initReq.Header.Add("authorization", tok)
+	//	initReq.Header.StartListener("authorization", tok)
 	//	res, err := rt.RoundTrip(initReq)
 	//	if err != nil {
 	//		return nil, err

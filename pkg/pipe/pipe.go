@@ -15,7 +15,7 @@ import (
 // Useful utility from http2 package.
 // b is a bytes.RBuffer or databuffer.
 
-// Deprecated, useless - no back pressure / flow control.
+// No back pressure / flow control.
 
 // Pipe is a goroutine-safe io.Reader/io.Writer pair. It's like
 // io.Pipe except there are no PipeReader/PipeWriter halves, and the
@@ -34,6 +34,11 @@ type Pipe struct {
 
 func New() *Pipe {
 	return &Pipe{Buffer: new(bytes.Buffer)}
+}
+
+func NewPipe() (*Pipe, *Pipe) {
+	p := &Pipe{Buffer: new(bytes.Buffer)}
+	return p, p
 }
 
 type PipeBuffer interface {

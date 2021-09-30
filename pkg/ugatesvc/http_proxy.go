@@ -20,14 +20,12 @@ func (ht *H2Transport) ForwardHTTP(w http.ResponseWriter, r *http.Request, pathH
 	// will be used by RoundTrip.
 	r1.URL.Host = pathH
 
-	// can add more headers
-	// can add headers to the response
-
 	// This uses the BTS/H2 protocol or reverse path.
 	// Forward to regular sites not supported.
 	res, err := ht.ug.RoundTrip(r1)
 	SendBackResponse(w, r, res, err)
 }
+
 // Used by both ForwardHTTP and ForwardMesh, after RoundTrip is done.
 // Will copy response headers and body
 func SendBackResponse(w http.ResponseWriter, r *http.Request,
@@ -51,7 +49,7 @@ func SendBackResponse(w http.ResponseWriter, r *http.Request,
 	CopyResponseHeaders(w.Header(), res.Header)
 	w.WriteHeader(res.StatusCode)
 
-	stats := &ugate.Stream{}
+	stats := &ugate.Conn{}
 	n, err := stats.CopyBuffered(w, res.Body, true)
 
 	log.Println("Done: ", r.URL, res.StatusCode, n, err)

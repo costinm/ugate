@@ -84,6 +84,8 @@ type Auth struct {
 	// Explicit certificates (lego), key is hostname from file
 	//
 	CertMap map[string]*tls.Certificate
+
+	Trusted [][]byte
 }
 
 var certValidityPeriod = 100 * 365 * 24 * time.Hour
@@ -160,6 +162,11 @@ func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 		auth.Priv = *priv
 		edpub := PublicKey(priv)
 		auth.PublicKey = edpub.(ed25519.PublicKey)
+		pubkey = edpub
+	} else if priv, ok := pk.(*rsa.PrivateKey); ok {
+		edpub := PublicKey(priv)
+		auth.Priv = MarshalPrivateKey(priv)
+		auth.PublicKey = MarshalPublicKey(priv.Public())
 		pubkey = edpub
 	}
 
@@ -409,6 +416,42 @@ func (auth *Auth) loadAuthCfg() {
 	if auth.Config == nil {
 		return
 	}
+	rsaKey, _ := auth.Config.Get("key.pem")
+	rsaCert, _ := auth.Config.Get("cert-chain.pem")
+	// TODO: multiple roots
+	rootCert, _ := auth.Config.Get("root-cert.pem")
+	if rsaKey != nil && rsaCert != nil {
+		tlsCert, err := tls.X509KeyPair(rsaCert, rsaKey)
+		if err != nil {
+			log.Println("Invalid Istio cert ", err)
+		} else {
+			auth.Cert = &tlsCert
+			if rootCert != nil {
+				auth.Trusted = append(auth.Trusted, rootCert)
+			}
+			for n, c := range tlsCert.Certificate {
+				cert, err := x509.ParseCertificate(c)
+				if err != nil {
+					log.Println("Invalid Istio cert ", err)
+					continue
+				}
+				if n == 0 && len(cert.URIs) > 0 {
+					log.Println("ID ", cert.URIs[0], cert.Issuer,
+						cert.NotAfter)
+					// TODO: get cert fingerprint as well
+
+					//log.Println("Cert: ", cert)
+					// TODO: extract domain, ns, name
+				} else {
+					// org and name are set
+					log.Println("Cert: ", cert.Subject.Organization, cert.NotAfter)
+				}
+
+			}
+			return
+		}
+	}
+
 	// Single file - more convenient for upload
 	// Java supports PKCS12 ( p12, pfx)
 	kcfg, _ := auth.Config.Get("kube.json")
@@ -446,10 +489,6 @@ func (auth *Auth) loadAuthCfg() {
 }
 
 // Load the primary cert - expects a PEM key file
-// This will initialize all supported types of keys - current identity
-// is based on ED25519.
-// EC256 will be used for Webpush compat
-// RSA for Istio or legacy compat.
 //
 // Rejected formats:
 // - PKCS12 (p12, pfx) - supported by Java. Too complex.
@@ -466,7 +505,6 @@ func (auth *Auth) loadCert() error {
 	//	}
 	//	auth.EC256Cert = &tlsCert
 	//}
-
 	//edKey, _ := auth.Config.Get("ed25519-key.pem")
 	//edCert, _ := auth.Config.Get("ed25519-cert.pem")
 	//if edKey != nil && edCert != nil {
@@ -475,16 +513,6 @@ func (auth *Auth) loadCert() error {
 	//		return err
 	//	}
 	//	auth.ED25519Cert = &tlsCert
-	//}
-	//
-	//rsaKey, _ := auth.Config.Get("rsa-key.pem")
-	//rsaCert, _ := auth.Config.Get("rsa-cert.pem")
-	//if rsaKey != nil && rsaCert != nil {
-	//	tlsCert, err := tls.X509KeyPair(rsaCert, rsaKey)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	auth.RSACert = &tlsCert
 	//}
 
 	return nil
@@ -746,18 +774,17 @@ func (auth *Auth) signCertDER(pub crypto.PublicKey, caPrivate crypto.PrivateKey,
 
 // Generate and save the primary self-signed Certificate
 func (auth *Auth) generateSelfSigned(prefix string, priv crypto.PrivateKey, sans ...string) (tls.Certificate, []byte, []byte) {
-	// Sign with the private key.
+	return auth.SignCert(priv, priv, sans...)
+}
+
+func (auth *Auth) SignCert(priv crypto.PrivateKey, ca crypto.PrivateKey, sans ...string) (tls.Certificate, []byte, []byte) {
 	pub := PublicKey(priv)
-	certDER := auth.signCertDER(pub, priv, sans...)
+	certDER := auth.signCertDER(pub, ca, sans...)
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
 	ecb, _ := x509.MarshalPKCS8PrivateKey(priv)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: ecb})
 
-	//if auth.Config != nil {
-	//	auth.Config.Set(prefix+"-key.pem", keyPEM)
-	//	auth.Config.Set(prefix+"-cert.pem", certPEM)
-	//}
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		log.Println("Error generating cert ", err)
@@ -781,6 +808,15 @@ func MarshalPublicKey(key crypto.PublicKey) []byte {
 		if len(k) == 64 || len(k) == 32 {
 			return k
 		}
+	}
+
+	return nil
+}
+
+func MarshalPrivateKey(key crypto.PrivateKey) []byte {
+	if k, ok := key.(*rsa.PrivateKey); ok {
+		bk := x509.MarshalPKCS1PrivateKey(k)
+		return bk
 	}
 
 	return nil

@@ -15,11 +15,16 @@ import (
 
 //
 func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
-	// For http proxy we need a dedicated plain HTTP port
 	nl, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Println("Failed to listen", err)
 		return err
+	}
+	ipo := &IptablesOut{
+		Gate: ug,
+	}
+	ipi := &IptablesIn{
+		Gate: ug,
 	}
 	for {
 		remoteConn, err := nl.Accept()
@@ -35,40 +40,76 @@ func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
 			log.Println("Accept error, closing iptables listener ", err)
 			return err
 		}
-		go handleAcceptedConn(ug, remoteConn, in)
+
+		go func() {
+			str := ugate.GetStream(remoteConn, remoteConn)
+			ug.OnStream(str)
+			defer ug.OnStreamDone(str)
+
+			if in {
+				ipi.Handle(str)
+			} else {
+				ipo.Handle(str)
+			}
+		}()
 	}
 
 	return nil
 }
 
-// Mirroring handleAcceptedConn in UGate
-func handleAcceptedConn(ug *ugatesvc.UGate, acceptedCon net.Conn, in bool) {
-	bconn := ugate.GetStream(acceptedCon, acceptedCon)
-	ug.OnStream(bconn)
-	defer ug.OnStreamDone(bconn)
-	str := bconn
+
+type IptablesOut struct {
+	Gate *ugatesvc.UGate
+}
+
+type IptablesIn struct {
+	Gate *ugatesvc.UGate
+}
+
+func (ipo *IptablesOut) Handle(str *ugate.Conn) error {
+	str.Dest, str.ReadErr = SniffIptables(str)
+	if str.ReadErr != nil {
+		return str.ReadErr
+	}
+
+	// str.Dest is a VIP or real IP. It will be mapped to a real
+	// destination.
+	cfg := ipo.Gate.FindRouteOut(str)
+	if cfg.ForwardTo != "" {
+		str.Dest = cfg.ForwardTo
+	}
+
+	str.Route = cfg
+	str.Type = cfg.Protocol
+	str.Direction = ugate.StreamTypeOut
+
+	str.ReadErr = ipo.Gate.HandleStream(str)
+	return str.ReadErr
+}
+
+// Similar with Istio ingress capture. Original DST is the intended
+// addr and port.
+func (ipo *IptablesIn) Handle(str *ugate.Conn) error {
 
 	//case ugate.ProtoIPTablesIn:
 	//	// iptables is replacing the conn - process before creating the buffer
 	// DestAddr is also set as a sideeffect
 	str.Dest, str.ReadErr = SniffIptables(str)
-
 	if str.ReadErr != nil {
-		return
+		return str.ReadErr
 	}
 
-	cfg := ug.FindCfgIptablesIn(bconn)
+	// Local routes - redirect or additional manipulation.
+	cfg := ipo.Gate.FindRouteIn(str)
 	if cfg.ForwardTo != "" {
 		str.Dest = cfg.ForwardTo
 	}
-	str.Listener = cfg
+	str.Route = cfg
 	str.Type = cfg.Protocol
+	str.Direction = ugate.StreamTypeIn
 
-	if !in {
-		str.Egress = true
-	}
-
-	str.ReadErr = ug.HandleStream(str)
+	str.ReadErr = ipo.Gate.HandleStream(str)
+	return str.ReadErr
 }
 
 // Status:
@@ -86,7 +127,7 @@ func handleAcceptedConn(ug *ugatesvc.UGate, acceptedCon net.Conn, in bool) {
 // https://github.com/ryanchapman/go-any-proxy/blob/master/any_proxy.go,
 // and other examples.
 // Based on REDIRECT.
-func SniffIptables(str *ugate.Stream) (string, error) {
+func SniffIptables(str *ugate.Conn) (string, error) {
 	if _, ok := str.Out.(*net.TCPConn); !ok {
 		return "", errors.New("invalid connection for iptbles")
 	}

@@ -18,7 +18,7 @@ func TestFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	alice.Add(&ugate.Listener{
+	alice.StartListener(&ugate.Route{
 		Address:   fmt.Sprintf("0.0.0.0:%d", 14011),
 		Protocol:  "tls",
 		Handler:   &ugatesvc.EchoHandler{},
@@ -29,7 +29,7 @@ func TestFull(t *testing.T) {
 	bob, err := Run(config, &ugate.GateCfg{
 		BasePort: 14100,
 	})
-	bob.Add(&ugate.Listener{
+	bob.StartListener(&ugate.Route{
 		Address:   fmt.Sprintf("0.0.0.0:%d", 14111),
 		Protocol:  "tls",
 		Handler:   &ugatesvc.EchoHandler{},

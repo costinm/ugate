@@ -49,7 +49,7 @@ func sendRes(w http.ResponseWriter, res *dns.Msg, r *http.Request, m []byte) {
 			ttl = t
 		}
 	}
-	//ServerMetrics.Total.Add(1)
+	//ServerMetrics.Total.StartListener(1)
 	w.Header().Add("cache-control", "max-age="+strconv.Itoa(int(ttl)))
 
 	resB, _ := res.PackBuffer(m)
@@ -97,7 +97,7 @@ func (s *DmDns) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sendRes(w, res, r, m)
 	if len(res.Answer) > 0 {
 		//log.Println("HTTP DNS ", req.Question[0].Name, time.Since(t0))
-		//ServerMetrics.Latency.Add(time.Since(t0).Seconds())
+		//ServerMetrics.Latency.StartListener(time.Since(t0).Seconds())
 	}
 	return
 }
@@ -132,12 +132,12 @@ func (s *DmDns) ForwardHttp(req *dns.Msg) (*dns.Msg, error) {
 	hreq = hreq.WithContext(ctx)
 	res, err := s.H2.Do(hreq)
 	if err != nil {
-		//ClientMetrics.Errors.Add(1)
+		//ClientMetrics.Errors.StartListener(1)
 		//log.Print("DNS Error from http ", err)
 		return nil, err
 	}
 	if res.StatusCode != 200 {
-		//ClientMetrics.Errors.Add(1)
+		//ClientMetrics.Errors.StartListener(1)
 		log.Println("DNS Error from http ", s.BaseUrl, req.Question[0].Name, res.StatusCode)
 		return nil, errors.New("Error")
 	}

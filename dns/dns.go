@@ -297,11 +297,11 @@ func (s *DmDns) DNSOverTCP(in io.ReadCloser, out io.Writer) error {
 //
 // Wrapps the real process method with stats gathering and builds a reverse map of IP to names
 func (s *DmDns) Process(req *dns.Msg) *dns.Msg {
-	//ClientMetrics.Total.Add(1)
+	//ClientMetrics.Total.StartListener(1)
 	if len(req.Question) == 0 {
 		m := new(dns.Msg)
 		m.SetRcode(req, dns.RcodeServerFailure)
-		//ClientMetrics.Errors.Add(1)
+		//ClientMetrics.Errors.StartListener(1)
 		return m
 	}
 
@@ -341,12 +341,12 @@ func (s *DmDns) Process(req *dns.Msg) *dns.Msg {
 		if d > 1*time.Second {
 			log.Println("DNS: ", req.Question[0].Name, d, res.Answer)
 		}
-		//ClientMetrics.Latency.Add(time.Since(t0).Seconds())
+		//ClientMetrics.Latency.StartListener(time.Since(t0).Seconds())
 	}
 	if res == nil {
 		m := new(dns.Msg)
 		m.SetRcode(req, dns.RcodeServerFailure)
-		//ClientMetrics.Errors.Add(1)
+		//ClientMetrics.Errors.StartListener(1)
 		return res
 	}
 
@@ -428,7 +428,7 @@ func (s *DmDns) process(req *dns.Msg) *dns.Msg {
 	}
 
 	//log.Printf("DNSE: '%s' %v", name, err)
-	//ClientMetrics.Errors.Add(1)
+	//ClientMetrics.Errors.StartListener(1)
 
 	m := new(dns.Msg)
 	m.SetRcode(req, dns.RcodeServerFailure)

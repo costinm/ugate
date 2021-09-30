@@ -62,7 +62,7 @@ func (q *Quic) handleRaw(qs quic.Stream) {
 
 }
 
-func (ugs *QuicMUX) DialStream(ctx context.Context, addr string, inStream *ugate.Stream) (*ugate.Stream, error) {
+func (ugs *QuicMUX) DialStream(ctx context.Context, addr string, inStream *ugate.Conn) (*ugate.Conn, error) {
 	//if UseRawStream {
 		s, err := ugs.s.OpenStream()
 		if err != nil {

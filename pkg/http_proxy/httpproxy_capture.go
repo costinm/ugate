@@ -138,7 +138,7 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	gw.gw.OnStream(str)
 
 	str.Dest = host
-	str.Egress = true
+	str.Direction = ugate.StreamTypeOut
 	str.PostDialHandler = func(conn net.Conn, err error) {
 		if err != nil {
 			w.WriteHeader(503)

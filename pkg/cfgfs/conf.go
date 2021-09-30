@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -80,7 +81,7 @@ func (c *Conf) Get(name string) ([]byte, error) {
 	}
 
 	for _, b := range c.base {
-		l := b + name
+		l := filepath.Join(b, name)
 
 		if _, err := os.Stat(l); err == nil { // || !os.IsNotExist(err)
 			res, err := ioutil.ReadFile(l)

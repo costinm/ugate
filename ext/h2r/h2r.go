@@ -84,7 +84,7 @@ func New(ug *ugatesvc.UGate) *H2R {
 type H2RMux struct {
 	*http2.ClientConn
 
-	tlsStr *ugate.Stream
+	tlsStr *ugate.Conn
 	dm *ugate.DMNode
 
 	// Raw frame support
@@ -98,7 +98,7 @@ type H2RMux struct {
 
 // DialMUX creates one connection to a mesh node, using one of the
 // supported multiplex protocols.
-func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
+func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Conn)) (ugate.Muxer, error) {
 	// TODO: try all published addresses, including all protos
 	addr := dm.Addr
 
@@ -238,8 +238,13 @@ func (t *H2R) HandleH2R(w http.ResponseWriter, r *http.Request) {
 	//
 	//}()
 
+	//t.ug.RegisterEndpoint(n.ID)
+
 	// Wait until t.MarkDead is called - or the con is closed
 	<-end
+
+	// TODO:
+	//t.ug.UnRegisterEndpoint(n.ID)
 
 	n.Muxer = nil
 	return

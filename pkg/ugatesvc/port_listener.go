@@ -1,6 +1,7 @@
 package ugatesvc
 
 import (
+	"errors"
 	"log"
 	"net"
 	"strings"
@@ -56,38 +57,45 @@ import (
 // - use websocket - no multiplexing.
 // - binary messages, using websocket frames
 
-type PortListener struct {
-	ugate.Listener
 
-	NetListener net.Listener
-	PortHandler ugate.Handler
+// StartListener and Start a real port listener on a port.
+// Virtual listeners can be added to ug.Conf or the mux.
+func (ug *UGate) StartListener(ll *ugate.Listener) error {
+
+	err := ug.startPortListener(ll)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
+
 
 // Creates a raw (port) TCP listener. Accepts connections
 // on a local port, forwards to a remote destination.
-func (cfg *PortListener) Start(gate *UGate) error {
-	ll := cfg
+func (gate *UGate) startPortListener(pl *ugate.Listener) error {
+	ll := pl
 
-	if cfg.Address == "" {
-		cfg.Address = ":0"
+	if pl.Address == "" {
+		pl.Address = ":0"
 	}
 
-	if cfg.Address[0] == '-' {
+	if pl.Address[0] == '-' {
 		return nil // virtual listener
 	}
 
-	if cfg.NetListener == nil {
-		if strings.HasPrefix(cfg.Address, "/") ||
-				strings.HasPrefix(cfg.Address, "@") {
+	if pl.NetListener == nil {
+		if strings.HasPrefix(pl.Address, "/") ||
+				strings.HasPrefix(pl.Address, "@") {
 			us, err := net.ListenUnix("unix",
 				&net.UnixAddr{
-					Name: cfg.Address,
+					Name: pl.Address,
 					Net:  "unix",
 				})
 			if err != nil {
 				return err
 			}
-			cfg.NetListener = us
+			pl.NetListener = us
 		} else {
 			// Not supported: RFC: address "" means all families, 0.0.0.0 IP4, :: IP6, localhost IP4/6, etc
 			listener, err := net.Listen("tcp", ll.Address)
@@ -100,19 +108,43 @@ func (cfg *PortListener) Start(gate *UGate) error {
 					return err
 				}
 			}
-			cfg.NetListener = listener
+			pl.NetListener = listener
 		}
-
+	}
+	switch pl.Protocol {
+	case ugate.ProtoTLS:
+		pl.PortHandler = ugate.HandlerFunc(gate.handleTLSorSNI)
+	case ugate.ProtoSNI:
+		pl.PortHandler = ugate.HandlerFunc(gate.handleSNI)
+	case ugate.ProtoBTS:
+		pl.PortHandler = ugate.HandlerFunc(gate.acceptedHbone)
+	case ugate.ProtoBTSC:
+		pl.PortHandler = ugate.HandlerFunc(gate.acceptedHboneC)
+	case ugate.ProtoHTTP:
+		pl.PortHandler = ugate.HandlerFunc(gate.H2Handler.handleHTTPListener)
+	case ugate.ProtoTCPOut:
+		if pl.ForwardTo == "" {
+			return errors.New("invalid TCPOut, missing ForwardTo")
+		}
+		pl.PortHandler = ugate.HandlerFunc(gate.handleTCPEgress)
+	case ugate.ProtoTCPIn:
+		if pl.ForwardTo == "" {
+			return errors.New("invalid TCPIn, missing ForwardTo")
+		}
+		pl.PortHandler = ugate.HandlerFunc(gate.handleTCPForward)
+	default:
+		log.Println("Unspecified port, default to forward (in)")
+		pl.PortHandler = ugate.HandlerFunc(gate.handleTCPForward)
 	}
 
-	go ll.serve(gate)
+	go serve(ll, gate)
 	return nil
 }
 
-func (pl *PortListener) Close() error {
-	pl.NetListener.Close()
-	return nil
-}
+//func (pl *PortListener) Close() error {
+//	pl.NetListener.Close()
+//	return nil
+//}
 
 //func (pl PortListener) Accept() (net.Conn, error) {
 //	return pl.NetListener.Accept()
@@ -128,7 +160,7 @@ func (pl *PortListener) Close() error {
 // For -R, runs on the remote ssh server to accept connections and forward back to client, which in turn
 // will forward to a Port/app.
 // Blocking.
-func (pl *PortListener) serve(gate *UGate) {
+func serve(pl *ugate.Listener, gate *UGate) {
 	log.Println("uGate: listen ", pl.Address, pl.NetListener.Addr(), pl.ForwardTo, pl.Protocol, pl.Handler, pl.PortHandler)
 	for {
 		remoteConn, err := pl.NetListener.Accept()
@@ -147,7 +179,7 @@ func (pl *PortListener) serve(gate *UGate) {
 		if pl.PortHandler != nil {
 			go func() {
 				bconn := ugate.GetStream(remoteConn, remoteConn)
-				bconn.Listener = &pl.Listener
+				bconn.Listener = pl
 				bconn.Type = pl.Protocol
 				gate.OnStream(bconn)
 				defer gate.OnStreamDone(bconn)
@@ -155,16 +187,6 @@ func (pl *PortListener) serve(gate *UGate) {
 				pl.PortHandler.Handle(bconn)
 			}()
 			return
-		}
-		switch pl.Protocol {
-		case ugate.ProtoTLS:
-			go gate.handleTLS(&pl.Listener, remoteConn)
-		case ugate.ProtoBTS:
-			go gate.handleBTS(&pl.Listener, remoteConn)
-		case ugate.ProtoHTTP:
-			go gate.H2Handler.handleHTTPListener(&pl.Listener, remoteConn)
-		default:
-			go gate.handleAcceptedConn(&pl.Listener, remoteConn)
 		}
 	}
 }

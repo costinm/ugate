@@ -30,10 +30,10 @@ import (
 //	}
 //
 //	// TODO: Make the TTL variable
-//	req.Header.Add("TTL", "0")
+//	req.Header.StartListener("TTL", "0")
 //
 //	if token != "" {
-//		req.Header.Add("Authorization", fmt.Sprintf(`key=%s`, token))
+//		req.Header.StartListener("Authorization", fmt.Sprintf(`key=%s`, token))
 //	}
 //
 //	// If there is no payload then we don't actually need encryption
@@ -48,9 +48,9 @@ import (
 //
 //	req.Body = ioutil.NopCloser(bytes.NewReader(payload.Ciphertext))
 //	req.ContentLength = int64(len(payload.Ciphertext))
-//	req.Header.Add("Encryption", headerField("salt", payload.Salt))
-//	req.Header.Add("Crypto-Key", headerField("dh", payload.ServerPublicKey))
-//	req.Header.Add("Content-Encoding", "aesgcm")
+//	req.Header.StartListener("Encryption", headerField("salt", payload.Salt))
+//	req.Header.StartListener("Crypto-Key", headerField("dh", payload.ServerPublicKey))
+//	req.Header.StartListener("Content-Encoding", "aesgcm")
 //
 //	return req, nil
 //}
@@ -142,7 +142,7 @@ func SubscriptionFromJSON(b []byte) (*Subscription, error) {
 //
 //	req, err := NewPushRequest(sub, message, token)
 //	// Default TTL
-//	req.Header.Add("ttl", "0")
+//	req.Header.StartListener("ttl", "0")
 //	if err != nil {
 //		return nil, err
 //	}

@@ -19,23 +19,23 @@ import (
 type TLSConn struct {
 	// Raw TCP connection, for remote address and stats
 	// TODO: for H2-over-TLS-over-WS, it will be a WS conn
-	*ugate.Stream
+	*ugate.Conn
 
 	// wrapps the original conn for Local/RemoteAddress and deadlines
 	// Implements CloseWrite, ConnectionState,
 	tls *tls.Conn
 }
 
-func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*ugate.Stream, error) {
+func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*ugate.Conn, error) {
 	lc := &TLSConn{
 	}
-	if mc, ok := nc.(*ugate.Stream); ok {
-		lc.Stream = mc
+	if mc, ok := nc.(*ugate.Conn); ok {
+		lc.Conn = mc
 		if rnc, ok := lc.Out.(net.Conn); ok {
 			nc = rnc
 		}
 	} else {
-		lc.Stream = ugate.NewStream()
+		lc.Conn = ugate.NewStream()
 	}
 
 	config, keyCh := ConfigForPeer(ug.Auth,cfg, peerID)
@@ -47,34 +47,35 @@ func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config
 	if err != nil {
 		return nil, err
 	}
-	lc.Stream.In = lc.tls
-	lc.Stream.Out = lc.tls
+	lc.Conn.In = lc.tls
+	lc.Conn.Out = lc.tls
 
 	//lc.tls.ConnectionState().DidResume
 	tcs := lc.tls.ConnectionState()
-	lc.Stream.TLS = &tcs
+	lc.Conn.TLS = &tcs
 	lc.tls = cs
 
-	return lc.Stream, err
+	return lc.Conn, err
 }
 
 // SecureInbound runs the TLS handshake as a server.
 // Accepts connections without client certificate - alternate form of auth will be used, either
 // an inner TLS connection or JWT in metadata.
-func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*ugate.Stream, error) {
+func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*ugate.Conn, error) {
 	config, keyCh := ConfigForPeer(ug.Auth, cfg, "")
-	if l.ALPN == nil {
-		config.NextProtos = []string{"h2r", "h2"}
-	} else {
-		config.NextProtos = l.ALPN
+	if l != nil {
+		if l.ALPN == nil {
+			config.NextProtos = []string{"h2r", "h2"}
+		} else {
+			config.NextProtos = l.ALPN
+		}
 	}
-
 	tc := &TLSConn{}
-	tc.Stream = ugate.NewStream()
-	if mc, ok := nc.(*ugate.Stream); ok {
+	tc.Conn = ugate.NewStream()
+	if mc, ok := nc.(*ugate.Conn); ok {
 		m := mc
 		// Sniffed, etc
-		tc.Listener = m.Listener
+		tc.Route = m.Route
 		tc.Dest = m.Dest
 	}
 
@@ -85,11 +86,11 @@ func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Con
 		return nil, err
 	}
 	tcs := tc.tls.ConnectionState()
-	tc.Stream.TLS = &tcs
-	tc.Stream.In = tc.tls
-	tc.Stream.Out = tc.tls
+	tc.Conn.TLS = &tcs
+	tc.Conn.In = tc.tls
+	tc.Conn.Out = tc.tls
 
-	return tc.Stream, err
+	return tc.Conn, err
 }
 
 func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
@@ -218,7 +219,7 @@ const (
 //
 // TODO: in mesh, use one cypher suite (TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
 // maybe 2 ( since keys are ECDSA )
-func ParseTLS(acc *ugate.Stream) (*clientHelloMsg,error) {
+func ParseTLS(acc *ugate.Conn) (*clientHelloMsg,error) {
 	buf, err := acc.Fill(5)
 	if err != nil {
 		return nil, err

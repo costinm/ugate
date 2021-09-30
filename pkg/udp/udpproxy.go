@@ -123,7 +123,7 @@ type UdpNat struct {
 	// External address
 	DestAddr *net.UDPAddr
 
-	//ugate.Stream
+	//ugate.Conn
 	// bound to a local port (on the real network).
 	UDP *net.UDPConn
 
@@ -425,7 +425,7 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 			UDP: udpCon,
 		}
 
-		l := udpg.cfg.FindListener(dstAddr, dstPort, "udp://")
+		l := udpg.cfg.FindRoutePrefix(dstAddr, dstPort, "udp://")
 		if l.ForwardTo != "" {
 			udpN.DestAddr, err = net.ResolveUDPAddr("udp", l.ForwardTo)
 			if err != nil {

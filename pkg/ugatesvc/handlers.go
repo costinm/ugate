@@ -29,7 +29,7 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.(http.Flusher).Flush()
 
 	// H2 requests require write to be flushed - buffering happens !
-	// Wrap w.Body into Stream which does this automatically
+	// Wrap w.Body into Conn which does this automatically
 	str := ugate.NewStreamRequest(r, w, nil)
 
 	eh.handle(str, false)
@@ -51,7 +51,7 @@ type StreamInfo struct {
 }
 
 
-func GetStreamInfo(str *ugate.Stream) *StreamInfo {
+func GetStreamInfo(str *ugate.Conn) *StreamInfo {
 	si := &StreamInfo{
 		LocalAddr:  str.LocalAddr(),
 		RemoteAddr: str.RemoteAddr(),
@@ -68,7 +68,7 @@ func GetStreamInfo(str *ugate.Stream) *StreamInfo {
 	return si
 }
 
-func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
+func (*EchoHandler) handle(str *ugate.Conn, serverFirst bool) error {
 	d := make([]byte, 2048)
 	si := GetStreamInfo(str)
 	si.RemoteID=   RemoteID(str)
@@ -80,7 +80,7 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	if serverFirst {
 		str.Write(b.Bytes())
 	}
-	//ac.SetDeadline(time.Now().Add(5 * time.Second))
+	//ac.SetDeadline(time.Now().StartListener(5 * time.Second))
 	n, err := str.Read(d)
 	if err != nil {
 		return err
@@ -102,7 +102,7 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 func (eh *EchoHandler) String() string {
 	return "Echo"
 }
-func (eh *EchoHandler) Handle(ac *ugate.Stream) error {
+func (eh *EchoHandler) Handle(ac *ugate.Conn) error {
 	if DebugEcho {
 		log.Println("ECHOS ", ac)
 	}
@@ -300,6 +300,52 @@ func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Treat it as regular stream forwarding
 	gw.HandleVirtualIN(str)
+
+	if ugate.DebugClose {
+		log.Println("Handler closed for ", r.RequestURI)
+	}
+
+}
+
+// Inbound TLS over H2C.
+// Used in KNative or similar environmnets that get a H2 POST or CONNECT
+// Dest is local.
+func (gw *UGate) HandleTLSoverH2(w http.ResponseWriter, r *http.Request) {
+	// Create a stream, used for proxy with caching.
+	str := ugate.NewStreamRequest(r, w, nil)
+
+	parts := strings.Split(r.RequestURI, "/")
+	str.Dest = parts[2]
+
+	str.PostDialHandler = func(conn net.Conn, err error) {
+		if err != nil {
+			w.Header().Add("Error", err.Error())
+			w.WriteHeader(500)
+			w.(http.Flusher).Flush()
+			return
+		}
+		//w.Header().Set("Trailer", "X-Close")
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+	}
+	defer func() {
+		// Handler is done - even if it didn't call close, prevent calling it again.
+		if ugate.DebugClose {
+			log.Println("HTTP.Close - handler done, no close ", str.Dest)
+		}
+		str.ServerClose = true
+	}()
+
+	tlsCfg := gw.TLSConfig
+	tc, err := gw.NewTLSConnIn(str.Context(), nil, str, tlsCfg)
+	if err != nil {
+		str.ReadErr = err
+		log.Println("TLS: ", str.RemoteAddr(), str.Dest, str.Route, err)
+		return
+	}
+
+	// Treat it as regular stream forwarding
+	gw.HandleVirtualIN(tc)
 
 	if ugate.DebugClose {
 		log.Println("Handler closed for ", r.RequestURI)

@@ -12,11 +12,28 @@ import (
 	"github.com/costinm/ugate"
 )
 
+
+// There are few options on how to pass stream metadata around:
+//
+// Mux proto:
+// - H2 - clear protocol, but has overhead and complexity and because
+// of muxing we can't splice
+//
+// Splice-able proto:
+// - use HTTP/1.1 CONNECT - and mime headers
+// - use HA Proxy - custom binary
+// - use a proto (possibly with simplified proto parsing), like Istio
+// - ???
+//
+// A mixed mode is also possible - proto in a h2 or http header.
+// Encoding/decoding speed and memory use are the key - technically
+// all options can be supported.
+
 type MimeEncoder struct {
 
 }
 
-func (*MimeEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
+func (*MimeEncoder) Unmarshal(s *ugate.Conn) (done bool, err error) {
 	buf, err := s.Fill(5)
 	if err != nil {
 		return false, err
@@ -40,16 +57,17 @@ func (*MimeEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
 	s.Skip(5 + int(len))
 
 	if ugate.DebugClose {
-		log.Println("Stream.receiveHeaders ", s.StreamId, s.InHeader, s.RBuffer().Size())
+		log.Println("Conn.receiveHeaders ", s.StreamId, s.InHeader, s.RBuffer().Size())
 	}
 
 	return true, nil
 }
 
-func (*MimeEncoder) Marshal(s *ugate.Stream) error {
+func (*MimeEncoder) Marshal(s *ugate.Conn) error {
 	bb := s.WBuffer()
 	h := s.InHeader
-	if s.Egress {
+	if s.Direction == ugate.StreamTypeOut ||
+			s.Direction == ugate.StreamTypeUnknown {
 		h = s.OutHeader
 	}
 
@@ -70,7 +88,7 @@ func (*MimeEncoder) Marshal(s *ugate.Stream) error {
 	}
 
 	if ugate.DebugClose {
-		log.Println("Stream.sendHeaders ", s.StreamId, h)
+		log.Println("Conn.sendHeaders ", s.StreamId, h)
 	}
 
 	return nil
@@ -98,7 +116,7 @@ type BEncoder struct {
 
 }
 
-func (*BEncoder) AddHeader(s *ugate.Stream, k, v []byte) {
+func (*BEncoder) AddHeader(s *ugate.Conn, k, v []byte) {
 	bb := s.WBuffer()
 	if bb.Size() == 0 {
 		bb.WriteByte(0)
@@ -113,7 +131,7 @@ func (*BEncoder) AddHeader(s *ugate.Stream, k, v []byte) {
 	bb.Write(v)
 }
 
-func (*BEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
+func (*BEncoder) Unmarshal(s *ugate.Conn) (done bool, err error) {
 	h, err := s.Fill(5)
 	if err != nil {
 		return false, err
@@ -128,10 +146,11 @@ func (*BEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
 }
 
 
-func (*BEncoder) Marshal(s *ugate.Stream) error {
+func (*BEncoder) Marshal(s *ugate.Conn) error {
 	bb := s.WBuffer()
 	h := s.InHeader
-	if s.Egress {
+	if s.Direction == ugate.StreamTypeOut ||
+		s.Direction == ugate.StreamTypeUnknown {
 		h = s.OutHeader
 	}
 	// TODO: leave 5 bytes at Start to reproduce streaming gRPC format
@@ -152,7 +171,7 @@ func (*BEncoder) Marshal(s *ugate.Stream) error {
 	bb.WriteByte(2)
 
 	if ugate.DebugClose {
-		log.Println("Stream.sendHeaders ", s.StreamId, h)
+		log.Println("Conn.sendHeaders ", s.StreamId, h)
 	}
 
 	return nil

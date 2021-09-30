@@ -84,15 +84,13 @@ const (
 */
 func New(ug *ugatesvc.UGate) {
 	p := ug.Config.BasePort+ugate.PORT_SOCKS
-	ll := &ugatesvc.PortListener{
-		Listener: ugate.Listener{
-			Address:  fmt.Sprintf("127.0.0.1:%d", p),
-			Protocol: ugate.ProtoSocks,
-		},
+	ll := &ugate.Listener{
+		Address:  fmt.Sprintf("127.0.0.1:%d", p),
+		Protocol: ugate.ProtoSocks,
 		PortHandler: &Socks{ug: ug},
 	}
 
-	err := ll.Start(ug)
+	err := ug.StartListener(ll)
 	if err != nil {
 		log.Println("Failed to start SOCKS, continue ", err)
 	}
@@ -106,9 +104,8 @@ func (s *Socks) String() string {
 	return "socks"
 }
 
-func (s *Socks) Handle(bconn *ugate.Stream) error{
-
-	bconn.Egress = true
+func (s *Socks) Handle(bconn *ugate.Conn) error{
+	bconn.Direction = ugate.StreamTypeOut
 
 	_, bconn.ReadErr = Unmarshal(bconn)
 	if bconn.ReadErr != nil {
@@ -120,7 +117,7 @@ func (s *Socks) Handle(bconn *ugate.Stream) error{
 	return bconn.ReadErr
 }
 
-func  Unmarshal(s *ugate.Stream) (done bool, err error) {
+func  Unmarshal(s *ugate.Conn) (done bool, err error) {
 	// Fill the read buffer with one Read.
 	// Typically 3-4 bytes unless client is eager.
 

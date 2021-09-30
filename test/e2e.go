@@ -52,7 +52,7 @@ func InitEcho(port int) *ugatesvc.UGate {
 	}, cs)
 
 	// Echo - TCP
-	ug.Add(&ugate.Listener{
+	ug.StartListener(&ugate.Route{
 		Address:   fmt.Sprintf("0.0.0.0:%d", port + 12),
 		Handler:   &ugatesvc.EchoHandler{},
 	})
@@ -75,12 +75,12 @@ func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate
 	}
 
 	// Echo - TCP
-	ug.Add(&ugate.Listener{
+	ug.StartListener(&ugate.Route{
 		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+11),
 		Protocol:  "tls",
 		Handler:   &ugatesvc.EchoHandler{},
 	})
-	ug.Add(&ugate.Listener{
+	ug.StartListener(&ugate.Route{
 		Address: fmt.Sprintf("0.0.0.0:%d", basePort+12),
 		Handler: &ugatesvc.EchoHandler{},
 	})
@@ -104,7 +104,7 @@ func CheckEcho(in io.Reader, out io.Writer) (string, error) {
 		return "", err
 	}
 
-	//ab.SetDeadline(time.Now().Add(5 * time.Second))
+	//ab.SetDeadline(time.Now().StartListener(5 * time.Second))
 	n, err := in.Read(d)
 	if err != nil {
 		return "", err

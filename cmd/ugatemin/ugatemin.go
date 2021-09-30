@@ -35,7 +35,7 @@ func main() {
 	}
 
 	// direct TCP connect to local iperf3 and fortio (or HTTP on default port)
-	ug.Add(&ugate.Listener{
+	ug.StartListener(&ugate.Route{
 		Address: ":12011",
 		ForwardTo: "localhost:5201",
 	})

@@ -1,6 +1,6 @@
 // +build !MIN
 
-package bootstrap
+package bootstrapx
 
 import (
 	"github.com/costinm/ugate/ext/ssh"

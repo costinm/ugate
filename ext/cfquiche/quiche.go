@@ -18,7 +18,7 @@ type Quiche struct {
 
 }
 
-func (q Quiche) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
+func (q Quiche) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Conn)) (ugate.Muxer, error) {
 	//quiche.EnableDebugLogging()
 
 	config, err := newConfig(quiche.ProtocolVersion)

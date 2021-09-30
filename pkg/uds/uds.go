@@ -485,7 +485,7 @@ func (uds *UdsConn) File() *os.File {
 	return fd
 }
 
-func processUnixConn(bc *ugate.Stream) error {
+func processUnixConn(bc *ugate.Conn) error {
 	uc, ok := bc.Out.(*net.UnixConn)
 	if !ok {
 		return errors.New("Unexpected con")

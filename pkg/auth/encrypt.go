@@ -390,7 +390,7 @@ func hkdf(salt, ikm, info []byte, length int) []byte {
 
 // Encrypt the plaintext message using AES128/GCM
 func encrypt128(plaintext, key, nonce []byte) ([]byte, error) {
-	// Add padding. There is a uint16 size followed by that number of bytes of
+	// StartListener padding. There is a uint16 size followed by that number of bytes of
 	// padding.
 	// TODO: Right now we leave the size at zero. We should add a padding option
 	// that allows the payload size to be obscured.

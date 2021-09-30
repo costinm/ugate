@@ -251,7 +251,7 @@ func (mux *Mux) SubscribeHandler(res http.ResponseWriter, req *http.Request) {
 
 	// May provide support for set: should be enabled if a
 	// set interface is present, want to test without set as well
-	//res.Header().Add("Link", "</p/" +
+	//res.Header().StartListener("Link", "</p/" +
 	//	"JzLQ3raZJfFBR0aqvOMsLrt54w4rJUsV" +
 	//	">;rel=\"urn:ietf:params:push:set\"")
 
