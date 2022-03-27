@@ -1,17 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"net"
 	_ "net/http/pprof"
 
-
-	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/dns"
-	"github.com/costinm/ugate/pkg/http_proxy"
-	"github.com/costinm/ugate/pkg/socks"
-	"github.com/costinm/ugate/pkg/udp"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 
 	_ "github.com/costinm/ugate/ext/bootstrap"
@@ -42,45 +34,9 @@ func main() {
 	// Load configs from the current dir and var/lib/dmesh, or env variables
 	// Writes to current dir.
 	config := ugatesvc.NewConf("./", "./var/lib/dmesh")
-	Run(config, nil)
+	_, err := ugatesvc.Run(config, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
 	select {}
-}
-
-func Run(config ugate.ConfStore, g *ugate.GateCfg) (*ugatesvc.UGate, error){
-	// Start a Gate. Basic H2 and H2R services enabled.
-	ug := ugatesvc.New(config, nil, g)
-
-	sf := []ugatesvc.StartFunc{}
-	if ugatesvc.InitHooks != nil {
-		for _, h := range ugatesvc.InitHooks {
-			s := h(ug)
-			if s != nil {
-				sf = append(sf, s)
-			}
-		}
-	}
-
-	// Init DNS capture and server
-	dnss, _ := dns.NewDmDns(5223)
-	//GW. = dnss
-	net.DefaultResolver.PreferGo = true
-	net.DefaultResolver.Dial = dns.DNSDialer(5223)
-
-	ug.DNS = dnss
-	// UDP Gate is used with TProxy and lwIP.
-	udp.New(ug)
-
-	hproxy := http_proxy.NewHTTPProxy(ug)
-	hproxy.HttpProxyCapture(fmt.Sprintf("127.0.0.1:%d", ug.Config.BasePort+ugate.PORT_HTTP_PROXY))
-
-	socks.New(ug)
-
-	go dnss.Serve()
-
-	for _, h := range sf {
-		go h(ug)
-	}
-	ug.Start()
-	log.Println("Started: ", ug.Auth.ID)
-	return ug, nil
 }

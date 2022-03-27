@@ -11,9 +11,11 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net/http"
 	"sync"
 	"time"
 
+	"github.com/costinm/ugate/pkg/ugatesvc"
 	msgs "github.com/costinm/ugate/webpush"
 
 	"google.golang.org/grpc/codes"
@@ -80,6 +82,22 @@ type Connection struct {
 	resChannel chan *Response
 	errChannel chan error
 }
+
+// XDS and gRPC dependencies. Enabled for interop with Istio/XDS.
+func init() {
+	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
+		gs := NewXDS(msgs.DefaultMux)
+		grpcS := grpc.NewServer()
+		ug.Mux.HandleFunc("/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources", func(writer http.ResponseWriter, request *http.Request) {
+			grpcS.ServeHTTP(writer, request)
+		})
+		RegisterAggregatedDiscoveryServiceServer(grpcS, gs)
+
+		// TODO: register for config change, connect to upstream
+		return nil
+	})
+}
+
 
 func NewXDS(mux *msgs.Mux) *GrpcService {
 	g := &GrpcService{Mux: mux,

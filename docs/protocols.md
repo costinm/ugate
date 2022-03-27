@@ -26,3 +26,7 @@ and 2B + 4B(mask) for client:
 - frame type - ping, ping, text, binary, cont, close
 - payload - 1B or 3 B
 - 
+
+# WebRTC 
+
+In future it may use QUIC - currently UDP+SCTP. Best protocol for interop with web browsers, 2-way.

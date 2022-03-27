@@ -16,6 +16,17 @@ import (
 	"github.com/lucas-clemente/quic-go/http3"
 )
 
+func init() {
+	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
+		qa := New(ug)
+
+		return func(ug *ugatesvc.UGate) {
+			qa.Start()
+		}
+	})
+}
+
+
 // Quic is the adapter to QUIC/H3/MASQUE for uGate.
 //
 // Implements:

@@ -14,10 +14,12 @@ import (
 // Simple file-based config and secret store.
 //
 // Implements a ConfStore interface with List/Get/Set interface.
+//
 // TODO: Watch interface - using messages/pubsub !!!
 //
 // TODO: switch to yaml, support K8S style
 //
+// TODO: integrate with krun, use the REST as a config source, possibly with watcher
 type Conf struct {
 	// Base directory. If not set, no config will be saved and read
 	// will only return env or in-memory configs. First will be used for write.

@@ -3,6 +3,8 @@ package webpush;
 
 option go_package = "github.com/costinm/wpgate/pkg/msgs";
 
+// Experimental - proto representation for 'webpush' messages, using XDS as transport.
+
 // Common fields to be encoded in the 'data' proto
 message MessageData {
 

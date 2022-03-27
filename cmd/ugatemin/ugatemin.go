@@ -1,41 +1,29 @@
 package main
 
 import (
-	"net"
+	"log"
 
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
-var initHooks []func(gate *ugatesvc.UGate)
-
 // Minimal uGate - not using any optional package.
 // Used to determine the 'base' size and cost of various options.
 //
-// Excluded:
-// - WebRTC
-// - iptables or TUN
-// - DNS
-//
 // Defaults to port 12000, with a Iperf3 forward on 12011
-
 func main() {
 	config := ugatesvc.NewConf(".", "./var/lib/dmesh")
 	cfg := &ugate.GateCfg{
 		BasePort: 12000,
 		Domain: "h.webinf.info",
 	}
-	// Start a Gate. Basic H2 and H2R services enabled.
-	ug := ugatesvc.NewGate(&net.Dialer{}, nil, cfg, config)
-
-	if initHooks != nil {
-		for _, h := range initHooks {
-			h(ug)
-		}
+	ug, err := ugatesvc.Run(config, cfg)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// direct TCP connect to local iperf3 and fortio (or HTTP on default port)
-	ug.StartListener(&ugate.Route{
+	ug.StartListener(&ugate.Listener{
 		Address: ":12011",
 		ForwardTo: "localhost:5201",
 	})

@@ -199,25 +199,7 @@ func (a *Auth) HandleSTS(w http.ResponseWriter, req *http.Request) {
 	// TODO:
 }
 
-type K8STokenRequest struct {
-	Kind string
-	APIVersion string
-	Spec K8STokenRequestSpec
-}
-
-type K8STokenRequestSpec struct {
-
-}
-
 // See golang.org/x/oauth2/google
-
-// Get a JWT using K8S method. Requires RBAC permission.
-//echo '{"kind":"TokenRequest","apiVersion":"authentication.k8s.io/v1","spec":{"audiences":["istio-ca"], "expirationSeconds":2592000}}' | \
-//    		kubectl create --raw /api/v1/namespaces/${NAMESPACE}/serviceaccounts/default/token -f - | \
-//    		jq -j '.status.token' > ${ISTIO_SRC}/var/run/secrets/tokens/istio-token
-func (a *Auth) JWT(aud []string) {
-
-}
 
 func (a *Auth) LoadManaged() {
 	addr := os.Getenv("KUBERNETES_SERVICE_HOST")

@@ -23,6 +23,11 @@ import (
 )
 
 type StartFunc func(ug *UGate)
+
+// TODO: convert them to take cfg as input, return an interface.
+// The interface should have CfgEvent(xx), with empty indicating start.
+// A Map[component]CfgEvent will be maintained. The interface impl may be the UGate
+//
 var InitHooks []func(gate *UGate) StartFunc
 
 

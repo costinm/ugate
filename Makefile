@@ -144,5 +144,5 @@ remote/_run: build
 	ssh  ${HOST} "cd /x/ugate; HOME=/x/ugate /x/ugate/ugate"
 
 update:
-	yq -j < cmd/ugate/testdata/ugate.yaml > cmd/ugate/testdata/ugate.json
+#	yq -j < cmd/ugate/testdata/ugate.yaml > cmd/ugate/testdata/ugate.json
 
