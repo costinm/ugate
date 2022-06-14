@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/costinm/ugate"
+
 	"gvisor.dev/gvisor/pkg/context"
 	"gvisor.dev/gvisor/pkg/sentry/socket/netstack"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -69,7 +70,6 @@ type TUNHandler interface {
 type UdpWriter interface {
 	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
 }
-
 
 /*
 
@@ -188,18 +188,17 @@ The NetworkDispatcher.DeliverNetworkPacket is also implemented by NIC
 
 var MTU = 9000
 
-
 // NewTUNFD creates a gVisor stack on a TUN.
 func NewTUNFD(fd io.ReadWriteCloser, handler TUNHandler, udpNat UDPHandler) UdpWriter {
 	var linkID stack.LinkEndpoint
 
 	useFD := os.Getenv("CHANNEL_LINK") == ""
-	if f,ok := fd.(*os.File); ok && useFD {
+	if f, ok := fd.(*os.File); ok && useFD {
 		// Bugs - after some time it stops reading.
 		// Workaround is to use the regular read with a patch.
 		ep, err := fdbased.New(&fdbased.Options{
 			MTU: uint32(MTU),
-			FDs: []int{int(f.Fd()),},
+			FDs: []int{int(f.Fd())},
 			// Readv = slowers, supported on TUN
 			// RecvMMsg = default for gvisor. Only supported for sockets
 			// PacketMMap = AF_PACKET, for veth
@@ -251,24 +250,24 @@ func NewTUNFD(fd io.ReadWriteCloser, handler TUNHandler, udpNat UDPHandler) UdpW
 					continue
 				}
 
-					// ToView also returns the first view - but allocates a buffer if multiple
-					// PullUp allocates too
+				// ToView also returns the first view - but allocates a buffer if multiple
+				// PullUp allocates too
 
-					// TODO: track how many views in each packet
+				// TODO: track how many views in each packet
 
-					// TODO: reuse a buffer
-					vv := pi.Pkt.Views()
-					if len(vv) == 1 {
-						fd.Write(vv[0])
-					} else {
-						n := 0
-						for _, v := range vv {
-							copy(m1[n:], v)
-							n += v.Size()
-						}
-
-						fd.Write(m1[0:n])
+				// TODO: reuse a buffer
+				vv := pi.Pkt.Views()
+				if len(vv) == 1 {
+					fd.Write(vv[0])
+				} else {
+					n := 0
+					for _, v := range vv {
+						copy(m1[n:], v)
+						n += v.Size()
 					}
+
+					fd.Write(m1[0:n])
+				}
 			}
 		}()
 		return t
@@ -292,19 +291,18 @@ func NewTUNFD(fd io.ReadWriteCloser, handler TUNHandler, udpNat UDPHandler) UdpW
 //	return false , false
 //}
 
-
 // NewTunCapture creates an in-process tcp stack, backed by an tun-like network interface.
 // All TCP streams initiated on the tun or localhost will be captured.
 func NewGvisorTunCapture(ep *stack.LinkEndpoint, handler TUNHandler, udpNat ugate.UDPHandler, snif bool) *GvisorTun {
 	t := &GvisorTun{
-		Handler: handler,
+		Handler:    handler,
 		UDPHandler: udpNat,
 	}
 
 	netProtos := []stack.NetworkProtocolFactory{
 		ipv4.NewProtocol,
 		ipv6.NewProtocol,
-		arp.NewProtocol }
+		arp.NewProtocol}
 	transProtos := []stack.TransportProtocolFactory{
 		tcp.NewProtocol,
 		udp.NewProtocol,
@@ -337,15 +335,14 @@ func NewGvisorTunCapture(ep *stack.LinkEndpoint, handler TUNHandler, udpNat ugat
 		NetworkProtocols:   netProtos,
 		TransportProtocols: transProtos,
 		//Clock:              clock,
-		Stats:              netstack.Metrics,
-		HandleLocal:        false, // accept from other nics
+		Stats:       netstack.Metrics,
+		HandleLocal: false, // accept from other nics
 		// Enable raw sockets for users with sufficient
 		// privileges.
 		RawFactory: raw.EndpointFactory{},
 		//UniqueID:   uniqueID,
 		//IPTables:   ipt,
 	})
-
 
 	loopbackLinkID := loopback.New()
 	if true || snif {
@@ -355,7 +352,7 @@ func NewGvisorTunCapture(ep *stack.LinkEndpoint, handler TUNHandler, udpNat ugat
 
 	addr1 := "\x7f\x00\x00\x01"
 	if err := t.IPStack.AddAddress(1, ipv4.ProtocolNumber,
-			tcpip.Address(addr1)); err != nil {
+		tcpip.Address(addr1)); err != nil {
 		log.Print("Can't add address", err)
 		return t
 	}
@@ -478,7 +475,6 @@ func (nt *GvisorTun) defUdpServer() error {
 		}
 	}()
 
-
 	return nil
 }
 
@@ -544,7 +540,7 @@ func (nt *GvisorTun) defUdp6Server() error {
 //	Dump = false
 //)
 
-func (nt *GvisorTun) DefTcpServer(handler TUNHandler)  {
+func (nt *GvisorTun) DefTcpServer(handler TUNHandler) {
 	var wq waiter.Queue
 	// No address - listen on all
 	//err = ep.Bind(tcpip.FullAddress{
@@ -557,7 +553,7 @@ func (nt *GvisorTun) DefTcpServer(handler TUNHandler)  {
 	//}
 	// MISSING ACCEPT
 	//ep, _ := nt.IPStack.NewRawEndpoint( tcp.ProtocolNumber,ipv4.ProtocolNumber, &wq, false)
-	ep, _ := nt.IPStack.NewEndpoint( tcp.ProtocolNumber,ipv4.ProtocolNumber, &wq)
+	ep, _ := nt.IPStack.NewEndpoint(tcp.ProtocolNumber, ipv4.ProtocolNumber, &wq)
 	ep.Bind(tcpip.FullAddress{Port: 0xffff})
 	//ep.Bind(tcpip.FullAddress{Port: 5201})
 	if err := ep.Listen(100); err != nil { // calls Register
@@ -609,7 +605,7 @@ func (nt *GvisorTun) DefTcpServer(handler TUNHandler)  {
 	//}()
 }
 
-func (nt *GvisorTun) DefTcp6Server()  {
+func (nt *GvisorTun) DefTcp6Server() {
 	//var wq waiter.Queue
 	//ep, err := nt.IPStack.NewEndpoint(tcp.ProtocolNumber, ipv6.ProtocolNumber, &wq)
 	//if err != nil {
@@ -691,7 +687,7 @@ func gsetRouteTable(ipstack *stack.Stack, real bool) {
 			NIC:         2,
 		},
 		{ // 10.12.0.0 - routed to the tun
-			Destination: sn("\x0a\x0c\x00\x00",        "\xff\xff\x00\x00"),
+			Destination: sn("\x0a\x0c\x00\x00", "\xff\xff\x00\x00"),
 			Gateway:     "",
 			NIC:         2,
 		},

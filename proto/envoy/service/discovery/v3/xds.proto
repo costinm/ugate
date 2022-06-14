@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+// GRPC package - part of the URL. Service is added.
+// URL: /PACKAGE.SERVICE/METHOD
+package envoy.service.discovery.v3;
+import "xds/envoy_simplified.proto";
+
+option go_package="github.com/costinm/grpc-mesh/gen/go/envoy/service/discovery";
+
+//	ServiceName: "envoy.service.discovery.v2.AggregatedDiscoveryService",
+
+
+// Bi-directional streaming interface for messages.
+// Subscribe, Ack, Push are represented as upstream messages.
+// Monitor, Receipts, SubscribeResponse, AckResponse are represented as downstream messages.
+//
+// See https://github.com/lyft/envoy-api#apis for a description of the role of
+// ADS and how it is intended to be used by a management server. ADS requests
+// have the same structure as their singleton xDS counterparts, but can
+// multiplex many resource types on a single stream. The type_url in the
+// DiscoveryRequest/DiscoveryResponse provides sufficient information to recover
+// the multiplexed singleton APIs at the Envoy instance and management server.
+service AggregatedDiscoveryService {
+    rpc StreamAggregatedResources(stream xds.DiscoveryRequest) returns (stream xds.DiscoveryResponse) {}
+}

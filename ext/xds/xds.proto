@@ -4,7 +4,7 @@ syntax = "proto3";
 // URL: /PACKAGE.SERVICE/METHOD
 package envoy.service.discovery.v3;
 
-option go_package="github.com/costinm/wpgate/pkg/xds";
+option go_package="github.com/costinm/ugate/xds";
 
 //	ServiceName: "envoy.service.discovery.v2.AggregatedDiscoveryService",
 

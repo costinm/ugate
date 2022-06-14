@@ -1,6 +1,6 @@
 module github.com/costinm/ugate
 
-go 1.16
+go 1.18
 
 require (
 	golang.org/x/net v0.0.0-20201224014010-6772e930b67b

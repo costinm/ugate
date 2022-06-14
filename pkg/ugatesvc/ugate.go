@@ -30,9 +30,7 @@ type StartFunc func(ug *UGate)
 //
 var InitHooks []func(gate *UGate) StartFunc
 
-
 type UGate struct {
-
 	Config *ugate.GateCfg
 
 	// Default dialer used to connect to host:port extracted from metadata.
@@ -41,7 +39,6 @@ type UGate struct {
 	// Can be replaced with a mux or egress dialer or router for
 	// integration.
 	parentDialer ugate.ContextDialer
-
 
 	DefaultRoute *ugate.Route
 
@@ -65,20 +62,21 @@ type UGate struct {
 	// a net.Conn or Conn, the dest will not be tracked here.
 	ActiveTcp map[int]*ugate.Conn
 
-	m    sync.RWMutex
+	m sync.RWMutex
 
 	Auth *auth.Auth
 
 	Msg *msgs.Mux
 
-	MuxDialers    map[string]ugate.MuxDialer
-	DNS           ugate.UDPHandler
-	UDPHandler    ugate.UDPHandler
+	MuxDialers map[string]ugate.MuxDialer
+	DNS        ugate.UDPHandler
+	UDPHandler ugate.UDPHandler
 }
 
 func NewConf(base ...string) ugate.ConfStore {
 	return cfgfs.NewConf(base...)
 }
+
 func Get(h2 ugate.ConfStore, name string, to interface{}) error {
 	raw, err := h2.Get(name)
 	if err != nil {
@@ -148,7 +146,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 
 	ug := &UGate{
 		parentDialer: &net.Dialer{},
-		MuxDialers: map[string]ugate.MuxDialer{},
+		MuxDialers:   map[string]ugate.MuxDialer{},
 		Config:       cfg,
 		NodesByID:    map[string]*ugate.DMNode{},
 		Nodes:        map[uint64]*ugate.DMNode{},
@@ -165,12 +163,11 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 		ug.DefaultRoute = l
 	}
 
-
 	ug.TLSConfig = &tls.Config{
 		//MinVersion: tls.VersionTLS13,
 		//PreferServerCipherSuites: ugate.preferServerCipherSuites(),
-		InsecureSkipVerify: true,                  // This is not insecure here. We will verify the cert chain ourselves.
-		ClientAuth:         tls.RequestClientCert, // not require - we'll fallback to JWT
+		InsecureSkipVerify: true,                       // This is not insecure here. We will verify the cert chain ourselves.
+		ClientAuth:         tls.RequestClientCert,      // not require - we'll fallback to JWT
 		Certificates:       []tls.Certificate{*a.Cert}, // a.TlsCerts,
 		VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
 			panic("tls config not specialized for peer")
@@ -192,7 +189,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 		//SessionTicketsDisabled: true,
 	}
 
-	msgs.InitMux(ug.Msg,ug.Mux, ug.Auth)
+	msgs.InitMux(ug.Msg, ug.Mux, ug.Auth)
 
 	ug.H2Handler, _ = NewH2Transport(ug)
 
@@ -223,7 +220,6 @@ func (ug *UGate) Start() {
 		auth.IDFromPublicKey(auth.PublicKey(ug.Auth.Cert.PrivateKey)),
 		ug.Auth.VIP6)
 }
-
 
 // Expects the result to be validated and do ALPN.
 //func (ug *UGate) DialTLS(net, addr string, tc *tls.Config) {
@@ -351,7 +347,7 @@ func (ug *UGate) OnStreamDone(str *ugate.Conn) {
 
 // RemoteID returns the node ID based on authentication.
 //
-func RemoteID(s *ugate.Conn)  string {
+func RemoteID(s *ugate.Conn) string {
 	if s.TLS == nil {
 		return ""
 	}
@@ -401,7 +397,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 	// ProtoHTTP detects H1/H2 and sends to ug.H2Handler
 	// That deals with auth and dispatches to ugate.Mux
 	ug.StartListener(&ugate.Listener{
-		Address: haddr,
+		Address:  haddr,
 		Protocol: ugate.ProtoHTTP,
 	})
 
@@ -415,7 +411,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 	ug.StartListener(&ugate.Listener{
 		Address:  btsAddr,
 		Protocol: ugate.ProtoBTS,
-		ALPN: []string{"h2","h2r"},
+		ALPN:     []string{"h2", "h2r"},
 	})
 	ug.StartListener(&ugate.Listener{
 		Address:  btscAddr,
@@ -425,7 +421,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 		ug.StartListener(&ugate.Listener{
 			Address:  "0.0.0.0:443",
 			Protocol: ugate.ProtoTLS,
-			ALPN: []string{"h2","h2r"},
+			ALPN:     []string{"h2", "h2r"},
 		})
 		ug.StartListener(&ugate.Listener{
 			Address:  "0.0.0.0:80",
@@ -474,23 +470,22 @@ func (ug *UGate) FindRouteOut(m *ugate.Conn) *ugate.Route {
 
 func (ug *UGate) FindRoutePrefix(dstaddr net.IP, p uint16, prefix string) *ugate.Route {
 	port := ":" + strconv.Itoa(int(p))
-	l := ug.Config.Routes[prefix + dstaddr.String() + port]
+	l := ug.Config.Routes[prefix+dstaddr.String()+port]
 	if l != nil {
 		return l
 	}
 
-	l = ug.Config.Routes[prefix + port]
+	l = ug.Config.Routes[prefix+port]
 	if l != nil {
 		return l
 	}
 
-	l = ug.Config.Routes[prefix + "-" + port]
+	l = ug.Config.Routes[prefix+"-"+port]
 	if l != nil {
 		return l
 	}
 	return ug.DefaultRoute
 }
-
 
 // HandleStream is called for accepted (incoming) streams.
 //
@@ -538,7 +533,7 @@ func (ug *UGate) HandleStream(str *ugate.Conn) error {
 		// have a real connection, faking it.
 		str.PostDial(str, nil)
 		str.Dest = fmt.Sprintf("%v", route.Handler)
-		err:= route.Handler.Handle(str)
+		err := route.Handler.Handle(str)
 		str.Close()
 		return err
 	}
@@ -546,8 +541,6 @@ func (ug *UGate) HandleStream(str *ugate.Conn) error {
 	// By default, dial out
 	return ug.DialAndProxy(str)
 }
-
-
 
 func (gw *UGate) OnMuxClose(dm *ugate.DMNode) {
 	if _, f := gw.Config.H2R[dm.ID]; !f {

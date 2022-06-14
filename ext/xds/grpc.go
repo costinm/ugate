@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,15 +27,10 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// To install the tools:
-// go get -u github.com/gogo/protobuf/protoc-gen-gogofaster
-// go get -u github.com/gogo/protobuf/gogoproto
-
-// alt: --go_out=plugins=grpc:.
-
-type GrpcService struct {
-	UnimplementedAggregatedDiscoveryServiceServer
+type XDSService struct {
+	*UnimplementedAggregatedDiscoveryServiceServer
 	Mux *msgs.Mux
+
 	// mutex used to modify structs, non-blocking code only.
 	mutex sync.RWMutex
 
@@ -81,6 +77,9 @@ type Connection struct {
 	active     bool
 	resChannel chan *Response
 	errChannel chan error
+
+	// Holds node info
+	firstReq *Request ``
 }
 
 // XDS and gRPC dependencies. Enabled for interop with Istio/XDS.
@@ -88,27 +87,30 @@ func init() {
 	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
 		gs := NewXDS(msgs.DefaultMux)
 		grpcS := grpc.NewServer()
+		// Using the native stack.
 		ug.Mux.HandleFunc("/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources", func(writer http.ResponseWriter, request *http.Request) {
 			grpcS.ServeHTTP(writer, request)
 		})
 		RegisterAggregatedDiscoveryServiceServer(grpcS, gs)
+		//RegisterLoadReportingServiceServer(grpcS, gs)
 
 		// TODO: register for config change, connect to upstream
 		return nil
 	})
 }
 
-
-func NewXDS(mux *msgs.Mux) *GrpcService {
-	g := &GrpcService{Mux: mux,
+func NewXDS(mux *msgs.Mux) *XDSService {
+	g := &XDSService{Mux: mux,
 		clients: map[string]*Connection{},
 	}
 
 	return g
 }
 
+var conid = 0
+
 // Subscribe maps the the webpush subscribe request
-func (s *GrpcService) StreamAggregatedResources(stream AggregatedDiscoveryService_StreamAggregatedResourcesServer) error {
+func (s *XDSService) StreamAggregatedResources(stream AggregatedDiscoveryService_StreamAggregatedResourcesServer) error {
 	peerInfo, ok := peer.FromContext(stream.Context())
 	peerAddr := "0.0.0.0"
 	if ok {
@@ -130,10 +132,6 @@ func (s *GrpcService) StreamAggregatedResources(stream AggregatedDiscoveryServic
 		errChannel:  make(chan error, 2),
 	}
 
-	// Unlike pilot, this uses the more direct 'main thread handles read' mode.
-	// It also means we don't need 2 goroutines per connection - but we also
-	// can't cancel, but rely on http/grpc stack keepalive to detect lingering
-	// connections and close.
 	firstReq := true
 
 	defer func() {
@@ -148,6 +146,8 @@ func (s *GrpcService) StreamAggregatedResources(stream AggregatedDiscoveryServic
 
 	}()
 
+	// In current gRPC, a request is canceled by returning from the function.
+	// If we block on Recv() - we can't cancel
 	go func() {
 		for {
 			// Blocking. Separate go-routines may use the stream to push.
@@ -163,6 +163,18 @@ func (s *GrpcService) StreamAggregatedResources(stream AggregatedDiscoveryServic
 				return
 			}
 
+			if firstReq {
+				// Node info may only be sent on the first request, save it to
+				// conn.
+				s.mutex.Lock()
+				con.ConID = strconv.Itoa(conid)
+				conid++
+				s.clients[con.ConID] = con
+				s.mutex.Unlock()
+				con.firstReq = req
+			}
+
+			firstReq = false
 			err = s.process(con, req)
 			if err != nil {
 				con.errChannel <- err
@@ -171,6 +183,9 @@ func (s *GrpcService) StreamAggregatedResources(stream AggregatedDiscoveryServic
 		}
 	}()
 
+	// Blocking until closed, and implement the Send channel.
+	// It is not thread safe to send from different goroutines, so using
+	// a chan.
 	for {
 		select {
 		case res, _ := <-con.resChannel:
@@ -186,10 +201,10 @@ func (s *GrpcService) StreamAggregatedResources(stream AggregatedDiscoveryServic
 	return nil
 }
 
-func (s *GrpcService) process(connection *Connection, request *Request) error {
+func (s *XDSService) process(connection *Connection, request *Request) error {
 	for _, r := range request.Resources {
 		s.Mux.SendMessage(&msgs.Message{
-			MessageData: msgs.MessageData {
+			MessageData: msgs.MessageData{
 				To:    request.TypeUrl,
 				Time:  time.Now().Unix(),
 				Meta:  map[string]string{},
@@ -203,7 +218,7 @@ func (s *GrpcService) process(connection *Connection, request *Request) error {
 	return nil
 }
 
-func (fx *GrpcService) SendAll(r *Response) {
+func (fx *XDSService) SendAll(r *Response) {
 	for _, con := range fx.clients {
 		// TODO: only if watching our resource type
 
@@ -214,7 +229,7 @@ func (fx *GrpcService) SendAll(r *Response) {
 	}
 }
 
-func (fx *GrpcService) Send(con *Connection, r *Response) {
+func (fx *XDSService) Send(con *Connection, r *Response) {
 	r.Nonce = fmt.Sprintf("%v", time.Now())
 	con.NonceSent[r.TypeUrl] = r.Nonce
 	con.resChannel <- r

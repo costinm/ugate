@@ -3,6 +3,7 @@ module github.com/costinm/ugate/ext/xds
 go 1.16
 
 replace github.com/costinm/ugate => ../../
+replace github.com/costinm/ugate/gen/go => ../../gen/go
 
 require (
 	github.com/costinm/ugate v0.0.0-20210425213441-05024f5e8910

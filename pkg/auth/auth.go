@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -30,8 +29,6 @@ import (
 	"fmt"
 	"math/big"
 	"time"
-
-	"github.com/costinm/ugate"
 )
 
 // Support for ID and authn using certificates.
@@ -41,10 +38,13 @@ import (
 //
 type Auth struct {
 	// Public part of the Auth info
-	ugate.DMNode
+	//ugate.DMNode
+	PublicKey []byte `json:"pub,omitempty"`
+	ID        string `json:"id,omitempty"`
 
 	// Primary certificate and private key. Loaded or generated.
 	// Currently EC256 - may also support ED in future.
+	// This typically includes a [][]byte, crypto.PrivateKey and optionally a parsed leaf
 	Cert *tls.Certificate
 
 	// Primary VIP, Created from the PublicKey key, will be included in the self-signed cert.
@@ -54,13 +54,16 @@ type Auth struct {
 	VIP64 uint64
 
 	// Blob store - for loading/saving certs and keys. If nil, all is just in memory.
-	Config ugate.ConfStore
+	Config ConfStore
 
 	// Trust domain, should be 'cluster.local' or a real domain with OIDC keys.
 	Domain string
 
 	// User name, based on service account or uid.
-	Name string
+	Name              string
+	Namespace         string
+	AllowedNamespaces []string
+	TrustedCertPool   *x509.CertPool
 
 	// base64URL encoding of the primary public key.
 	// Will be used in JWT header.
@@ -85,14 +88,18 @@ type Auth struct {
 	//
 	CertMap map[string]*tls.Certificate
 
+	// Trusted roots, PEM (each element may have multiple certificates)
 	Trusted [][]byte
+
+	// GetCertificateHook allows plugging in an alternative certificate provider. By default files are used.
+	GetCertificateHook func(host string) (*tls.Certificate, error)
 }
 
 var certValidityPeriod = 100 * 365 * 24 * time.Hour
 
 // NewVapid constructs a new Vapid generator from EC256 public and private keys,
 // in base64 uncompressed format.
-func NewVapid(publicKey64, privateKey64 string)  *Auth {
+func NewVapid(publicKey64, privateKey64 string) *Auth {
 	publicUncomp, _ := base64.RawURLEncoding.DecodeString(publicKey64)
 	privateUncomp, _ := base64.RawURLEncoding.DecodeString(privateKey64)
 
@@ -101,8 +108,7 @@ func NewVapid(publicKey64, privateKey64 string)  *Auth {
 	pubkey := ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 	pkey := ecdsa.PrivateKey{PublicKey: pubkey, D: d}
 
-	v := &Auth{
-	}
+	v := &Auth{}
 	v.pub64 = publicKey64
 	v.PublicKey = publicUncomp
 	v.Priv = privateUncomp
@@ -116,7 +122,24 @@ func NewVapid(publicKey64, privateKey64 string)  *Auth {
 	return v
 }
 
-func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
+// Interface for very simple configuration and key loading.
+// Can have a simple in-memory, fs implementation, as well
+// as K8S, XDS or database backends.
+//
+// The name is hierachical, in case of K8S or Istio corresponds
+// to the type, including namespace.
+type ConfStore interface {
+	// Get a config blob by name
+	Get(name string) ([]byte, error)
+
+	// Save a config blob
+	Set(conf string, data []byte) error
+
+	// List the configs starting with a prefix, of a given type
+	List(name string, tp string) ([]string, error)
+}
+
+func NewAuth(cs ConfStore, name, domain string) *Auth {
 	if name == "" {
 		if os.Getenv("POD_NAME") != "" {
 			name = os.Getenv("POD_NAME") + "." + os.Getenv("POD_NAMESPACE")
@@ -132,9 +155,10 @@ func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 	}
 
 	auth := &Auth{
-		Config: cs,
-		Name:   name,
-		Domain: domain,
+		Config:          cs,
+		Name:            name,
+		Domain:          domain,
+		TrustedCertPool: x509.NewCertPool(),
 	}
 
 	auth.initCert()
@@ -180,6 +204,16 @@ func NewAuth(cs ugate.ConfStore, name, domain string) *Auth {
 	auth.CertMap = auth.GetCerts()
 
 	return auth
+}
+
+func (a *Auth) leaf() *x509.Certificate {
+	if a.Cert == nil {
+		return nil
+	}
+	if a.Cert.Leaf == nil {
+		a.Cert.Leaf, _ = x509.ParseCertificate(a.Cert.Certificate[0])
+	}
+	return a.Cert.Leaf
 }
 
 // Return the DNS-friendly ID, currently base32-encoded SAH256 of EC256 cert.
@@ -380,20 +414,20 @@ func (auth *Auth) initCert() {
 	}
 
 	kc := &KubeConfig{
-		ApiVersion: "v1",
-		Kind: "Config",
+		ApiVersion:     "v1",
+		Kind:           "Config",
 		CurrentContext: "default",
 		Contexts: []KubeNamedContext{
 			{Name: "default",
 				Context: Context{
-					Cluster: "default",
+					Cluster:  "default",
 					AuthInfo: auth.ID,
 				}},
 		},
 		Users: []KubeNamedUser{
 			{Name: auth.ID,
 				User: KubeUser{
-					ClientKeyData: keyPEM,
+					ClientKeyData:         keyPEM,
 					ClientCertificateData: certPEM,
 				},
 			},
@@ -547,8 +581,6 @@ func (auth *Auth) generateCert() {
 	//	tlsCert, _, _ := auth.generateSelfSigned("rsa", priv, auth.Name+"."+auth.Domain)
 	//	auth.RSACert = &tlsCert
 	//}
-
-
 
 }
 
@@ -705,8 +737,7 @@ func (auth *Auth) Auth(key []byte, role string) string {
 
 func (auth *Auth) genCSR(prefix string, org string, priv crypto.PrivateKey, sans ...string) []byte {
 	// Will be based on the JWT
-	template := &x509.CertificateRequest{
-	}
+	template := &x509.CertificateRequest{}
 	csrBytes, _ := x509.CreateCertificateRequest(rand.Reader, template, priv)
 
 	encodeMsg := "CERTIFICATE REQUEST"
@@ -909,7 +940,6 @@ func GetResponseCertBytes(r *http.Response) []byte {
 	return nil
 }
 
-
 func GetSAN(c *x509.Certificate) ([]string, error) {
 	extension := getSANExtension(c)
 	dns := []string{}
@@ -963,7 +993,7 @@ func GetSAN(c *x509.Certificate) ([]string, error) {
 // TODO: how to detect if running supported ? env ?
 func GetMDSIDToken(aud string) string {
 	req, _ := http.NewRequest("GET",
-		"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=" +
+		"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience="+
 			aud, nil)
 	req.Header.Add("Metadata-Flavor", "Google")
 	res, err := http.DefaultClient.Do(req)
@@ -975,47 +1005,4 @@ func GetMDSIDToken(aud string) string {
 		return ""
 	}
 	return string(rb)
-}
-
-// ReqContext is a context associated with a request.
-// Typically for H2:
-// 	h2ctx := r.Context().Value(mesh.H2Info).(*mesh.ReqContext)
-type ReqContext struct {
-	// Auth role - set if a authorized_keys or other authz is configured
-	Role string
-
-	// SAN list from the certificate, or equivalent auth method.
-	SAN []string
-
-	// Request start time
-	T0 time.Time
-
-	// Public key of the first cert in the chain (similar with SSH)
-	Pub []byte
-
-	// VIP associated with the public key.
-	VIP net.IP
-
-	VAPID *JWT
-}
-
-// ID of the caller, validated based on certs.
-// Currently based on VIP6 for mesh nods.
-func (rc *ReqContext) ID() string {
-	if rc.VIP == nil {
-		return ""
-	}
-	return rc.VIP.String()
-}
-
-type h2Key int
-
-var h2Info = h2Key(1)
-
-func AuthContext(ctx context.Context) *ReqContext {
-	return ctx.Value(h2Info).(*ReqContext)
-}
-
-func ContextWithAuth(ctx context.Context, h2c *ReqContext) context.Context {
-	return context.WithValue(ctx, h2Info, h2c)
 }

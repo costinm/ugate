@@ -84,7 +84,7 @@ type GateCfg struct {
 	H2R map[string]string `json:"remoteAccept,omitempty"`
 
 	// ALPN to announce on the main BTS port
-	ALPN     []string
+	ALPN []string
 
 	// NoAccessLog enables logging HTTP and stream close stats (sort of access log)
 	NoAccessLog bool `json:"noAccessLog,omitempty"`
@@ -95,9 +95,9 @@ type GateCfg struct {
 const (
 	// Offsets from BasePort for the default ports.
 
-	PORT_IPTABLES = 1
+	PORT_IPTABLES    = 1
 	PORT_IPTABLES_IN = 6
-	PORT_SOCKS = 5
+	PORT_SOCKS       = 5
 	// SNI and HTTP could share the same port - would also
 	// reduce missconfig risks
 	PORT_HTTP_PROXY = 2
@@ -144,7 +144,7 @@ type HostStats struct {
 	SentPackets int
 	RcvdPackets int
 
-	Count       int
+	Count int
 }
 
 // Node information, based on registration info or discovery.
@@ -218,6 +218,7 @@ type DMNode struct {
 	Auth []byte `json:"auth,omitempty"`
 
 	// Information from the node - from an announce or message.
+	// Not trusted, self-signed.
 	NodeAnnounce *NodeAnnounce `json:"info,omitempty"`
 
 	Labels map[string]string `json:"l,omitempty"`
@@ -244,15 +245,12 @@ type DMNode struct {
 	// In seconds since first seen, last 100
 	Seen []int `json:"-"`
 
-
 	Stats *HostStats
 
 	// Muxer is a HTTP2-like connection to the node.
 	// Implements RoundTrip, with the semantics of CONNECT (no buffering)
 	// May be a direct or reverse connection.
 	Muxer Muxer `json:"-"`
-
-
 }
 
 const ProtoTLS = "tls"
@@ -260,7 +258,7 @@ const ProtoSNI = "sni"
 
 // autodetected for TLS.
 const ProtoH2 = "h2"
-const ProtoHTTP = "http" // 1.1
+const ProtoHTTP = "http"               // 1.1
 const ProtoHTTPTrusted = "httpTrusted" // behind envoy or trusted gateway
 const ProtoBTS = "bts"
 const ProtoBTSC = "btsc"
@@ -319,7 +317,7 @@ type Listener struct {
 	Certs map[string]string
 
 	NetListener net.Listener `json:-`
-	PortHandler Handler `json:-`
+	PortHandler Handler      `json:-`
 }
 
 // Route controls the routing in the gate.
@@ -346,12 +344,10 @@ type Route struct {
 	// @Deprecated - use ForwardTo -:NAME and register handlers
 	Handler Handler `json:-`
 
-
 	//SAN []string
 
 	//Endpoints []string
 }
-
 
 // Mapping to Istio:
 // - gateway port -> listener conf
@@ -432,7 +428,6 @@ type MuxDialer interface {
 	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Conn)) (Muxer, error)
 }
 
-
 // Session (connection, association, mux) with a remote host.
 // Holds the net-level remote address, TLS info, etc
 // May be multiplexed or not.
@@ -444,7 +439,7 @@ type Session struct {
 	// Connection level address - typically the real IP. If not set, attempt to
 	// extract it from the connection.
 	RemoteAddr net.Addr
-	LocalAddr net.Addr
+	LocalAddr  net.Addr
 }
 
 // StreamDialer is similar with RoundTrip, makes a single connection using a MUX.
@@ -489,7 +484,6 @@ type HeaderEncoder interface {
 	Unmarshal(s *Conn) (done bool, err error)
 }
 
-
 // IPResolver uses DNS cache or lookups to return the name
 // associated with an IP, for metrics/stats/logs
 type IPResolver interface {
@@ -512,7 +506,6 @@ type UdpWriter interface {
 	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
 }
 
-
 // IPFS:
 // http://<gateway host>/ipfs/CID/path
 // http://<cid>.ipfs.<gateway host>/<path>
@@ -520,7 +513,6 @@ type UdpWriter interface {
 // ipfs://<CID>/<path>, ipns://<peer ID>/<path>, and dweb://<IPFS address>
 //
 // Multiaddr: TLV
-
 
 // CloseWriter is one of possible interfaces implemented by Out to send a FIN, without closing
 // the input. Some writers only do this when Close is called.
@@ -635,7 +627,6 @@ type NodeAnnounce struct {
 //	Wait() error
 //}
 //
-
 
 // Textual representation of the node registration data.
 func (n *DMNode) String() string {

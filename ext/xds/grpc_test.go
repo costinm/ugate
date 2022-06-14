@@ -22,6 +22,7 @@ var (
 
 func startLocalServer(t *testing.T) (*grpc.Server, string) {
 	// https://github.com/grpc/grpc-go/blob/master/test/end2end_test.go
+
 	sopts := []grpc.ServerOption{grpc.MaxConcurrentStreams(64)}
 	sopts = append(sopts, grpc.MaxMsgSize(8192))
 
@@ -46,17 +47,13 @@ func startLocalServer(t *testing.T) (*grpc.Server, string) {
 	t.Log(lis.Addr().String())
 	addr := lis.Addr().String()
 
-	wp := &GrpcService{
+	wp := &XDSService{
 		Mux: msgs.DefaultMux,
 	}
 	RegisterAggregatedDiscoveryServiceServer(s, wp)
 	go s.Serve(lis)
 
 	return s, addr
-}
-
-func TestNativeXDS(t *testing.T) {
-
 }
 
 func TestGRpc(t *testing.T) {

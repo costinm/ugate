@@ -2,22 +2,33 @@
 
 ## Streams with metadata
 
+The 'stream' is modeled after [H2 and H3](https://httpwg.org/specs/rfc7540.html#StreamsLayer). 
+In go, this is modeled as a net.Conn interface - extended with metadata.
+
 Like Istio, this library is based on 'enhanced' L4 streams, i.e. mostly opaque streams
 with added identity, security and metadata. HTTP requests are also mapped to streams, 
-so all communication is handled in an uniform way.
-
-## Circuits and reverse accept
-
-Similar with SSH, Tor, IPFS, WebRTC, etc this allows nodes behind NAT and without 
-server ports to listen and accept streams originated from other nodes.
+so all communication is handled in an uniform way. uGate was designed around a messaging 
+model - messages are also modeled as streams. 
 
 ## Messaging/pubsub
+
+The original project ( wpgate ) goal was to implement a distributed/federated Webpush 
+messaging infrastructure, to support a disconnected, ad-hoc communication (dmesh). 
+
+Secure messaging and webpush remain at the core of uGate project.  
 
 WIP. The 'control plane' portion is based on Istio XDS, but extended with the proposed 
 'messaging' extensions.
 
 Messages can also be transmitted as Webpush - i.e. encrypted, authenticated - so 
 XDS proxies can't see or modify control messages.
+
+## Associations, Circuits and reverse accept
+
+
+Similar with SSH, Tor, IPFS, WebRTC, etc this allows nodes behind NAT and without
+server ports to listen and accept streams and messages originated from other nodes.
+
 
 # Code organization
 

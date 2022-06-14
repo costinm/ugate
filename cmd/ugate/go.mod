@@ -7,6 +7,7 @@ replace github.com/costinm/ugate => ../../
 replace github.com/costinm/ugate/dns => ../../dns
 
 replace github.com/costinm/ugate/ext/bootstrap => ../../ext/bootstrap
+replace github.com/costinm/ugate/ext/bootstrapx => ../../ext/bootstrapx
 
 replace github.com/costinm/ugate/ext/quic => ../../ext/quic
 

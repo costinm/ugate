@@ -146,3 +146,17 @@ remote/_run: build
 update:
 #	yq -j < cmd/ugate/testdata/ugate.yaml > cmd/ugate/testdata/ugate.json
 
+
+deps:
+	go install github.com/bufbuild/buf/cmd/buf@latest
+	go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+	go install github.com/bufbuild/connect-go/cmd/protoc-gen-connect-go@latest
+
+	# debug tool for std grpc - need http/tcp equivalent
+	go install -v github.com/grpc-ecosystem/grpcdebug@latest
+	# Test tool
+	go install github.com/bojand/ghz/cmd/ghz@latest
+
+proto-gen:
+	cd proto && buf generate

@@ -15,8 +15,7 @@ import (
 //
 // Inspired from: github.com/soheilhy/cmux
 // Most of the code replaced.
-
-// StreamBuffer is an optimized implementation of io.Reader that behaves like
+//
 // ```
 // io.MultiReader(bytes.NewReader(buffer.Bytes()), io.TeeReader(source, buffer))
 // ```
@@ -24,6 +23,8 @@ import (
 //
 // Also similar with bufio.Reader, but with recycling and access to buffer,
 // metadata, stats and for net.Conn.
+
+// StreamBuffer is a buffer that can be used for streams.
 type StreamBuffer struct {
 
 	// b has end and capacity, set at creation to the size of the buffer
@@ -51,7 +52,7 @@ func (v *StreamBuffer) Reader() bytes.Reader {
 	return r
 }
 
-func (b *StreamBuffer) TrimFront(count int)  {
+func (b *StreamBuffer) TrimFront(count int) {
 	b.off += count
 	if b.off >= b.end {
 		b.off = 0
@@ -65,14 +66,14 @@ func (b *StreamBuffer) Recycle() {
 }
 
 func (b *StreamBuffer) IsEmpty() bool {
-	if b== nil {
+	if b == nil {
 		return true
 	}
 	return b.off >= b.end
 }
 
 func (b *StreamBuffer) Size() int {
-	if b== nil {
+	if b == nil {
 		return 0
 	}
 	return b.end - b.off
@@ -98,10 +99,10 @@ func (b *StreamBuffer) WriteVarint(i int64) {
 
 func (b *StreamBuffer) grow(n int) {
 	c := cap(b.buf)
-	if c - b.end > n {
+	if c-b.end > n {
 		return
 	}
-	buf := make([]byte, c * 2)
+	buf := make([]byte, c*2)
 	copy(buf, b.buf[b.off:b.end])
 	b.buf = buf
 	b.end = b.end - b.off

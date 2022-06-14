@@ -27,7 +27,7 @@ import (
 // - a TLSConn, wrapping the accepted connection
 // - HTTP2 RequestBody+ResponseWriter
 //
-// Metadata is extracted from the headers, SNI, SOCKS, Iptables. 
+// Metadata is extracted from the headers, SNI, SOCKS, Iptables.
 // Example:
 // - raw TCP connection
 // - SOCKS - extracted dest host:port or IP:port
@@ -55,7 +55,10 @@ type Conn struct {
 	//
 	// Closing In without fully reading all data may result in RST.
 	//
-	// Normal process for close is to call CloseWrite, read fully the In and call Close on the stream.
+	// Normal process for close is to call CloseWrite (sending a FIN), read In fully
+	// ( i.e. until remote FIN is received ) and call In.Close.
+	// If In.Close is called before FIN was received the TCP stack may send a RST if more
+	// data is received from the other end.
 	In io.ReadCloser `json:"-"`
 
 	// Out - send to remote.
@@ -66,7 +69,8 @@ type Conn struct {
 	//   completed)
 	// - nil, if the remote side is read only ( GET ) or if the creation of the
 	//   stream passed a Reader object which is automatically piped to the Out, for example
-	//   when a HTTP request is used.
+	//   when a HTTP request body is used.
+	//
 	Out io.Writer `json:"-"`
 
 	// Request associated with the stream. Will be set if the stream is
@@ -194,13 +198,14 @@ type Conn struct {
 	MUX *Muxer `json:"-"`
 
 	// ---------------------------------------------------------
-	// If not nil, this stream has a pooled read attached.
+	// If not nil, this stream has a read buffer attached.
+	//
 	// Read methods will take the rbuffer into account, if present.
-	// Buffers can be detached and passed to other streams, for zero/less copy.
+	// Buffers can also be detached and passed to other streams, for less copy.
 	rbuffer *StreamBuffer
 
-	// If not nil, this stream has a pooled write attached.
-	wbuffer  *StreamBuffer
+	// If not nil, this stream has write buffer attached.
+	wbuffer *StreamBuffer
 
 	Listener *Listener
 
@@ -214,6 +219,7 @@ type Conn struct {
 }
 
 type StreamType int
+
 const (
 	StreamTypeUnknown = 0
 
@@ -274,6 +280,10 @@ func (s *Conn) RBuffer() *StreamBuffer {
 	return s.rbuffer
 }
 
+// WBuffer returns the write buffer associated with the stream.
+// Used to encode headers or for buffering - to avoid the pattern of allocating
+// small non-pooled buffers.
+// TODO: also to use for bucket passing instead of copy.
 func (s *Conn) WBuffer() *StreamBuffer {
 	if s.wbuffer != nil {
 		return s.wbuffer
@@ -286,7 +296,6 @@ func (s *Conn) WBuffer() *StreamBuffer {
 
 	return s.wbuffer
 }
-
 
 // Fill the buffer by doing one Read() from the underlying reader.
 //
@@ -373,7 +382,7 @@ func (s *Conn) ReadByte() (byte, error) {
 func NewStream() *Conn {
 	return &Conn{
 		StreamId: int(atomic.AddUint32(&StreamId, 1)),
-		Stats: Stats{Open: time.Now(),},
+		Stats:    Stats{Open: time.Now()},
 	}
 }
 
@@ -386,7 +395,7 @@ func NewStream() *Conn {
 func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Conn) *Conn {
 	return &Conn{
 		StreamId: int(atomic.AddUint32(&StreamId, 1)),
-		Stats: Stats{Open: time.Now(),},
+		Stats:    Stats{Open: time.Now()},
 
 		Request: r,
 		In:      r.Body,
@@ -399,11 +408,11 @@ func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Conn) *Conn {
 func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *Conn) *Conn {
 	return &Conn{
 		StreamId:  int(atomic.AddUint32(&StreamId, 1)),
-		Stats: Stats{Open: time.Now(),},
+		Stats:     Stats{Open: time.Now()},
 		OutHeader: w.Header,
 		Request:   r,
 		In:        w.Body, // Input from remote http
-		Out:       out, //
+		Out:       out,    //
 		TLS:       r.TLS,
 		Dest:      r.Host,
 	}
@@ -423,7 +432,6 @@ func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *
 //	s.WriteErr = nil
 //	s.Type = ""
 //}
-
 
 const ContextKey = "ugate.stream"
 
@@ -456,6 +464,10 @@ func (s *Conn) Context() context.Context {
 	return s.ctx
 }
 
+// Write implements the io.Writer. The Write() is flushed if possible.
+//
+// TODO: incorporate the wbuffer, optimize based on size.
+//
 func (s *Conn) Write(b []byte) (n int, err error) {
 	n, err = s.Out.Write(b)
 	if err != nil {
@@ -473,6 +485,7 @@ func (s *Conn) Write(b []byte) (n int, err error) {
 }
 
 func (s *Conn) Flush() {
+	// TODO: take into account the write buffer.
 	if f, ok := s.Out.(http.Flusher); ok {
 		f.Flush()
 	}
@@ -492,7 +505,7 @@ func CanSplice(in io.Reader, out io.Writer) bool {
 func (s *Conn) Read(out []byte) (int, error) {
 	if s.rbuffer != nil {
 		// Duplicated - the other method may be removed.
-		b:=s.rbuffer
+		b := s.rbuffer
 		if b.end > b.off {
 			// If we have already read something from the buffer before, we return the
 			// same data and the last error if any. We need to immediately return,
@@ -578,7 +591,7 @@ func (s *Conn) CloseWrite() error {
 	} else {
 		if c, ok := s.Out.(io.Closer); ok {
 			if DebugClose {
-				log.Println(s.StreamId, "CloseWrite using Out.Close()",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+				log.Println(s.StreamId, "CloseWrite using Out.Close()", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 			}
 			return c.Close()
 		} else {
@@ -591,7 +604,7 @@ func (s *Conn) CloseWrite() error {
 				// That means HTTP2 TCP servers provide no way to send a FIN from server, without
 				// having the request fully read.
 				if DebugClose {
-					log.Println(s.StreamId, "CloseWrite using HTTP trailer ",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+					log.Println(s.StreamId, "CloseWrite using HTTP trailer ", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 				}
 				// This works for H2 with the current library - but very tricky, if not set as trailer.
 				rw.Header().Set("X-Close", "0")
@@ -740,9 +753,9 @@ func (s *Conn) SendHeader(w io.WriteCloser, h http.Header) error {
 	bb.WriteByte(0)
 
 	bb.WriteByte(2) // To differentiate from regular H3, using 0
-	bb.Write([]byte{0,0,0,0})
+	bb.Write([]byte{0, 0, 0, 0})
 	err := s.OutHeader.Write(bb)
-	binary.LittleEndian.PutUint32(bb.buf[1:], uint32(bb.Size() - 5))
+	binary.LittleEndian.PutUint32(bb.buf[1:], uint32(bb.Size()-5))
 	if err != nil {
 		return err
 	}
@@ -765,7 +778,7 @@ func (s *Conn) ReadHeader(in io.Reader) error {
 
 	n, err := io.ReadFull(in, buf[0:5])
 	len := binary.LittleEndian.Uint32(buf[1:])
-	if len > 32 * 1024 {
+	if len > 32*1024 {
 		return errors.New("header size")
 	}
 	n, err = io.ReadFull(in, buf[0:len])
@@ -917,7 +930,6 @@ func (s *Conn) ProxyTo(nc net.Conn) error {
 		err1 = s.proxyToClient(nc)
 	}
 
-
 	// Wait for data to be read from nc and sent to Out, or error
 	remoteErr := <-errCh
 	if remoteErr == nil {
@@ -927,7 +939,7 @@ func (s *Conn) ProxyTo(nc net.Conn) error {
 	// The read part may have returned EOF, or the write may have failed.
 	// In the first case close will send FIN, else will send RST
 	if DebugClose {
-		log.Println(s.StreamId, "proxyTo ",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+		log.Println(s.StreamId, "proxyTo ", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 	}
 	s.In.Close()
 	nc.Close()
@@ -948,7 +960,7 @@ func (s *Conn) proxyToClient(cout io.WriteCloser) error {
 	if NoEOF(err) != nil {
 		// Should send RST if unbuffered data (may also be FIN - no way to control)
 		if DebugClose {
-			log.Println(s.StreamId, "proxyToClient RST",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+			log.Println(s.StreamId, "proxyToClient RST", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 		}
 		cout.Close()
 		s.In.Close()
@@ -956,13 +968,13 @@ func (s *Conn) proxyToClient(cout io.WriteCloser) error {
 		// WriteTo doesn't close the writer ! We need to send a FIN, so remote knows we're done.
 		if c, ok := cout.(CloseWriter); ok {
 			if DebugClose {
-				log.Println(s.StreamId,"proxyToClient EOF", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+				log.Println(s.StreamId, "proxyToClient EOF", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 			}
 			s.ClientClose = true
 			c.CloseWrite()
 		} else {
 			//if debugClose {
-				log.Println(s.StreamId,"proxyToClient EOF, XXX Missing CloseWrite",  s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
+			log.Println(s.StreamId, "proxyToClient EOF, XXX Missing CloseWrite", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 			//}
 			cout.Close()
 		}
