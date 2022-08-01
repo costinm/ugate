@@ -22,7 +22,6 @@ import (
 // - client create a POST stream for accepted connections, over H2
 // -
 
-
 // NewStream opens a H2 stream. No H2 header (empty) - this matches QUIC streams
 func (c *H2RMux) NewStream(ctx context.Context, req *http.Request) (*H2Stream, error) {
 	c.m.Lock()
@@ -175,7 +174,7 @@ func (h2s *H2RMux) stream(id uint32) *H2Stream {
 
 // H2Stream is a multiplexed stream.
 type H2Stream struct {
-	meta *ugate.Conn
+	meta *ugate.Stream
 
 	id *uint32
 	s  *H2RMux

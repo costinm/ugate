@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 )
 
 /*
@@ -37,7 +37,7 @@ import (
    Salt:  DGv6ra1nlYgDCS1FRnbzlw
 
 
- */
+*/
 
 func TestSendWebPush(t *testing.T) {
 
@@ -55,7 +55,6 @@ func TestSendWebPush(t *testing.T) {
 	}
 	//rpriv := "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94"
 	//rpub := "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
-
 
 	// Test server checks that the request is well-formed
 	ts := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -113,11 +112,10 @@ func TestSendWebPush(t *testing.T) {
 	}))
 	defer ts.Close()
 
-
 	//sub := &Subscription{ts.URL, key, a, ""}
 	message := "I am the walrus"
 	vapid := auth.NewAuth(nil, "", "")
-	pushReq, err := NewRequest(ts.URL + "/push/", uaPublic, authSecret, message, 0, vapid)
+	pushReq, err := NewRequest(ts.URL+"/push/", uaPublic, authSecret, message, 0, vapid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +158,7 @@ func TestSendTickle(t *testing.T) {
 	//sub := &Subscription{Endpoint: ts.URL}
 
 	vapid := auth.NewAuth(nil, "", "")
-	pushReq, err := NewRequest(ts.URL + "/push/", nil, nil, "", 0, vapid)
+	pushReq, err := NewRequest(ts.URL+"/push/", nil, nil, "", 0, vapid)
 	if err != nil {
 		t.Error(err)
 	}
@@ -173,15 +171,14 @@ func TestSendTickle(t *testing.T) {
 	httputil.DumpResponse(res, true)
 }
 
-var 	// A fake subscription created with random key and auth values
-	subscriptionJSON = []byte(`{
+var // A fake subscription created with random key and auth values
+subscriptionJSON = []byte(`{
 		"endpoint": "https://example.com/",
 		"keys": {
 			"p256dh": "BCXJI0VW7evda9ldlo18MuHhgQVxWbd0dGmUfpQedaD7KDjB8sGWX5iiP7lkjxi-A02b8Fi3BMWWLoo3b4Tdl-c=",
 			"auth": "WPF9D0bTVZCV2pXSgj6Zug=="
 		}
 	}`)
-
 
 func TestSubscriptionFromJSON(t *testing.T) {
 	_, err := SubscriptionFromJSON(subscriptionJSON)
@@ -225,4 +222,3 @@ func TestSubscriptionFromJSON(t *testing.T) {
 		t.Errorf("Failed to parse subscription with unpadded values: %v", err)
 	}
 }
-

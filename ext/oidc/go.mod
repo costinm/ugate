@@ -1,6 +1,11 @@
-module oidc
+module github.com/costnm/ugate/ext/oidc
 
 go 1.16
+
+replace (
+	github.com/costinm/ugate => ../../
+	github.com/costinm/ugate/auth => ../../auth/
+)
 
 require (
 	github.com/coreos/go-oidc v2.2.1+incompatible

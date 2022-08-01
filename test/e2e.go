@@ -44,7 +44,6 @@ var (
 	Echo *ugatesvc.UGate
 )
 
-
 func InitEcho(port int) *ugatesvc.UGate {
 	cs := cfgfs.NewConf()
 	ug := ugatesvc.NewGate(&net.Dialer{}, nil, &ugate.GateCfg{
@@ -52,9 +51,9 @@ func InitEcho(port int) *ugatesvc.UGate {
 	}, cs)
 
 	// Echo - TCP
-	ug.StartListener(&ugate.Route{
-		Address:   fmt.Sprintf("0.0.0.0:%d", port + 12),
-		Handler:   &ugatesvc.EchoHandler{},
+	ug.StartListener(&ugate.Listener{
+		Address: fmt.Sprintf("0.0.0.0:%d", port+12),
+		Handler: &ugatesvc.EchoHandler{},
 	})
 	ug.Mux.Handle("/", &ugatesvc.EchoHandler{})
 	return ug
@@ -65,7 +64,7 @@ func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate
 	basePort := cfg.BasePort
 	cfg.Domain = "test.cluster.local"
 	cs := cfgfs.NewConf()
-	cs.Set("secret/" + cfg.Name + "." + cfg.Domain, []byte(kubecfg))
+	cs.Set("secret/"+cfg.Name+"."+cfg.Domain, []byte(kubecfg))
 
 	ug := ugatesvc.NewGate(&net.Dialer{}, nil, cfg, cs)
 
@@ -75,12 +74,12 @@ func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate
 	}
 
 	// Echo - TCP
-	ug.StartListener(&ugate.Route{
-		Address:   fmt.Sprintf("0.0.0.0:%d", basePort+11),
-		Protocol:  "tls",
-		Handler:   &ugatesvc.EchoHandler{},
+	ug.StartListener(&ugate.Listener{
+		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+11),
+		Protocol: "tls",
+		Handler:  &ugatesvc.EchoHandler{},
 	})
-	ug.StartListener(&ugate.Route{
+	ug.StartListener(&ugate.Listener{
 		Address: fmt.Sprintf("0.0.0.0:%d", basePort+12),
 		Handler: &ugatesvc.EchoHandler{},
 	})
@@ -173,21 +172,20 @@ func CheckEcho(in io.Reader, out io.Writer) (string, error) {
 	return js, nil
 }
 
-
 // The tests will use 3 fixed identies, to keep things simple.
 
 // Alice runs on 14000 ( testdata/alice for standalone debug ).
-const ALICE_ID="A3UCXD63FCFXMX7GH64FZM5EAHH3PGLKWRMBHPGY4AA3MGM6SXPQ"
-const ALICE_PORT=6007
+const ALICE_ID = "A3UCXD63FCFXMX7GH64FZM5EAHH3PGLKWRMBHPGY4AA3MGM6SXPQ"
+const ALICE_PORT = 6007
 const ALICE_VIP = "fd00::f054:f1ab:89ed:c146"
 
-const BOB_ID="BVMXJRUH7FVKYBZBXJ7HQVHDIMDO7ADRUUQLYMDU6X7SARNP5OXA"
-const BOB_PORT=6107
-const BOB_VIP="fd00::156:6388:1fdf:cb69"
+const BOB_ID = "BVMXJRUH7FVKYBZBXJ7HQVHDIMDO7ADRUUQLYMDU6X7SARNP5OXA"
+const BOB_PORT = 6107
+const BOB_VIP = "fd00::156:6388:1fdf:cb69"
 
-const CAROL_PORT=6207
-const CAROL_ID="IN7E4J4VZ66TJZFY4ZABEM6STXIBEU7GVAVOE5NCM5DLVRIDJNFQ"
-const CAROL_VIP="fd00::e524:71c0:d68e:f0ce"
+const CAROL_PORT = 6207
+const CAROL_ID = "IN7E4J4VZ66TJZFY4ZABEM6STXIBEU7GVAVOE5NCM5DLVRIDJNFQ"
+const CAROL_VIP = "fd00::e524:71c0:d68e:f0ce"
 
 const ALICE_KEYS = `
 {
@@ -275,7 +273,7 @@ func BasicGate() *ugatesvc.UGate {
 	config := ugatesvc.NewConf(".", "./var/lib/dmesh")
 	cfg := &ugate.GateCfg{
 		BasePort: 12000,
-		Domain: "h.webinf.info",
+		Domain:   "h.webinf.info",
 	}
 	// Start a Gate. Basic H2 and H2R services enabled.
 	ug := ugatesvc.NewGate(&net.Dialer{}, nil, cfg, config)

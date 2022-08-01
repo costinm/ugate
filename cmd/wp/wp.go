@@ -11,14 +11,14 @@ import (
 	"os"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	msgs "github.com/costinm/ugate/webpush"
 )
 
 var (
-	to = flag.String("to", "", "Destination. A config file or env variable required")
-	data = flag.String("data", "", "Message to send, if empty stdin will be used")
+	to      = flag.String("to", "", "Destination. A config file or env variable required")
+	data    = flag.String("data", "", "Message to send, if empty stdin will be used")
 	verbose = flag.Bool("v", false, "Verbose messages")
 )
 
@@ -43,7 +43,7 @@ func main() {
 }
 
 // Send an encrypted message to a node.
-func sendMessage(toS string, vapid *auth.Auth, show bool,	msg string) {
+func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
 	var err error
 	if msg == "" {
 		msgB, err := ioutil.ReadAll(os.Stdin)
@@ -94,8 +94,6 @@ func sendMessage(toS string, vapid *auth.Auth, show bool,	msg string) {
 	req.Header.Add("ttl", "0")
 	req.Header.Add("authorization", ah)
 	req.Header.Add("Content-Encoding", "aes128gcm")
-
-
 
 	res, err := hc.Do(req)
 

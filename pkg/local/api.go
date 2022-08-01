@@ -4,7 +4,7 @@ import (
 	"net"
 	"sync"
 
-	auth2 "github.com/costinm/ugate/pkg/auth"
+	auth2 "github.com/costinm/ugate/auth"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
@@ -26,7 +26,6 @@ type LLDiscovery struct {
 
 	// Information about AP extracted from messages sent by the dmesh-l2 or Android application.
 
-
 	// SSID and password of the AP
 	AP     string
 	APFreq string
@@ -38,7 +37,7 @@ type LLDiscovery struct {
 
 	// Port used to listen for multicast messages.
 	// Default 5227.
-	mcPort  int
+	mcPort int
 
 	// Additional UDP port.
 	udpPort int
@@ -46,7 +45,7 @@ type LLDiscovery struct {
 	// Defaults to 6970
 	baseListenPort int
 
-	gw             *ug.UGate
+	gw *ug.UGate
 
 	// Listening on * for signed messages
 	// Source for sent messages and multicasts

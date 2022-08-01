@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/cfgfs"
 	msgs "github.com/costinm/ugate/webpush"
 )
@@ -59,8 +59,8 @@ type UGate struct {
 
 	// Active connection by internal stream ID.
 	// Tracks incoming Streams - if the stream is getting proxied to
-	// a net.Conn or Conn, the dest will not be tracked here.
-	ActiveTcp map[int]*ugate.Conn
+	// a net.Conn or Stream, the dest will not be tracked here.
+	ActiveTcp map[int]*ugate.Stream
 
 	m sync.RWMutex
 
@@ -152,7 +152,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 		Nodes:        map[uint64]*ugate.DMNode{},
 		Mux:          http.NewServeMux(),
 		Auth:         a,
-		ActiveTcp:    map[int]*ugate.Conn{},
+		ActiveTcp:    map[int]*ugate.Stream{},
 		DefaultRoute: &ugate.Route{
 			Protocol: "OriginalDST",
 		},
@@ -281,7 +281,7 @@ func (ug *UGate) GetOrAddNode(id string) *ugate.DMNode {
 }
 
 // All streams must call this method, and defer OnStreamDone
-func (ug *UGate) OnStream(s *ugate.Conn) {
+func (ug *UGate) OnStream(s *ugate.Stream) {
 	ug.m.Lock()
 	ug.ActiveTcp[s.StreamId] = s
 	ug.m.Unlock()
@@ -293,7 +293,7 @@ func (ug *UGate) OnStream(s *ugate.Conn) {
 // Called at the end of the connection handling. After this point
 // nothing should use or refer to the connection, both proxy directions
 // should already be closed for write or fully closed.
-func (ug *UGate) OnStreamDone(str *ugate.Conn) {
+func (ug *UGate) OnStreamDone(str *ugate.Stream) {
 
 	ug.m.Lock()
 	delete(ug.ActiveTcp, str.StreamId)
@@ -347,7 +347,7 @@ func (ug *UGate) OnStreamDone(str *ugate.Conn) {
 
 // RemoteID returns the node ID based on authentication.
 //
-func RemoteID(s *ugate.Conn) string {
+func RemoteID(s *ugate.Stream) string {
 	if s.TLS == nil {
 		return ""
 	}
@@ -434,7 +434,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 
 // Based on the port in the Dest, find the Listener config.
 // Used when the dest IP:port is extracted from the metadata
-func (ug *UGate) FindRouteIn(m *ugate.Conn) *ugate.Route {
+func (ug *UGate) FindRouteIn(m *ugate.Stream) *ugate.Route {
 	//_, p, _ := net.SplitHostPort(m.Dest)
 	//l := ug.Config.Listeners[":"+p]
 	//if l != nil {
@@ -450,7 +450,7 @@ func (ug *UGate) FindRouteIn(m *ugate.Conn) *ugate.Route {
 
 // FindRouteOut will use the IP in Dest, and find the cluster
 // and endpoints.
-func (ug *UGate) FindRouteOut(m *ugate.Conn) *ugate.Route {
+func (ug *UGate) FindRouteOut(m *ugate.Stream) *ugate.Route {
 	l := ug.Config.Routes[m.Dest]
 	if l != nil {
 		return l
@@ -502,7 +502,7 @@ func (ug *UGate) FindRoutePrefix(dstaddr net.IP, p uint16, prefix string) *ugate
 //
 // In addition TrackStreamIn has been called.
 // This is a blocking method.
-func (ug *UGate) HandleStream(str *ugate.Conn) error {
+func (ug *UGate) HandleStream(str *ugate.Stream) error {
 	if str.Route == nil {
 		str.Route = ug.FindRouteOut(str)
 	}
@@ -559,7 +559,7 @@ func (gw *UGate) OnHClose(s string, id string, san string, r *http.Request, sinc
 	}
 }
 
-func (gw *UGate) OnSClose(str *ugate.Conn, addr net.Addr) {
+func (gw *UGate) OnSClose(str *ugate.Stream, addr net.Addr) {
 	if !gw.Config.NoAccessLog {
 		if str.ReadErr != nil || str.WriteErr != nil {
 			log.Printf("%d AC: src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v %v %v",

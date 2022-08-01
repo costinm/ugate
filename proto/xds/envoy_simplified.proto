@@ -89,7 +89,7 @@ message DiscoveryRequest {
     Status error_detail = 6;
 
     // Extension to Envoy - allow push
-    repeated xds.Any resources = 7;
+    repeated Any resources = 7;
 }
 
 message DiscoveryResponse {

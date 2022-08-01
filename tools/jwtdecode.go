@@ -12,14 +12,14 @@ import (
 	"log"
 	"strings"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 )
 
 var (
-	jwt  = flag.String("jwt", "", "JWT to decode")
-	aud  = flag.String("aud", "", "Aud to check")
-
+	jwt = flag.String("jwt", "", "JWT to decode")
+	aud = flag.String("aud", "", "Aud to check")
 )
+
 func main() {
 	flag.Parse()
 	decode(*jwt, *aud)
@@ -58,4 +58,3 @@ func decode(jwt, aud string) {
 	}
 
 }
-

@@ -5,7 +5,7 @@ syntax = "proto3";
 package envoy.service.discovery.v3;
 import "xds/envoy_simplified.proto";
 
-option go_package="github.com/costinm/grpc-mesh/gen/go/envoy/service/discovery";
+option go_package="github.com/costinm/grpc-mesh/gen/proto/envoy/service/discovery";
 
 //	ServiceName: "envoy.service.discovery.v2.AggregatedDiscoveryService",
 

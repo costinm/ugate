@@ -12,11 +12,10 @@ import (
 	"testing"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/cfgfs"
 	"github.com/costinm/ugate/test"
 )
-
 
 func TestSrv(t *testing.T) {
 	// xx07 -> BTS port
@@ -42,7 +41,6 @@ func TestSrv(t *testing.T) {
 			},
 		},
 	}, nil)
-
 
 	//carol := test.InitTestServer(test.CAROL_KEYS, &ugate.GateCfg{
 	//	BasePort: 6200,
@@ -77,7 +75,7 @@ func TestSrv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mc := ab.(*ugate.Conn)
+		mc := ab.(*ugate.Stream)
 		log.Println("Result ", res, mc)
 	})
 
@@ -206,4 +204,3 @@ func TestCrypto(t *testing.T) {
 }
 
 var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
-

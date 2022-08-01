@@ -48,8 +48,6 @@ import (
 //
 // TODO: wrap UDP connection, exposing OOBCapablePacketConn and SetReadBuffer
 
-
-
 // Handles captured UDP packets (for TUN and TProxy) and accepted sockets.
 //
 // For port 53, DNS is handled using the special DNS package.
@@ -100,9 +98,7 @@ import (
 // Interesting traffic:
 // - o-o.myaddr.l.google.com. [o-o.myaddr.l.google.com.	60	IN	TXT	"73.158.64.15"]
 
-
 const DumpUdp = true
-
 
 var (
 	bufferPoolUdp = sync.Pool{New: func() interface{} {
@@ -123,7 +119,7 @@ type UdpNat struct {
 	// External address
 	DestAddr *net.UDPAddr
 
-	//ugate.Conn
+	//ugate.Stream
 	// bound to a local port (on the real network).
 	UDP *net.UDPConn
 
@@ -184,9 +180,8 @@ func New(ug *ugatesvc.UGate) *UDPGate {
 
 func (udpg *UDPGate) periodic() {
 	FreeIdleSockets(udpg)
-	time.AfterFunc(60 * time.Second, udpg.periodic)
+	time.AfterFunc(60*time.Second, udpg.periodic)
 }
-
 
 // http debug/ui
 
@@ -206,9 +201,6 @@ func (udpg *UDPGate) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
 	defer udpg.udpLock.RUnlock()
 	json.NewEncoder(w).Encode(udpg.ActiveUdp)
 }
-
-
-
 
 //// Server side of 'UDP-over-H2+QUIC'.
 //// 3 modes:
@@ -283,7 +275,7 @@ func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *n
 func forwardReadLoop(gw *UDPGate, l *ugate.Listener, udpL *net.UDPConn) {
 	remoteA, err := net.ResolveUDPAddr("udp", l.ForwardTo)
 	if err != nil {
-		log.Println("Invalid forward address ",l.ForwardTo, err)
+		log.Println("Invalid forward address ", l.ForwardTo, err)
 		return
 	}
 	if DumpUdp {
@@ -432,7 +424,7 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 				log.Println("Failed to resolve ", l.ForwardTo, err)
 				return
 			}
-			udpN.ReverseSrcAddr = &net.UDPAddr{IP:dstAddr, Port: int(dstPort)}
+			udpN.ReverseSrcAddr = &net.UDPAddr{IP: dstAddr, Port: int(dstPort)}
 		} else {
 			// Original destination
 			udpN.DestAddr = &net.UDPAddr{
@@ -460,7 +452,6 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 	udpN.SentPackets++
 	udpN.SentBytes += len(data)
 	udpN.Open = time.Now()
-
 
 	if DumpUdp {
 		if found {

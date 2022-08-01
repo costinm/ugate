@@ -21,11 +21,10 @@ import (
 // Port 443 (if root or redirected), or BASE + 7
 //
 // curl https://$NAME/ --connect-to $NAME:443:127.0.0.1:15007
-func (ug *UGate) acceptedHbone(rawStream *ugate.Conn) error {
-
+func (ug *UGate) acceptedHbone(rawStream *ugate.Stream) error {
 
 	tlsCfg := ug.TLSConfig
-	tc, err := ug.NewTLSConnIn(rawStream.Context(),rawStream.Listener, rawStream, tlsCfg)
+	tc, err := ug.NewTLSConnIn(rawStream.Context(), rawStream.Listener, rawStream, tlsCfg)
 	if err != nil {
 		rawStream.ReadErr = err
 		log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, rawStream.Route, err)
@@ -39,7 +38,7 @@ func (ug *UGate) acceptedHbone(rawStream *ugate.Conn) error {
 	ug.H2Handler.h2Server.ServeConn(
 		tc,
 		&http2.ServeConnOpts{
-			Handler: ug.H2Handler,                  // Also plain text, needs to be upgraded
+			Handler: ug.H2Handler, // Also plain text, needs to be upgraded
 			Context: tc.Context(), // associated with the stream, with cancel
 
 			//Context: // can be used to cancel, pass meta.
@@ -50,19 +49,18 @@ func (ug *UGate) acceptedHbone(rawStream *ugate.Conn) error {
 
 // Handles an accepted connection with plain text h2, intended for
 // hbone protocol.
-func (ug *UGate) acceptedHboneC(tc *ugate.Conn) error {
+func (ug *UGate) acceptedHboneC(tc *ugate.Stream) error {
 	tc.PostDial(tc, nil)
 	ug.H2Handler.h2Server.ServeConn(
 		tc,
 		&http2.ServeConnOpts{
-			Handler: http.HandlerFunc(ug.H2Handler.httpHandleHboneC),                  // Also plain text, needs to be upgraded
-			Context: tc.Context(), // associated with the stream, with cancel
+			Handler: http.HandlerFunc(ug.H2Handler.httpHandleHboneC), // Also plain text, needs to be upgraded
+			Context: tc.Context(),                                    // associated with the stream, with cancel
 			//Context: // can be used to cancel, pass meta.
 			// h2 adds http.LocalAddrContextKey(NetAddr), ServerContextKey (*Server)
 		})
 	return nil
 }
-
 
 func (l *H2Transport) httpHandleHboneC(w http.ResponseWriter, r *http.Request) {
 	t0 := time.Now()
@@ -111,7 +109,7 @@ func (l *H2Transport) httpHandleHboneC(w http.ResponseWriter, r *http.Request) {
 		ALPN: []string{"h2"},
 	}
 
-	tc, err := l.ug.NewTLSConnIn(rawStream.Context(),rawStream.Listener, rawStream,
+	tc, err := l.ug.NewTLSConnIn(rawStream.Context(), rawStream.Listener, rawStream,
 		tlsCfg)
 	if err != nil {
 		rawStream.ReadErr = err
@@ -140,17 +138,16 @@ func (l *H2Transport) httpHandleHboneC(w http.ResponseWriter, r *http.Request) {
 // At this point we got the TLS stream over H2, and forward to the app
 // We still need to know if the app is H2C or HTTP/1.1
 func (l *H2Transport) httpHandleHboneCHTTP(w http.ResponseWriter, r *http.Request) {
-	l.ForwardHTTP(w,r, "127.0.0.1:8080")
+	l.ForwardHTTP(w, r, "127.0.0.1:8080")
 }
 
 // HboneCat copies stdin/stdout to a HBONE stream.
 func HboneCat(ug *UGate, urlOrHost string, tls bool, stdin io.ReadCloser,
-		stdout io.WriteCloser) error {
+	stdout io.WriteCloser) error {
 	i, o := io.Pipe()
 
-
 	if !strings.HasPrefix(urlOrHost, "https://") {
-		h, p, err  := net.SplitHostPort(urlOrHost)
+		h, p, err := net.SplitHostPort(urlOrHost)
 		if err != nil {
 			return err
 		}
@@ -162,7 +159,7 @@ func HboneCat(ug *UGate, urlOrHost string, tls bool, stdin io.ReadCloser,
 		return err
 	}
 
-	var nc *ugate.Conn
+	var nc *ugate.Stream
 	if tls {
 		plain := ugate.NewStreamRequestOut(r, o, res, nil)
 		nc, err = ug.NewTLSConnOut(context.Background(), plain, ug.TLSConfig,
@@ -197,4 +194,3 @@ func HboneCat(ug *UGate, urlOrHost string, tls bool, stdin io.ReadCloser,
 	}
 	return nil
 }
-

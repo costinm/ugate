@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	msgs "github.com/costinm/ugate/webpush"
 )
@@ -24,7 +24,7 @@ import (
 var (
 	addr = flag.String("addr", "127.0.0.1:15007", "address:port for the node")
 
-	watch   = flag.Bool("watch", false, "Watch")
+	watch = flag.Bool("watch", false, "Watch")
 
 	recurse = flag.Bool("r", false, "Crawl and watch all possible nodes")
 )
@@ -58,7 +58,6 @@ func main() {
 
 	watchNodes(ug)
 }
-
 
 // Known nodes and watchers
 var watchers = map[uint64]*watcher{}
@@ -295,4 +294,3 @@ func (w *watcher) monitor(ug *ugatesvc.UGate, addr *net.IPAddr) {
 	}
 
 }
-

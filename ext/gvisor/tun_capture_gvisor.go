@@ -482,7 +482,7 @@ func (nt *GvisorTun) defUdp6Server() error {
 	// Like a socket
 	//var wq waiter.Queue
 	//
-	//ep6, err := nt.IPStack.NewEndpoint(udp.ProtocolNumber, ipv6.ProtocolNumber, &wq)
+	//ep6, err := nt.IPStack.NewEndpointCon(udp.ProtocolNumber, ipv6.ProtocolNumber, &wq)
 	//if err != nil {
 	//	return errors.New(err.String())
 	//}
@@ -607,7 +607,7 @@ func (nt *GvisorTun) DefTcpServer(handler TUNHandler) {
 
 func (nt *GvisorTun) DefTcp6Server() {
 	//var wq waiter.Queue
-	//ep, err := nt.IPStack.NewEndpoint(tcp.ProtocolNumber, ipv6.ProtocolNumber, &wq)
+	//ep, err := nt.IPStack.NewEndpointCon(tcp.ProtocolNumber, ipv6.ProtocolNumber, &wq)
 	//if err != nil {
 	//	return nil, wq, errors.New(err.String())
 	//}
@@ -718,6 +718,6 @@ func gsetRouteTable(ipstack *stack.Stack, real bool) {
 
  - packet injected and sent by link - dmtun (but doesn't work android) or channel based
 
- - View - slice of buffer, TrimFront, CapLength,
+ - View - slice of buffer, Skip, CapLength,
  -
 */

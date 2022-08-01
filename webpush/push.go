@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 )
 
 // RFC8291 - Message Encryption for Web push
@@ -127,8 +127,6 @@ func SubscriptionFromJSON(b []byte) (*Subscription, error) {
 
 	return &Subscription{sub.Endpoint, key, auth, ""}, nil
 }
-
-
 
 //// Send a message using the Web Push protocol to the recipient identified by the
 //// given subscription object. If the client is nil then the default HTTP client

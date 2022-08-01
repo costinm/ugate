@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 

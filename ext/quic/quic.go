@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
@@ -25,7 +25,6 @@ func init() {
 		}
 	})
 }
-
 
 // Quic is the adapter to QUIC/H3/MASQUE for uGate.
 //
@@ -44,8 +43,8 @@ func init() {
 // TODO: define 'webpush over MASQUE'
 // TODO: also MASQUE-IP, if TUN support is enabled ( Android )
 type Quic struct {
-	Auth      *auth.Auth
-	Port      int
+	Auth *auth.Auth
+	Port int
 
 	// Incoming streams are mapped to HTTP
 	HTTPHandler http.Handler
@@ -71,17 +70,17 @@ func New(ug *ugatesvc.UGate) *Quic {
 	//}
 
 	qa := &Quic{
-		Port: port,
-		Auth: ug.Auth,
+		Port:        port,
+		Auth:        ug.Auth,
 		HTTPHandler: ug.H2Handler,
-		UG: ug,
+		UG:          ug,
 	}
 
 	ug.MuxDialers["quic"] = qa
-	mtlsServerConfig :=qa.Auth.GenerateTLSConfigServer()
+	mtlsServerConfig := qa.Auth.GenerateTLSConfigServer()
 
 	// Overrides
-	mtlsServerConfig.NextProtos = []string{"h3r","h3-34"}
+	mtlsServerConfig.NextProtos = []string{"h3r", "h3-34"}
 
 	// called with ClientAuth is RequestClientCert or RequireAnyClientCert
 	mtlsServerConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
@@ -146,14 +145,14 @@ func (q *Quic) quicConfig() *quic.Config {
 		EnableDatagrams: true,
 
 		// Increasing it 10x doesn't seem to change the speed.
-		InitialStreamReceiveWindow: 4 * 1024 * 1024,
-		MaxStreamReceiveWindow: 16 * 1024 * 1024,
+		InitialStreamReceiveWindow:     4 * 1024 * 1024,
+		MaxStreamReceiveWindow:         16 * 1024 * 1024,
 		InitialConnectionReceiveWindow: 4 * 1024 * 1024,
-		MaxConnectionReceiveWindow:  64 * 1024 * 1024,
+		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 	}
 }
 
-func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Conn)) (ugate.Muxer, error) {
+func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
 	tlsConf := &tls.Config{
 		// VerifyPeerCertificate used instead
 		InsecureSkipVerify: true,
@@ -172,8 +171,6 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Heade
 	if err != nil {
 		return nil, err
 	}
-
-
 
 	// session.Context() is canceled when the session is closed.
 	session, err := quic.DialEarlyContext(ctx, udpConn, udpAddr, addr, tlsConf, qd.quicConfig())
@@ -211,7 +208,7 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Heade
 	//	}
 	//}
 	go func() {
-		<- session.Context().Done()
+		<-session.Context().Done()
 		log.Println("H3: stop on ", qd.Auth.ID, "for", node.ID, session.RemoteAddr())
 		node.Muxer = nil
 		// TODO: anything to do on close ?
@@ -230,7 +227,7 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Heade
 			}
 
 			//if UseRawStream {
-				go qd.handleRaw(str)
+			go qd.handleRaw(str)
 			//} else {
 			//	// Treat the remote (server) originated stream as a H3 reverse request.
 			//	// The server will process the session and dispatch to a handler.
@@ -260,7 +257,6 @@ func (qd *Quic) Start() error {
 		return err
 	}
 
-
 	l, err := quic.ListenEarly(c, qd.tlsServerConfig, qd.quicConfig())
 	if err != nil {
 		log.Println("H3: Failed to start server ", err)
@@ -282,18 +278,17 @@ func (qd *Quic) Start() error {
 			// not blocking
 			qd.handleMessages(ugc)
 
-
 			//if UseRawStream {
-				go func() {
-					for {
-						str, err := s.AcceptStream(context.Background())
-						if err != nil {
-							log.Println("AcceptStream err", err)
-							return
-						}
-						go qd.handleRaw(str)
+			go func() {
+				for {
+					str, err := s.AcceptStream(context.Background())
+					if err != nil {
+						log.Println("AcceptStream err", err)
+						return
 					}
-				}()
+					go qd.handleRaw(str)
+				}
+			}()
 			//} else {
 			//	// TODO: we need a way to pass the mux on the first
 			//	// request ( or the ID request ) to associate it with the node.
@@ -353,5 +348,3 @@ func (qd *Quic) handleMessages(ugc *QuicMUX) {
 		}
 	}()
 }
-
-

@@ -20,7 +20,8 @@ syntax = "proto3";
 // Retransmit?
 // Sliding windows?
 
-option go_package = "sigs.k8s.io/apiserver-network-proxy/konnectivity-client/proto/client";
+//option go_package = "sigs.k8s.io/apiserver-network-proxy/konnectivity-client/proto/client";
+option go_package = "github.com/costinm/ugate/gen/proto";
 
 service ProxyService {
   rpc Proxy(stream Packet) returns (stream Packet) {}

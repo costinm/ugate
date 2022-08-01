@@ -51,6 +51,20 @@ push/docker.ugate: docker push/ugate
 push/ugate:
 	docker push ${IMAGE}:latest
 
+cm-install:
+	kubectl apply --validate=false -f https://github.com/jetstack/cert-manager/releases/download/v1.8.0/cert-manager.yaml
+	#kubectl -n istio-system apply -f manifests/istio-issuer.yaml
+
+deploy/kiali:
+	helm install \
+  --namespace istio-system \
+  --set auth.strategy="anonymous" \
+  --repo https://kiali.org/helm-charts \
+  kiali-server \
+  kiali-server
+
+fw/kiali:
+	kubectl port-forward svc/kiali 20001:20001 -n istio-system&
 
 # Using Intellij plugin: missing manifest features
 # Build with buildpack: 30 sec to deploy
@@ -158,5 +172,6 @@ deps:
 	# Test tool
 	go install github.com/bojand/ghz/cmd/ghz@latest
 
+proto-gen: PATH:=${HOME}/go/bin:${PATH}
 proto-gen:
 	cd proto && buf generate

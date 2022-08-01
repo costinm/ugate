@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 )
 
 // TLSConn extends tls.Conn with extra metadata.
@@ -19,26 +19,25 @@ import (
 type TLSConn struct {
 	// Raw TCP connection, for remote address and stats
 	// TODO: for H2-over-TLS-over-WS, it will be a WS conn
-	*ugate.Conn
+	*ugate.Stream
 
 	// wrapps the original conn for Local/RemoteAddress and deadlines
 	// Implements CloseWrite, ConnectionState,
 	tls *tls.Conn
 }
 
-func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*ugate.Conn, error) {
-	lc := &TLSConn{
-	}
-	if mc, ok := nc.(*ugate.Conn); ok {
-		lc.Conn = mc
+func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*ugate.Stream, error) {
+	lc := &TLSConn{}
+	if mc, ok := nc.(*ugate.Stream); ok {
+		lc.Stream = mc
 		if rnc, ok := lc.Out.(net.Conn); ok {
 			nc = rnc
 		}
 	} else {
-		lc.Conn = ugate.NewStream()
+		lc.Stream = ugate.NewStream()
 	}
 
-	config, keyCh := ConfigForPeer(ug.Auth,cfg, peerID)
+	config, keyCh := ConfigForPeer(ug.Auth, cfg, peerID)
 	if alpn != nil {
 		config.NextProtos = alpn
 	}
@@ -47,21 +46,21 @@ func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config
 	if err != nil {
 		return nil, err
 	}
-	lc.Conn.In = lc.tls
-	lc.Conn.Out = lc.tls
+	lc.Stream.In = lc.tls
+	lc.Stream.Out = lc.tls
 
 	//lc.tls.ConnectionState().DidResume
 	tcs := lc.tls.ConnectionState()
-	lc.Conn.TLS = &tcs
+	lc.Stream.TLS = &tcs
 	lc.tls = cs
 
-	return lc.Conn, err
+	return lc.Stream, err
 }
 
 // SecureInbound runs the TLS handshake as a server.
 // Accepts connections without client certificate - alternate form of auth will be used, either
 // an inner TLS connection or JWT in metadata.
-func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*ugate.Conn, error) {
+func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*ugate.Stream, error) {
 	config, keyCh := ConfigForPeer(ug.Auth, cfg, "")
 	if l != nil {
 		if l.ALPN == nil {
@@ -71,8 +70,8 @@ func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Con
 		}
 	}
 	tc := &TLSConn{}
-	tc.Conn = ugate.NewStream()
-	if mc, ok := nc.(*ugate.Conn); ok {
+	tc.Stream = ugate.NewStream()
+	if mc, ok := nc.(*ugate.Stream); ok {
 		m := mc
 		// Sniffed, etc
 		tc.Route = m.Route
@@ -86,11 +85,11 @@ func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Con
 		return nil, err
 	}
 	tcs := tc.tls.ConnectionState()
-	tc.Conn.TLS = &tcs
-	tc.Conn.In = tc.tls
-	tc.Conn.Out = tc.tls
+	tc.Stream.TLS = &tcs
+	tc.Stream.In = tc.tls
+	tc.Stream.Out = tc.tls
 
-	return tc.Conn, err
+	return tc.Stream, err
 }
 
 func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
@@ -125,7 +124,7 @@ func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Con
 		// TODO: also verify the SAN (Istio and DNS style)
 
 		if remotePeerID != "" &&
-				remotePeerID != pubKeyPeerID {
+			remotePeerID != pubKeyPeerID {
 			return errors.New("peer IDs don't match")
 		}
 		keyCh <- chain
@@ -135,11 +134,11 @@ func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Con
 }
 
 func (pl *TLSConn) handshake(
-		ctx context.Context,
-		keyCh <-chan []*x509.Certificate,
+	ctx context.Context,
+	keyCh <-chan []*x509.Certificate,
 ) (*tls.Conn, []*x509.Certificate, error) {
 
-	// There's no way to pass a context to tls.Conn.Handshake().
+	// There's no way to pass a context to tls.Stream.Handshake().
 	// See https://github.com/golang/go/issues/18482.
 	// Close the connection instead.
 
@@ -183,7 +182,7 @@ func (pl *TLSConn) handshake(
 	//t.RemotePub = remotePubKey
 	//
 	//// At this point the BufferedCon unsecure connection can't be used.
-	//t.Conn = tlsConn
+	//t.Stream = tlsConn
 
 	return pl.tls, remotePubKey, nil
 }
@@ -212,14 +211,13 @@ const (
 	extensionServerName uint16 = 0
 )
 
-
 // TODO: if a session ID is provided, use it as a cookie and attempt
 // to find the corresponding host.
 // On server side generate session IDs !
 //
 // TODO: in mesh, use one cypher suite (TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
 // maybe 2 ( since keys are ECDSA )
-func ParseTLS(acc *ugate.Conn) (*clientHelloMsg,error) {
+func ParseTLS(acc *ugate.Stream) (*clientHelloMsg, error) {
 	buf, err := acc.Fill(5)
 	if err != nil {
 		return nil, err
@@ -360,7 +358,6 @@ func ParseTLS(acc *ugate.Conn) (*clientHelloMsg,error) {
 		acc.Dest = m.serverName
 	}
 	acc.Type = ugate.ProtoTLS
-
 
 	return &m, nil
 }

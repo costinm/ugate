@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"golang.org/x/net/http2"
 )
 
@@ -47,11 +47,11 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 	h2 := &H2Transport{
 		ug:           ug,
 		httpListener: newListener(),
-		conns: map[*http2.ClientConn]*ugate.DMNode{},
+		conns:        map[*http2.ClientConn]*ugate.DMNode{},
 		h2t: &http2.Transport{
-			ReadIdleTimeout: 10000 * time.Second,
+			ReadIdleTimeout:            10000 * time.Second,
 			StrictMaxConcurrentStreams: false,
-			AllowHTTP: true,
+			AllowHTTP:                  true,
 		},
 	}
 	h2.h2Server = &http2.Server{}
@@ -76,7 +76,6 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 
 	return h2, nil
 }
-
 
 // Common entry point for H1, H2 - both plain and tls
 // Will do the 'common' operations - authn, authz, logging, metrics for all BTS and regular HTTP.
@@ -142,7 +141,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tls := r.TLS
 	// If the request was handled by normal uGate listener.
 	us := r.Context().Value("ugate.stream")
-	if ugs, ok := us.(*ugate.Conn); ok {
+	if ugs, ok := us.(*ugate.Stream); ok {
 		tls = ugs.TLS
 		r.TLS = tls
 	}
@@ -189,14 +188,14 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	l.ug.Mux.ServeHTTP(w,r)
+	l.ug.Mux.ServeHTTP(w, r)
 }
 
 // Handle accepted connection on a port declared as "http"
 // Will sniff H2 and http/1.1 and use the right handler.
 //
 // Ex: curl localhost:9080/debug/vars --http2-prior-knowledge
-func (t *H2Transport) handleHTTPListener(bconn *ugate.Conn) error {
+func (t *H2Transport) handleHTTPListener(bconn *ugate.Stream) error {
 
 	err := SniffH2(bconn)
 	if err != nil {
@@ -206,13 +205,13 @@ func (t *H2Transport) handleHTTPListener(bconn *ugate.Conn) error {
 
 	if bconn.Type == ugate.ProtoH2 {
 		bconn.TLS = &tls.ConnectionState{
-			Version: tls.VersionTLS12,
+			Version:     tls.VersionTLS12,
 			CipherSuite: tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 		}
 		t.h2Server.ServeConn(
 			bconn,
 			&http2.ServeConnOpts{
-				Handler: t,                  // Also plain text, needs to be upgraded
+				Handler: t,   // Also plain text, needs to be upgraded
 				Context: ctx, // associated with the stream, with cancel
 
 				//Context: // can be used to cancel, pass meta.
@@ -236,8 +235,7 @@ var (
 	h2ClientPreface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
 )
 
-
-func SniffH2(s *ugate.Conn) error {
+func SniffH2(s *ugate.Stream) error {
 	var proto string
 
 	for {
@@ -246,13 +244,13 @@ func SniffH2(s *ugate.Conn) error {
 			return err
 		}
 
-		if ix := bytes.IndexByte(buf, '\n'); ix >=0 {
+		if ix := bytes.IndexByte(buf, '\n'); ix >= 0 {
 			if bytes.Contains(buf, []byte("HTTP/1.1")) {
 				proto = ugate.ProtoHTTP
 				break
 			}
 		}
-		if ix := bytes.IndexByte(buf, '\n'); ix >=0 {
+		if ix := bytes.IndexByte(buf, '\n'); ix >= 0 {
 			if bytes.Contains(buf, []byte("HTTP/2.0")) {
 				proto = ugate.ProtoH2
 				break
@@ -265,18 +263,17 @@ func SniffH2(s *ugate.Conn) error {
 	return nil
 }
 
-
 // Handle implements the connection interface for uGate, for HTTPS
 // listeners.
 //
 // Blocking.
-func (t *H2Transport) HandleHTTPS(str *ugate.Conn) error {
+func (t *H2Transport) HandleHTTPS(str *ugate.Stream) error {
 	// http2 and http expect a net.Listener, and do their own accept()
 	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2" {
 		t.h2Server.ServeConn(
 			str,
 			&http2.ServeConnOpts{
-				Handler: t,                  // Also plain text, needs to be upgraded
+				Handler: t,             // Also plain text, needs to be upgraded
 				Context: str.Context(), // associated with the stream, with cancel
 
 				//Context: // can be used to cancel, pass meta.
@@ -293,11 +290,9 @@ func (t *H2Transport) HandleHTTPS(str *ugate.Conn) error {
 	return nil
 }
 
-
 func (l *H2Transport) Close() error {
 	return nil
 }
-
 
 // Listener backed on an chan. Go HTTP stack requires a Listener
 // implementation - use with http.Serve().
@@ -350,24 +345,24 @@ func (l *listener) Accept() (net.Conn, error) {
 }
 
 //type HttpClientStream struct {
-//	ugate.Conn
+//	ugate.Stream
 //	*http.Response
 //	request *http.Request
 //}
 //
-//func NewHttpClientStream(s *ugate.Conn) *HttpClientStream {
+//func NewHttpClientStream(s *ugate.Stream) *HttpClientStream {
 //	h := &HttpClientStream{
 //	}
 //	return h
 //}
 //
 //type HttpServerStream struct {
-//	ugate.Conn
+//	ugate.Stream
 //	http.ResponseWriter
 //	request *http.Request
 //}
 //
-//func NewHttpServerStream(s *ugate.Conn) *HttpServerStream {
+//func NewHttpServerStream(s *ugate.Stream) *HttpServerStream {
 //	h := &HttpServerStream{
 //	}
 //	return h

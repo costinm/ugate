@@ -72,3 +72,18 @@ SourceIdentifier, TraceRoute(!), Id() uint32, )
 Issues:
 - Dial doesn't seem to take context. DialWithOptions has timeout, initial data.
 - 
+
+# Netpoll
+
+https://github.com/cloudwego/netpoll
+
+Defines a 'zero copy' model, based on `Next(n) []byte` and Release() intead of Read(buf)
+and 
+
+https://github.com/cloudwego/netpoll/blob/develop/nocopy_linkbuffer.go - 
+uses unsafe for string/slice
+
+# https://github.com/lesismal/nbio
+
+- for websocket
+- nb tls 

@@ -14,10 +14,9 @@ import (
 	"time"
 
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
-
 
 var (
 	// Address used for link local discovery.
@@ -40,13 +39,12 @@ var (
 	regDNCE = expvar.NewInt("RegDCE")
 )
 
-
 func NewLocal(gw *ug.UGate, auth *auth.Auth) *LLDiscovery {
 	return &LLDiscovery{
-		mcPort:   5227,
-		udpPort:  gw.Config.BasePort + 8,
-		gw:       gw,
-		auth:     auth,
+		mcPort:  5227,
+		udpPort: gw.Config.BasePort + 8,
+		gw:      gw,
+		auth:    auth,
 	}
 }
 
@@ -68,8 +66,6 @@ func ListenUDP(gw *LLDiscovery) {
 	go gw.PeriodicThread()
 }
 
-
-
 // Called after connection to the VPN has been created.
 //
 // Currently used only for Mesh AP chains.
@@ -78,22 +74,22 @@ func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.DMNode, addr *net.UDPAddr,
 	//add := &net.UDPAddr{IP: addr.IP, Zone: addr.Zone, Port: 5222}
 
 	//if fromMySTA && node.TunClient == nil {
-		//log.Println("TODO: connect to ", add)
-		//sshVpn, err := gw.gw.SSHGate.DialMUX(add.String(), node.PublicKey, nil)
-		//if err != nil {
-		//	log.Println("SSH STA ERR ", add, node.VIP, err)
-		//	return
-		//}
-		//go func() {
-		//	node.TunClient = sshVpn
-		//
-		//	// Blocking - will be closed when the ssh connection is closed.
-		//	sshVpn.Wait()
-		//
-		//	node.TunClient = nil
-		//	log.Println("SSH STA CLOSE ", add, node.VIP)
-		//
-		//}()
+	//log.Println("TODO: connect to ", add)
+	//sshVpn, err := gw.gw.SSHGate.DialMUX(add.String(), node.PublicKey, nil)
+	//if err != nil {
+	//	log.Println("SSH STA ERR ", add, node.VIP, err)
+	//	return
+	//}
+	//go func() {
+	//	node.TunClient = sshVpn
+	//
+	//	// Blocking - will be closed when the ssh connection is closed.
+	//	sshVpn.Wait()
+	//
+	//	node.TunClient = nil
+	//	log.Println("SSH STA CLOSE ", add, node.VIP)
+	//
+	//}()
 	//}
 }
 
@@ -130,38 +126,38 @@ func (gw *LLDiscovery) ensureConnectedUp(laddr *net.UDPAddr, node *ugate.DMNode)
 	//for {
 	//	hasUp := false
 	//	for _, a := range gw.ActiveInterfaces {
-			// WLAN connected to 49.1 - probably AP
-			//if !strings.Contains(a.Name, "p2p") && a.AndroidAPClient {
-			//	hasUp = true
-			//	var conMux ugate.MuxedConn
-			//	addr := ""
-			//	if laddr != nil {
-			//		addr = laddr.String()
-			//		conMux, err = gw.gw.SSHGate.DialMUX(addr, node.PublicKey, nil)
-			//	}
-			//	if conMux == nil {
-			//		addr = "192.168.49.1:5222"
-			//		conMux, err = gw.gw.SSHGate.DialMUX(addr, nil, nil)
-			//	}
-			//	if err != nil {
-			//		log.Println("MCDirect: announce P2P ToAP 49.1 fail ", err)
-			//		time.Sleep(120 * time.Second)
-			//		continue
-			//	} else {
-			//		log.Println("MCDirect: announce P2P ToAP 49.1 ok ")
-			//		msgs.Send("/LM/P2P", "Addr",
-			//			addr, "up", conMux.RemoteVIP().String())
-			//
-			//		gw.gw.SSHClientUp = conMux
-			//
-			//		// Blocking - will be closed when the ssh connection is closed.
-			//		conMux.Wait()
-			//		gw.gw.SSHClientUp = nil
-			//		// TODO: shorter timeout with exponential backoff
-			//		log.Println("SSH VPN CLOSED")
-			//		time.Sleep(5 * time.Second)
-			//	}
-			//}
+	// WLAN connected to 49.1 - probably AP
+	//if !strings.Contains(a.Name, "p2p") && a.AndroidAPClient {
+	//	hasUp = true
+	//	var conMux ugate.MuxedConn
+	//	addr := ""
+	//	if laddr != nil {
+	//		addr = laddr.String()
+	//		conMux, err = gw.gw.SSHGate.DialMUX(addr, node.PublicKey, nil)
+	//	}
+	//	if conMux == nil {
+	//		addr = "192.168.49.1:5222"
+	//		conMux, err = gw.gw.SSHGate.DialMUX(addr, nil, nil)
+	//	}
+	//	if err != nil {
+	//		log.Println("MCDirect: announce P2P ToAP 49.1 fail ", err)
+	//		time.Sleep(120 * time.Second)
+	//		continue
+	//	} else {
+	//		log.Println("MCDirect: announce P2P ToAP 49.1 ok ")
+	//		msgs.Send("/LM/P2P", "Addr",
+	//			addr, "up", conMux.RemoteVIP().String())
+	//
+	//		gw.gw.SSHClientUp = conMux
+	//
+	//		// Blocking - will be closed when the ssh connection is closed.
+	//		conMux.Wait()
+	//		gw.gw.SSHClientUp = nil
+	//		// TODO: shorter timeout with exponential backoff
+	//		log.Println("SSH VPN CLOSED")
+	//		time.Sleep(5 * time.Second)
+	//	}
+	//}
 	//	}
 	//	if !hasUp {
 	//		return nil
@@ -245,10 +241,10 @@ func mcMessage(gw *LLDiscovery, i *ActiveInterface, isAck bool) []byte {
 	// my client ssid
 	//
 	ann := &ugate.NodeAnnounce{
-		UA:   gw.gw.Auth.Name,
-		IPs:  ips(gw.ActiveInterfaces),
+		UA:  gw.gw.Auth.Name,
+		IPs: ips(gw.ActiveInterfaces),
 		//SSID: gw.auth.Config.Conf(gw.auth.Config, "ssid", ""),
-		Ack:  isAck,
+		Ack: isAck,
 	}
 
 	if i.AndroidAP || strings.Contains(i.Name, "p2p") {
@@ -402,8 +398,6 @@ func (gw *LLDiscovery) AnnounceMulticast() {
 	cnt := 0
 	ok := []string{}
 	fail := []string{}
-
-
 
 	// Send IPv6 messages
 	for _, a := range gw.ActiveInterfaces {

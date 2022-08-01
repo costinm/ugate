@@ -21,13 +21,13 @@ import (
 // the routes.
 //
 // After determining the target from meta or config the request is proxied.
-//func (pl *Listener) handleEgress(acceptedCon net.Conn) error {
+//func (pl *Listener) handleEgress(acceptedCon net.Stream) error {
 //
 //	return nil
 //}
 
 // WIP: handling for accepted connections for this node.
-//func (pl *Listener) handleLocal(acceptedCon net.Conn) error {
+//func (pl *Listener) handleLocal(acceptedCon net.Stream) error {
 //
 //	return nil
 //}
@@ -46,12 +46,13 @@ func (ug *UGate) HandleTUN(conn net.Conn, ra *net.TCPAddr, la *net.TCPAddr) erro
 	ug.OnStream(bconn)
 	defer ug.OnStreamDone(bconn)
 
-	bconn.Session = &ugate.Session{RemoteAddr: ra, LocalAddr: la}
+	bconn.RemoteA = ra
+	bconn.LocalA = la
 
 	// Testing/debugging - localhost is captured by table local, rule 0.
 	if bconn.Dest == "" {
-			bconn.Dest = ra.String()
-			log.Println("LTUN ", ra, la, bconn.Dest)
+		bconn.Dest = ra.String()
+		log.Println("LTUN ", ra, la, bconn.Dest)
 	}
 
 	log.Println("TUN TCP ", bconn)
@@ -62,7 +63,7 @@ func (ug *UGate) HandleTUN(conn net.Conn, ra *net.TCPAddr, la *net.TCPAddr) erro
 // Handle a virtual (multiplexed) stream, received over
 // another connection, for example H2 POST/CONNECT, etc
 // The connection will have metadata, may include identify of the caller.
-func (ug *UGate) HandleVirtualIN(bconn *ugate.Conn) error {
+func (ug *UGate) HandleVirtualIN(bconn *ugate.Stream) error {
 	ug.OnStream(bconn)
 	defer ug.OnStreamDone(bconn)
 
@@ -72,13 +73,12 @@ func (ug *UGate) HandleVirtualIN(bconn *ugate.Conn) error {
 // handleSNI is intended for a dedicated SNI port.
 // Will use the Config.Routes to map the SNI host to a ForwardTo address. If not found,
 // will use a callback for a dynamic route.
-func (ug *UGate) handleSNI(str *ugate.Conn) error {
+func (ug *UGate) handleSNI(str *ugate.Stream) error {
 	// Used to present the right cert
 	_, str.ReadErr = ParseTLS(str)
 	if str.ReadErr != nil {
 		return str.ReadErr
 	}
-
 
 	route := ug.Config.Routes[str.Dest]
 	if route != nil {
@@ -90,7 +90,7 @@ func (ug *UGate) handleSNI(str *ugate.Conn) error {
 			// have a real connection, faking it.
 			str.PostDial(str, nil)
 			str.Dest = fmt.Sprintf("%v", route.Handler)
-			err:= route.Handler.Handle(str)
+			err := route.Handler.Handle(str)
 			str.Close()
 			return err
 		}
@@ -109,7 +109,7 @@ func (ug *UGate) handleSNI(str *ugate.Conn) error {
 // For SNI - will use the SNI name to route the stream.
 //
 // TODO: depreacte, too complex. Dedicated port for SNI is better and cleaner.
-func (ug *UGate) handleTLSorSNI(rawStream *ugate.Conn) error {
+func (ug *UGate) handleTLSorSNI(rawStream *ugate.Stream) error {
 
 	// Used to present the right cert
 	_, rawStream.ReadErr = ParseTLS(rawStream)
@@ -198,17 +198,15 @@ func (ug *UGate) handleTLSorSNI(rawStream *ugate.Conn) error {
 		// Default stream handling is proxy to the SNI dest.
 		// Note that SNI does not include port number.
 
-
 		rawStream.ReadErr = ug.HandleStream(rawStream)
 	}
 	return nil
 }
 
-
 // Hamdle implements the common interface for handling accepted streams.
 // Will init and log the stream, then handle.
 //
-func (ug *UGate) Handle(s *ugate.Conn) {
+func (ug *UGate) Handle(s *ugate.Stream) {
 	ug.OnStream(s)
 	defer ug.OnStreamDone(s)
 
@@ -217,7 +215,7 @@ func (ug *UGate) Handle(s *ugate.Conn) {
 
 // A real accepted connection on a 'legacy' port. Will be forwarded to
 // the mesh.
-func (ug *UGate) handleTCPForward(bconn *ugate.Conn) error {
+func (ug *UGate) handleTCPForward(bconn *ugate.Stream) error {
 	bconn.Direction = ugate.StreamTypeForward
 
 	if bconn.Listener.ForwardTo != "" {
@@ -228,7 +226,7 @@ func (ug *UGate) handleTCPForward(bconn *ugate.Conn) error {
 	return bconn.ReadErr
 }
 
-func (ug *UGate) handleTCPEgress(bconn *ugate.Conn) error {
+func (ug *UGate) handleTCPEgress(bconn *ugate.Stream) error {
 	bconn.Direction = ugate.StreamTypeOut
 
 	bconn.Dest = bconn.Listener.ForwardTo
@@ -245,7 +243,7 @@ func (ug *UGate) handleTCPEgress(bconn *ugate.Conn) error {
 // - SOCKS (5)
 // - H2
 // - TODO: HAproxy
-//func sniff(pl *ugate.Listener, br *stream.StreamBuffer) error {
+//func sniff(pl *ugate.Listener, br *stream.Buffer) error {
 //	br.Sniff()
 //	var proto string
 //
@@ -292,8 +290,7 @@ func (ug *UGate) handleTCPEgress(bconn *ugate.Conn) error {
 //	case ProtoTLS:
 //		pl.gate.sniffSNI(br)
 //	}
-//	br.Conn.Type = proto
+//	br.Stream.Type = proto
 //
 //	return nil
 //}
-

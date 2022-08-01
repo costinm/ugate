@@ -26,6 +26,7 @@ func init() {
 			SignerClient: signer,
 		})
 
+		// Forward requests use ugate Dialer.
 		qa.Forward = func(ctx context.Context, host string, closer io.ReadWriteCloser) {
 			str := ugate.GetStream(closer, closer)
 			defer ug.OnStreamDone(str)

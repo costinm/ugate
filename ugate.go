@@ -2,7 +2,6 @@ package ugate
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"expvar"
 	"io"
@@ -360,7 +359,7 @@ type Route struct {
 
 // TODO: use net.Dialer (timeout, keep alive, resolver, etc)
 
-// TODO: use net.Dialer.DialContext(ctx context.Context, network, address string) (Conn, error)
+// TODO: use net.Dialer.DialContext(ctx context.Context, network, address string) (Stream, error)
 // Dialer also uses nettrace in context, calls resolver,
 // can do parallel or serial calls. Supports TCP, UDP, Unix, IP
 
@@ -374,7 +373,7 @@ type Route struct {
 
 // ContextDialer is same with x.net.proxy.ContextDialer
 // Used to create the actual connection to an address using the mesh.
-// The result may have metadata, and be an instance of ugate.Conn.
+// The result may have metadata, and be an instance of ugate.Stream.
 //
 // A uGate implements this interface, it is the primary interface
 // for creating streams where the caller does not want to pass custom
@@ -392,6 +391,7 @@ type ContextDialer interface {
 	DialContext(ctx context.Context, net, addr string) (net.Conn, error)
 }
 
+// Deprecated - use ContextDialer. Implemented only by Quic
 // StreamDialer is used to open a stream by address, optionally passing
 // metadata and starting to forward ( possibly as early data ) an input
 // stream. Generally implemented by multiplexer protocols that support
@@ -404,7 +404,7 @@ type StreamDialer interface {
 	// inStream.In, if not nil, will be automatically forwarded to new dialed stream.
 	// inStream in headers, if set, will be forwarded to the remote host.
 	//
-	DialStream(ctx context.Context, addr string, inStream *Conn) (*Conn, error)
+	DialStream(ctx context.Context, addr string, inStream *Stream) (*Stream, error)
 }
 
 // Muxer is the interface implemented by a multiplexed connection with metadata
@@ -425,63 +425,38 @@ type MuxDialer interface {
 	// For non-mesh nodes the H2 connection may not allow incoming streams or
 	// messages. Mesh nodes emulate incoming streams using /h2r/ and send/receive
 	// messages using /.dm/msg/
-	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Conn)) (Muxer, error)
+	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Stream)) (Muxer, error)
 }
-
-// Session (connection, association, mux) with a remote host.
-// Holds the net-level remote address, TLS info, etc
-// May be multiplexed or not.
-type Session struct {
-	// Set if the connection finished a TLS handshake.
-	// A 'dummy' value may be set if a sidecar terminated the connection.
-	TLS *tls.ConnectionState `json:"-"`
-
-	// Connection level address - typically the real IP. If not set, attempt to
-	// extract it from the connection.
-	RemoteAddr net.Addr
-	LocalAddr  net.Addr
-}
-
-// StreamDialer is similar with RoundTrip, makes a single connection using a MUX.
-//
-// Unlike ContextDialer, also takes 'meta' and returns a Conn ( which implements net.Conn).
-//
-// UGate implements ContextDialer, so it can be used in other apps as a library without
-// dependencies to the API. The context can be used for passing metadata.
-// It also implements RoundTripper, since streams are mapped to HTTP.
-//type StreamDialer interface {
-//	DialStream(ctx context.Context, netw string, addr string, meta http.Header) (*Conn, error)
-//}
 
 // Handler is a handler for net.Conn with metadata.
 // Lighter alternative to http.Handler
 type Handler interface {
-	Handle(conn *Conn) error
+	Handle(conn *Stream) error
 }
 
 // Wrap a function as a stream handler.
-type HandlerFunc func(conn *Conn) error
+type HandlerFunc func(conn *Stream) error
 
-func (c HandlerFunc) Handle(conn *Conn) error {
+func (c HandlerFunc) Handle(conn *Stream) error {
 	return c(conn)
 }
 
 // HeaderEncoder abstracts the encoding of metadata.
 // Standard HTTP/2 or QUIC, proto, other formats may be used.
 //
-// This interface uses the Conn buffer and encodes/decodes the
+// This interface uses the Stream buffer and encodes/decodes the
 // metadata associated with the stream.
 type HeaderEncoder interface {
 	// Marshall will encode the headers into the wBuffer.
 	// Flush will need to be called to send to s.Out
-	Marshal(s *Conn) error
+	Marshal(s *Stream) error
 
 	// AddHeader directly to the stream buffer - without adding it to the meta.
-	AddHeader(s *Conn, k, v []byte)
+	AddHeader(s *Stream, k, v []byte)
 
 	// Unmarshall will decode from s.rBuffer. s.Fill() may be called to get
 	// additional data. The decoded headers will be set on the stream.
-	Unmarshal(s *Conn) (done bool, err error)
+	Unmarshal(s *Stream) (done bool, err error)
 }
 
 // IPResolver uses DNS cache or lookups to return the name
@@ -618,7 +593,7 @@ type NodeAnnounce struct {
 //	// On return, the stream ServerOut and ServerIn will be
 //	// populated, and connected to stream Dest.
 //	// deprecated:  use CreateStream
-//	DialProxy(tp *Conn) error
+//	DialProxy(tp *Stream) error
 //
 //	// The VIP of the remote host, after authentication.
 //	RemoteVIP() net.IP

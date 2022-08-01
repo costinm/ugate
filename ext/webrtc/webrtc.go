@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/pion/sctp"
 	"github.com/pion/webrtc/v3"
@@ -104,7 +104,6 @@ func DialWebRTC(inOffer *webrtc.SessionDescription) (*webrtc.SessionDescription,
 			fmt.Printf("Message from DataChannel '%s': '%s'\n", d.Label(), string(msg.Data))
 		})
 	})
-
 
 	// Set the remote SessionDescription. Starts the transport already !
 	err = peerConnection.SetRemoteDescription(*inOffer)
@@ -206,7 +205,7 @@ func InitWebRTCS(ug *ugatesvc.UGate, auth *auth.Auth) (*webrtc.PeerConnection, *
 	// Create a new RTCPeerConnection
 	peerConnection, err := webrtc.NewPeerConnection(config)
 	if err != nil {
-		return nil, nil,  err
+		return nil, nil, err
 	}
 
 	ug.Mux.HandleFunc("/.dm/webrtc/local", func(w http.ResponseWriter, request *http.Request) {
@@ -250,7 +249,6 @@ func InitWebRTCS(ug *ugatesvc.UGate, auth *auth.Auth) (*webrtc.PeerConnection, *
 		})
 	})
 
-
 	dc, err := peerConnection.CreateDataChannel("testdc", nil)
 	dc.OnOpen(func() {
 		dc.Send([]byte("Opened"))
@@ -258,7 +256,6 @@ func InitWebRTCS(ug *ugatesvc.UGate, auth *auth.Auth) (*webrtc.PeerConnection, *
 	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 		log.Println("Got ", msg)
 	})
-
 
 	offer, err := peerConnection.CreateOffer(nil)
 	ug.Mux.HandleFunc("/.dm/webrtc/offer", func(w http.ResponseWriter, request *http.Request) {
@@ -272,7 +269,6 @@ func InitWebRTCS(ug *ugatesvc.UGate, auth *auth.Auth) (*webrtc.PeerConnection, *
 	// Create channel that is blocked until ICE Gathering is complete
 	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 
-
 	// Block until ICE Gathering is complete, disabling trickle ICE
 	// we do this because we only can exchange one signaling message
 	// in a production application you should exchange ICE Candidates via OnICECandidate
@@ -281,5 +277,3 @@ func InitWebRTCS(ug *ugatesvc.UGate, auth *auth.Auth) (*webrtc.PeerConnection, *
 	log.Println("Offer gather complete")
 	return peerConnection, &offer, nil
 }
-
-

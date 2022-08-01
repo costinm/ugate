@@ -29,29 +29,29 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.(http.Flusher).Flush()
 
 	// H2 requests require write to be flushed - buffering happens !
-	// Wrap w.Body into Conn which does this automatically
+	// Wrap w.Body into Stream which does this automatically
 	str := ugate.NewStreamRequest(r, w, nil)
 
 	eh.handle(str, false)
 }
+
 // StreamInfo tracks informations about one stream.
 type StreamInfo struct {
 	LocalAddr  net.Addr
 	RemoteAddr net.Addr
 
-	Meta       http.Header
+	Meta http.Header
 
 	RemoteID string
 
-	ALPN     string
+	ALPN string
 
 	Dest string
 
 	Type string
 }
 
-
-func GetStreamInfo(str *ugate.Conn) *StreamInfo {
+func GetStreamInfo(str *ugate.Stream) *StreamInfo {
 	si := &StreamInfo{
 		LocalAddr:  str.LocalAddr(),
 		RemoteAddr: str.RemoteAddr(),
@@ -59,7 +59,7 @@ func GetStreamInfo(str *ugate.Conn) *StreamInfo {
 		Type:       str.Type,
 	}
 	if str.Request != nil {
-		si.Meta= str.Request.Header
+		si.Meta = str.Request.Header
 	}
 	if str.TLS != nil {
 		si.ALPN = str.TLS.NegotiatedProtocol
@@ -68,10 +68,10 @@ func GetStreamInfo(str *ugate.Conn) *StreamInfo {
 	return si
 }
 
-func (*EchoHandler) handle(str *ugate.Conn, serverFirst bool) error {
+func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	d := make([]byte, 2048)
 	si := GetStreamInfo(str)
-	si.RemoteID=   RemoteID(str)
+	si.RemoteID = RemoteID(str)
 	b1, _ := json.Marshal(si)
 	b := &bytes.Buffer{}
 	b.Write(b1)
@@ -102,7 +102,7 @@ func (*EchoHandler) handle(str *ugate.Conn, serverFirst bool) error {
 func (eh *EchoHandler) String() string {
 	return "Echo"
 }
-func (eh *EchoHandler) Handle(ac *ugate.Conn) error {
+func (eh *EchoHandler) Handle(ac *ugate.Stream) error {
 	if DebugEcho {
 		log.Println("ECHOS ", ac)
 	}
@@ -120,7 +120,7 @@ func (eh *EchoHandler) Handle(ac *ugate.Conn) error {
 //
 //	// Active pushed connections.
 //	// Key is peerID / stream ID
-//	active map[string]*net.Conn
+//	active map[string]*net.Stream
 //}
 //
 //// Single Pusher - one for each monitor

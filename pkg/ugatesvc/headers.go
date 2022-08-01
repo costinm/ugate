@@ -12,7 +12,6 @@ import (
 	"github.com/costinm/ugate"
 )
 
-
 // There are few options on how to pass stream metadata around:
 //
 // Mux proto:
@@ -30,17 +29,16 @@ import (
 // all options can be supported.
 
 type MimeEncoder struct {
-
 }
 
-func (*MimeEncoder) Unmarshal(s *ugate.Conn) (done bool, err error) {
+func (*MimeEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
 	buf, err := s.Fill(5)
 	if err != nil {
 		return false, err
 	}
 
 	len := binary.LittleEndian.Uint32(buf[1:])
-	if len > 32 * 1024 {
+	if len > 32*1024 {
 		return false, errors.New("header size")
 	}
 
@@ -57,26 +55,26 @@ func (*MimeEncoder) Unmarshal(s *ugate.Conn) (done bool, err error) {
 	s.Skip(5 + int(len))
 
 	if ugate.DebugClose {
-		log.Println("Conn.receiveHeaders ", s.StreamId, s.InHeader, s.RBuffer().Size())
+		log.Println("Stream.receiveHeaders ", s.StreamId, s.InHeader, s.RBuffer().Size())
 	}
 
 	return true, nil
 }
 
-func (*MimeEncoder) Marshal(s *ugate.Conn) error {
+func (*MimeEncoder) Marshal(s *ugate.Stream) error {
 	bb := s.WBuffer()
 	h := s.InHeader
 	if s.Direction == ugate.StreamTypeOut ||
-			s.Direction == ugate.StreamTypeUnknown {
+		s.Direction == ugate.StreamTypeUnknown {
 		h = s.OutHeader
 	}
 
 	bb.WriteByte(2) // To differentiate from regular H3, using 0
-	bb.Write([]byte{0,0,0,0})
+	bb.Write([]byte{0, 0, 0, 0})
 	err := s.OutHeader.Write(bb)
 	data := bb.Bytes()
 
-	binary.LittleEndian.PutUint32(data[1:], uint32(bb.Size() - 5))
+	binary.LittleEndian.PutUint32(data[1:], uint32(bb.Size()-5))
 	if err != nil {
 		return err
 	}
@@ -88,7 +86,7 @@ func (*MimeEncoder) Marshal(s *ugate.Conn) error {
 	}
 
 	if ugate.DebugClose {
-		log.Println("Conn.sendHeaders ", s.StreamId, h)
+		log.Println("Stream.sendHeaders ", s.StreamId, h)
 	}
 
 	return nil
@@ -113,10 +111,9 @@ func (*MimeEncoder) Marshal(s *ugate.Conn) error {
 // 0=varint, 1-64fixed, 2=len-delim, 5=32fixed.
 //
 type BEncoder struct {
-
 }
 
-func (*BEncoder) AddHeader(s *ugate.Conn, k, v []byte) {
+func (*BEncoder) AddHeader(s *ugate.Stream, k, v []byte) {
 	bb := s.WBuffer()
 	if bb.Size() == 0 {
 		bb.WriteByte(0)
@@ -131,7 +128,7 @@ func (*BEncoder) AddHeader(s *ugate.Conn, k, v []byte) {
 	bb.Write(v)
 }
 
-func (*BEncoder) Unmarshal(s *ugate.Conn) (done bool, err error) {
+func (*BEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
 	h, err := s.Fill(5)
 	if err != nil {
 		return false, err
@@ -145,8 +142,7 @@ func (*BEncoder) Unmarshal(s *ugate.Conn) (done bool, err error) {
 	return true, nil
 }
 
-
-func (*BEncoder) Marshal(s *ugate.Conn) error {
+func (*BEncoder) Marshal(s *ugate.Stream) error {
 	bb := s.WBuffer()
 	h := s.InHeader
 	if s.Direction == ugate.StreamTypeOut ||
@@ -155,7 +151,7 @@ func (*BEncoder) Marshal(s *ugate.Conn) error {
 	}
 	// TODO: leave 5 bytes at Start to reproduce streaming gRPC format
 	bb.WriteByte(0x08) // tag=1, varint
-	bb.WriteByte(1) // header-Start
+	bb.WriteByte(1)    // header-Start
 
 	for k, vv := range h {
 		for _, v := range vv {
@@ -171,7 +167,7 @@ func (*BEncoder) Marshal(s *ugate.Conn) error {
 	bb.WriteByte(2)
 
 	if ugate.DebugClose {
-		log.Println("Conn.sendHeaders ", s.StreamId, h)
+		log.Println("Stream.sendHeaders ", s.StreamId, h)
 	}
 
 	return nil

@@ -12,7 +12,7 @@ import (
 )
 
 // QuicMUX is a mux to a specific node. May be accepted or dialed.
-// Equivalent with quic/h3/client.go ( when dialing ), and Quic server when accept.
+// Equivalent with quic/h3/client.go ( when dialing ), and Quic server when accepting.
 type QuicMUX struct {
 	// Remote - has an ID and Addr
 	n *ugate.DMNode
@@ -38,7 +38,7 @@ func (ugs *QuicMUX) Close() error {
 	if ugate.DebugClose {
 		log.Println("H3: MUX close ", ugs.n.ID)
 	}
-	return ugs.s.CloseWithError(quic.ApplicationErrorCode(errorNoError), "")
+	return ugs.s.CloseWithError(quic.ErrorCode(errorNoError), "")
 }
 
 func (q *Quic) handleRaw(qs quic.Stream) {
@@ -63,7 +63,7 @@ func (q *Quic) handleRaw(qs quic.Stream) {
 
 }
 
-func (ugs *QuicMUX) DialStream(ctx context.Context, addr string, inStream *ugate.Conn) (*ugate.Conn, error) {
+func (ugs *QuicMUX) DialStream(ctx context.Context, addr string, inStream *ugate.Stream) (*ugate.Stream, error) {
 	//if UseRawStream {
 	s, err := ugs.s.OpenStream()
 	if err != nil {

@@ -19,11 +19,15 @@ import (
 	"time"
 )
 
-// Conn is the main abstraction, representing a connection with metadata and additional
-// helpers.
+// Stream is the main abstraction, representing a connection with metadata and additional
+// helpers. The 'canonical' stream in a mesh is a H2 or H3 stream, represented as a http.Request
+// and http.Response pair.
+//
+// In addition to the In/Out (corresponding to the body of req/res in h2 case) and headers, the Stream
+// holds buffers and helpers to copy to another stream and to avoid allocs.
 //
 // The connection is typically:
-// - an accepted connection - In/Out are the raw net.Conn
+// - an accepted connection - In/Out are the raw net.Conn - with sniffing and processing of SNI/TLS-SNI, SOCKS
 // - a TLSConn, wrapping the accepted connection
 // - HTTP2 RequestBody+ResponseWriter
 //
@@ -38,8 +42,8 @@ import (
 // Metrics are maintained.
 //
 // Implements net.Conn - but does not implement ConnectionState(), so the
-// stream can be used with H2 library.
-type Conn struct {
+// stream can be used with H2 library to create multiplexed H2 connections over the stream.
+type Stream struct {
 
 	// StreamId is based on a counter, it is the key in the Active table.
 	// Streams may also have local ids associated with the transport.
@@ -78,11 +82,11 @@ type Conn struct {
 	// or if the stream is originated locally and sent to a HTTP dest.
 	//
 	// For streams associated with HTTP server handlers, Out is the ResponseWriter,
-	// can be retrieved with Conn.ResponseWriter.
+	// can be retrieved with Stream.ResponseWriter.
 	// @Deprecated - use separate structure when using the h2/h3 stack.
 	Request *http.Request `json:"-"`
 
-	// Metadata to send. Conn implements http.ResponseWriter.
+	// Metadata to send. Stream implements http.ResponseWriter.
 	// For streams without metadata - will be ignored.
 	// Incoming metadata is set in Request.
 	// TODO: without a request, use a buffer, append headers in serialized format directly, flush on first Write
@@ -97,15 +101,8 @@ type Conn struct {
 	// @Deprecated - use a buf, packed format, id-based headers.
 	InHeader http.Header `json:"-"`
 
-	// Session is set for all multiplexed streams. May be a quic session, h2 mux, etc.
-	//
-	// nil after close.
-	// TODO: session.Conn == stream if the stream is used for a session
-	Session *Session
-
 	// Set if the connection finished a TLS handshake.
 	// A 'dummy' value may be set if a sidecar terminated the connection.
-	// Deprecated - moved to Session
 	TLS *tls.ConnectionState `json:"-"`
 
 	// Remote mesh ID, if authenticated. Base32(SHA256(PUB)) or Base32(PUB) (for ED)
@@ -126,14 +123,15 @@ type Conn struct {
 	// For HTTP PROXY the path is a full URL.
 	Dest string
 
+	LocalA net.Addr
+
 	// Resolved destination IP. May be nil if SOCKS or forwarding is done. Final Gateway will have it set.
 	// If capture is based on IP, it'll be set in all hops.
 	// If set, this is the authoritiative destination.
 	DestAddr *net.TCPAddr
 
-	// Set to the localAddr from the real connection, for http only
-	//
-	localAddr net.Addr
+	//  Real remote address form the socket. May be different from DestAddr (DestAddr can be VIP)
+	RemoteA net.Addr
 
 	// Client type - original capture and all transport hops.
 	// SOCKS, CONNECT, PROXY, SOCKSIP, PROXYIP,
@@ -186,7 +184,7 @@ type Conn struct {
 	// Used to send back metadata or finish the handshake.
 	//
 	// For example in SOCKS it sends back the IP/port of the remote.
-	// net.Conn may be a Conn or a regular TCP/TLS connection.
+	// net.Conn may be a Stream or a regular TCP/TLS connection.
 	PostDialHandler func(net.Conn, error) `json:"-"`
 
 	//
@@ -202,10 +200,10 @@ type Conn struct {
 	//
 	// Read methods will take the rbuffer into account, if present.
 	// Buffers can also be detached and passed to other streams, for less copy.
-	rbuffer *StreamBuffer
+	rbuffer *Buffer
 
 	// If not nil, this stream has write buffer attached.
-	wbuffer *StreamBuffer
+	wbuffer *Buffer
 
 	Listener *Listener
 
@@ -249,14 +247,14 @@ var (
 
 var bufferedConPool = sync.Pool{New: func() interface{} {
 	// Should hold a TLS handshake message
-	return &StreamBuffer{
+	return &Buffer{
 		buf: make([]byte, bufSize),
 	}
 }}
 
 // GetStream should be used to get a (recycled) stream.
 // Streams will be tracked, and must be closed and recycled.
-func GetStream(out io.Writer, in io.ReadCloser) *Conn {
+func GetStream(out io.Writer, in io.ReadCloser) *Stream {
 	s := NewStream()
 	s.In = in
 	s.Out = out
@@ -267,11 +265,11 @@ func GetStream(out io.Writer, in io.ReadCloser) *Conn {
 // headers or sniffing. The 'Read' and 'WriteTo' methods are aware of the
 // buffer, and will use the first consume buffered data, but if the buffer is
 // IsEmpty will use directly In.
-func (s *Conn) RBuffer() *StreamBuffer {
+func (s *Stream) RBuffer() *Buffer {
 	if s.rbuffer != nil {
 		return s.rbuffer
 	}
-	br := bufferedConPool.Get().(*StreamBuffer)
+	br := bufferedConPool.Get().(*Buffer)
 	br.off = 0
 	br.end = 0
 	br.owner = nil
@@ -284,11 +282,11 @@ func (s *Conn) RBuffer() *StreamBuffer {
 // Used to encode headers or for buffering - to avoid the pattern of allocating
 // small non-pooled buffers.
 // TODO: also to use for bucket passing instead of copy.
-func (s *Conn) WBuffer() *StreamBuffer {
+func (s *Stream) WBuffer() *Buffer {
 	if s.wbuffer != nil {
 		return s.wbuffer
 	}
-	br := bufferedConPool.Get().(*StreamBuffer)
+	br := bufferedConPool.Get().(*Buffer)
 	br.off = 0
 	br.end = 0
 	br.owner = nil
@@ -302,7 +300,7 @@ func (s *Conn) WBuffer() *StreamBuffer {
 //
 //
 // Future calls to Read() will use the remaining data in the buffer.
-func (s *Conn) Fill(nb int) ([]byte, error) {
+func (s *Stream) Fill(nb int) ([]byte, error) {
 	b := s.RBuffer()
 	if b.IsEmpty() {
 		b.off = 0
@@ -329,12 +327,10 @@ func (s *Conn) Fill(nb int) ([]byte, error) {
 }
 
 // Skip only implemented for buffer
-func (s *Conn) Skip(n int) {
+func (s *Stream) Skip(n int) {
 	b := s.rbuffer
-	if n > b.Size() {
-		n -= b.Size()
-		b.off = 0
-		b.end = 0
+	n -= b.Skip(n)
+	if n > 0 {
 		// Now need to read and skip n
 		for {
 			bb, err := s.Fill(0)
@@ -351,19 +347,14 @@ func (s *Conn) Skip(n int) {
 				b.end = 0
 				return
 			} else {
-				b.off = n
+				b.Skip(n)
 				return
 			}
 		}
 	}
-	b.off += n
-	if b.off == b.end {
-		b.off = 0
-		b.end = 0
-	}
 }
 
-func (s *Conn) ReadByte() (byte, error) {
+func (s *Stream) ReadByte() (byte, error) {
 	b := s.RBuffer()
 	if b.IsEmpty() {
 		_, err := s.Fill(0)
@@ -379,8 +370,8 @@ func (s *Conn) ReadByte() (byte, error) {
 // ----------------------------------------------
 
 // NewStream create a new stream. This stream is not tracked.
-func NewStream() *Conn {
-	return &Conn{
+func NewStream() *Stream {
+	return &Stream{
 		StreamId: int(atomic.AddUint32(&StreamId, 1)),
 		Stats:    Stats{Open: time.Now()},
 	}
@@ -392,8 +383,8 @@ func NewStream() *Conn {
 // Server validates method, path and scheme=http|https. Req.Body is a pipe - similar with what we use for egress.
 // Request context is based on stream context, which is a 'with cancel' based on the serverConn baseCtx.
 //
-func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Conn) *Conn {
-	return &Conn{
+func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Stream) *Stream {
+	return &Stream{
 		StreamId: int(atomic.AddUint32(&StreamId, 1)),
 		Stats:    Stats{Open: time.Now()},
 
@@ -405,8 +396,8 @@ func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Conn) *Conn {
 	}
 }
 
-func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *Conn) *Conn {
-	return &Conn{
+func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *Stream) *Stream {
+	return &Stream{
 		StreamId:  int(atomic.AddUint32(&StreamId, 1)),
 		Stats:     Stats{Open: time.Now()},
 		OutHeader: w.Header,
@@ -418,7 +409,7 @@ func NewStreamRequestOut(r *http.Request, out io.Writer, w *http.Response, con *
 	}
 }
 
-//func (s *Conn) Reset() {
+//func (s *Stream) Reset() {
 //	s.Open = time.Now()
 //	s.LastRead = time.Time{}
 //	s.LastWrite = time.Time{}
@@ -440,7 +431,7 @@ const ContextKey = "ugate.stream"
 // Also auth is more flexibile then mTLS.
 //// Used by H2 server to populate TLS in accepted requests.
 //// For 'fake' TLS (raw HTTP) it must be populated.
-//func (s *Conn) ConnectionState() tls.ConnectionState {
+//func (s *Stream) ConnectionState() tls.ConnectionState {
 //	if s.TLS == nil {
 //		return tls.ConnectionState{Version: tls.VersionTLS12}
 //	}
@@ -453,7 +444,7 @@ const ContextKey = "ugate.stream"
 //
 // This is NOT associated with the context of the original H2 request,
 // there is a lot of complexity and strange behaviors in the stack.
-func (s *Conn) Context() context.Context {
+func (s *Stream) Context() context.Context {
 	//if s.Request != nil {
 	//	return s.Request.Context()
 	//}
@@ -468,7 +459,7 @@ func (s *Conn) Context() context.Context {
 //
 // TODO: incorporate the wbuffer, optimize based on size.
 //
-func (s *Conn) Write(b []byte) (n int, err error) {
+func (s *Stream) Write(b []byte) (n int, err error) {
 	n, err = s.Out.Write(b)
 	if err != nil {
 		s.WriteErr = err
@@ -484,7 +475,7 @@ func (s *Conn) Write(b []byte) (n int, err error) {
 	return
 }
 
-func (s *Conn) Flush() {
+func (s *Stream) Flush() {
 	// TODO: take into account the write buffer.
 	if f, ok := s.Out.(http.Flusher); ok {
 		f.Flush()
@@ -502,7 +493,7 @@ func CanSplice(in io.Reader, out io.Writer) bool {
 	return false
 }
 
-func (s *Conn) Read(out []byte) (int, error) {
+func (s *Stream) Read(out []byte) (int, error) {
 	if s.rbuffer != nil {
 		// Duplicated - the other method may be removed.
 		b := s.rbuffer
@@ -538,7 +529,7 @@ func (s *Conn) Read(out []byte) (int, error) {
 
 // Must be called at the end. It is expected CloseWrite has been called, for graceful FIN.
 //
-func (s *Conn) Close() error {
+func (s *Stream) Close() error {
 	if s.Closed {
 		return nil
 	}
@@ -576,7 +567,7 @@ func (s *Conn) Close() error {
 	return s.In.Close()
 }
 
-func (s *Conn) CloseWrite() error {
+func (s *Stream) CloseWrite() error {
 	if s.ServerClose {
 		log.Println("Double CloseWrite")
 		return nil
@@ -617,28 +608,26 @@ func (s *Conn) CloseWrite() error {
 	return nil
 }
 
-func (s *Conn) SetDeadline(t time.Time) error {
-	if cw, ok := s.Out.(net.Conn); ok {
-		cw.SetDeadline(t)
-	}
-	return nil
+func (s *Stream) SetDeadline(t time.Time) error {
+	s.SetReadDeadline(t)
+	return s.SetWriteDeadline(t)
 }
 
-func (s *Conn) SetReadDeadline(t time.Time) error {
+func (s *Stream) SetReadDeadline(t time.Time) error {
 	if cw, ok := s.Out.(net.Conn); ok {
 		cw.SetReadDeadline(t)
 	}
 	return nil
 }
 
-func (s *Conn) SetWriteDeadline(t time.Time) error {
+func (s *Stream) SetWriteDeadline(t time.Time) error {
 	if cw, ok := s.Out.(net.Conn); ok {
 		cw.SetWriteDeadline(t)
 	}
 	return nil
 }
 
-func (s *Conn) Header() http.Header {
+func (s *Stream) Header() http.Header {
 	if rw, ok := s.Out.(http.ResponseWriter); ok {
 		return rw.Header()
 	}
@@ -648,7 +637,7 @@ func (s *Conn) Header() http.Header {
 	return s.OutHeader
 }
 
-func (s *Conn) WriteHeader(statusCode int) {
+func (s *Stream) WriteHeader(statusCode int) {
 	if rw, ok := s.Out.(http.ResponseWriter); ok {
 		rw.WriteHeader(statusCode)
 		return
@@ -665,14 +654,14 @@ func (s *Conn) WriteHeader(statusCode int) {
 //
 // srcIsRemote indicates that the connection is from the server to client. (remote to local)
 // If false, the connection is from client to server ( local to remote )
-func (s *Conn) CopyBuffered(dst io.Writer, src io.Reader, srcIsRemote bool) (written int64, err error) {
+func (s *Stream) CopyBuffered(dst io.Writer, src io.Reader, srcIsRemote bool) (written int64, err error) {
 	buf1 := bufferPoolCopy.Get().([]byte)
 	defer bufferPoolCopy.Put(buf1)
 	bufCap := cap(buf1)
 	buf := buf1[0:bufCap:bufCap]
 
-	// For netstack: src is a gonet.Conn, doesn't implement WriterTo. Dst is a net.TcpConn - and implements ReadFrom.
-	// CopyBuffered is the actual implementation of Copy and CopyBuffer.
+	// For netstack: src is a gonet.Stream, doesn't implement WriterTo. Dst is a net.TcpConn - and implements ReadFrom.
+	// Copy is the actual implementation of Copy and CopyBuffer.
 	// if buf is nil, one is allocated.
 	// Duplicated from io
 
@@ -736,7 +725,7 @@ func (s *Conn) CopyBuffered(dst io.Writer, src io.Reader, srcIsRemote bool) (wri
 }
 
 // Send will marshall the metadata (headers) and start sending the body to w.
-func (s *Conn) SendHeader(w io.WriteCloser, h http.Header) error {
+func (s *Stream) SendHeader(w io.WriteCloser, h http.Header) error {
 	// First format: TAG(=2), 4B LEN, Text headers. Required len, buffer
 
 	bb := s.WBuffer()
@@ -764,12 +753,12 @@ func (s *Conn) SendHeader(w io.WriteCloser, h http.Header) error {
 		return err
 	}
 	if DebugClose {
-		log.Println("Conn.sendHeaders ", s.StreamId, h)
+		log.Println("Stream.sendHeaders ", s.StreamId, h)
 	}
 	return nil
 }
 
-func (s *Conn) ReadHeader(in io.Reader) error {
+func (s *Stream) ReadHeader(in io.Reader) error {
 	// TODO: move to buffered stream, unify
 	buf1 := bufferPoolCopy.Get().([]byte)
 	defer bufferPoolCopy.Put(buf1)
@@ -790,32 +779,33 @@ func (s *Conn) ReadHeader(in io.Reader) error {
 	s.InHeader = http.Header(mh)
 
 	if DebugClose {
-		log.Println("Conn.receiveHeaders ", s.StreamId, s.InHeader)
+		log.Println("Stream.receiveHeaders ", s.StreamId, s.InHeader)
 	}
 	return nil
 }
 
-func (s *Conn) LocalAddr() net.Addr {
-	if s.Session != nil && s.Session.LocalAddr != nil {
-		return s.Session.LocalAddr
+func (s *Stream) LocalAddr() net.Addr {
+	if s.LocalA != nil {
+		return s.LocalA
 	}
 	if cw, ok := s.Out.(net.Conn); ok {
 		return cw.LocalAddr()
 	}
 
-	// For HTTP/BTS requests, local addr should be the address from the listener or
-	// stream.
-	return s.localAddr
+	if s.Listener != nil && s.Listener.NetListener != nil {
+		return s.Listener.NetListener.Addr()
+	}
+	return nil
 }
 
 // RemoteAddr is the client (for accepted) or server (for originated).
 // It should be the real IP, extracted from connection or metadata.
 // RemoteID returns the authenticated ID.
-func (s *Conn) RemoteAddr() net.Addr {
-	if s.Session != nil && s.Session.RemoteAddr != nil {
-		return s.Session.RemoteAddr
+func (s *Stream) RemoteAddr() net.Addr {
+	if s.RemoteA != nil {
+		return s.RemoteA
 	}
-	// non-test Streams are either backed by a net.Conn or a Request
+	// non-test Streams are either backed by a net.Stream or a Request
 	if cw, ok := s.Out.(net.Conn); ok {
 		return cw.RemoteAddr()
 	}
@@ -840,7 +830,7 @@ func (s *Conn) RemoteAddr() net.Addr {
 
 // Reads data from cin (the client/dialed con) until EOF or error
 // TCP Connections typically implement this, using io.Copy().
-func (s *Conn) ReadFrom(cin io.Reader) (n int64, err error) {
+func (s *Stream) ReadFrom(cin io.Reader) (n int64, err error) {
 
 	//if wt, ok := cin.(io.WriterTo); ok {
 	//	return wt.WriteTo(s.ServerOut)
@@ -903,7 +893,7 @@ func (s *Conn) ReadFrom(cin io.Reader) (n int64, err error) {
 	return
 }
 
-func (b *Conn) PostDial(nc net.Conn, err error) {
+func (b *Stream) PostDial(nc net.Conn, err error) {
 	if b.PostDialHandler != nil {
 		b.PostDialHandler(nc, err)
 	}
@@ -915,13 +905,13 @@ const DebugClose = true
 
 // Proxy the accepted connection to a dialed connection.
 // Blocking, will wait for both sides to FIN or RST.
-func (s *Conn) ProxyTo(nc net.Conn) error {
+func (s *Stream) ProxyTo(nc net.Conn) error {
 	errCh := make(chan error, 2)
 	go s.proxyFromClient(nc, errCh)
 	// Blocking, returns when all data is read from In, or error
 	var err1 error
 
-	if ncs, ok := nc.(*Conn); ok {
+	if ncs, ok := nc.(*Stream); ok {
 		if ncs.Out != nil {
 			err1 = s.proxyToClient(nc)
 		}
@@ -948,7 +938,7 @@ func (s *Conn) ProxyTo(nc net.Conn) error {
 
 // Read from the Reader, send to the cout client.
 // Updates ReadErr and ProxyWriteErr
-func (s *Conn) proxyToClient(cout io.WriteCloser) error {
+func (s *Stream) proxyToClient(cout io.WriteCloser) error {
 	s.WriteTo(cout) // errors are preserved in stats, 4 kinds possible
 
 	// At this point an error or graceful EOF from our Reader has been received.
@@ -991,7 +981,7 @@ func (s *Conn) proxyToClient(cout io.WriteCloser) error {
 }
 
 // WriteTo implements the interface, using the read buffer.
-func (s *Conn) WriteTo(w io.Writer) (n int64, err error) {
+func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 	// Finish up the buffer first
 	if s.rbuffer != nil && !s.rbuffer.IsEmpty() {
 		b := s.rbuffer
@@ -1070,7 +1060,7 @@ func NoEOF(err error) error {
 
 // proxyFromClient reads from cin, writes to the stream. Should be in a go routine.
 // Updates ProxyReadErr and WriteErr
-func (s *Conn) proxyFromClient(cin io.ReadCloser, errch chan error) {
+func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error) {
 	_, err := s.ReadFrom(cin)
 	// At this point cin either returned an EOF (FIN), or error (RST from remote, or error writing)
 	if NoEOF(s.ProxyReadErr) != nil || s.WriteErr != nil {

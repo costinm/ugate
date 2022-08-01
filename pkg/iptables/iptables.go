@@ -57,7 +57,6 @@ func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
 	return nil
 }
 
-
 type IptablesOut struct {
 	Gate *ugatesvc.UGate
 }
@@ -66,7 +65,7 @@ type IptablesIn struct {
 	Gate *ugatesvc.UGate
 }
 
-func (ipo *IptablesOut) Handle(str *ugate.Conn) error {
+func (ipo *IptablesOut) Handle(str *ugate.Stream) error {
 	str.Dest, str.ReadErr = SniffIptables(str)
 	if str.ReadErr != nil {
 		return str.ReadErr
@@ -89,7 +88,7 @@ func (ipo *IptablesOut) Handle(str *ugate.Conn) error {
 
 // Similar with Istio ingress capture. Original DST is the intended
 // addr and port.
-func (ipo *IptablesIn) Handle(str *ugate.Conn) error {
+func (ipo *IptablesIn) Handle(str *ugate.Stream) error {
 
 	//case ugate.ProtoIPTablesIn:
 	//	// iptables is replacing the conn - process before creating the buffer
@@ -127,7 +126,7 @@ func (ipo *IptablesIn) Handle(str *ugate.Conn) error {
 // https://github.com/ryanchapman/go-any-proxy/blob/master/any_proxy.go,
 // and other examples.
 // Based on REDIRECT.
-func SniffIptables(str *ugate.Conn) (string, error) {
+func SniffIptables(str *ugate.Stream) (string, error) {
 	if _, ok := str.Out.(*net.TCPConn); !ok {
 		return "", errors.New("invalid connection for iptbles")
 	}
@@ -166,15 +165,15 @@ func getOriginalDst(clientConn *net.TCPConn) (rawaddr *net.TCPAddr, err error) {
 
 	// net.TCPConn.File() will cause the receiver's (clientConn) socket to be placed in blocking mode.
 	// The workaround is to take the File returned by .File(), do getsockopt() to get the original
-	// destination, then create a new *net.TCPConn by calling net.Conn.FileConn().  The new TCPConn
+	// destination, then create a new *net.TCPConn by calling net.Stream.FileConn().  The new TCPConn
 	// will be in non-blocking mode.  What a pain.
 	clientConnFile, err := clientConn.File()
 	if err != nil {
 		return
 	}
-	defer	clientConnFile.Close()
+	defer clientConnFile.Close()
 
-	fd :=  int(clientConnFile.Fd())
+	fd := int(clientConnFile.Fd())
 	if err = syscall.SetNonblock(fd, true); err != nil {
 		return
 	}

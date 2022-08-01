@@ -1,3 +1,4 @@
+//go:build !IPFSLITE
 // +build !IPFSLITE
 
 package ipfs
@@ -12,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 	"github.com/libp2p/go-libp2p/p2p/host/relay"
 	ws "github.com/libp2p/go-ws-transport"
 	"github.com/multiformats/go-multiaddr"
@@ -23,7 +24,6 @@ import (
 
 	"github.com/ipfs/go-ipns"
 
-	"github.com/libp2p/go-libp2p"
 	connmgr "github.com/libp2p/go-libp2p-connmgr"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/host"
@@ -44,32 +44,27 @@ type IPFSConfig struct {
 	// The DHT requires maintaining a lot of connections, best for an internet
 	// connected host - not for mobile.
 	UseDHT bool
-
-
-
 }
 
 // ConnectionGater, Server
 type IPFS struct {
 	*IPFSConfig
 
-	ctx context.Context
+	ctx  context.Context
 	Host host.Host
 
 	// Only set for discovery nodes.
 	// Mobile/battery powered/clients use Routing
-	DHT  *dht.IpfsDHT
+	DHT *dht.IpfsDHT
 
 	// Combines ContentRouting, PeerRouting, ValueStore
 	Routing routing.Routing // may be same as DHT
-	store datastore.Batching
+	store   datastore.Batching
 }
 
 // DHT: supports putValue(key, value) for exactly 2 key types:
 // - /pk/KEYHASH -> public key. Not relevant for ED keys ( key id is the key )
 // - /ipns/KEYID -> proto IpnsEntry containing public key.
-
-
 
 // InitIPFS creates LibP2P compatible transport.
 // Identity is based on the EC256 workload identity in auth.
@@ -81,7 +76,7 @@ type IPFS struct {
 // UGate implements H2, WebRTC variants, with a IPFS transport adapter.
 func InitIPFS(auth *auth.Auth, p2pport int, mux *http.ServeMux) *IPFS {
 	p2p := &IPFS{
-		ctx: context.Background(),
+		ctx:        context.Background(),
 		IPFSConfig: &IPFSConfig{},
 	}
 	p2p.UseDHT = os.Getenv("DHT") == ""
@@ -148,8 +143,8 @@ func InitIPFS(auth *auth.Auth, p2pport int, mux *http.ServeMux) *IPFS {
 		//libp2p.NATPortMap(),
 
 		libp2p.ConnectionManager(connmgr.NewConnManager(
-			100,          // Lowwater
-			600,          // HighWater,
+			100,         // Lowwater
+			600,         // HighWater,
 			time.Minute, // GracePeriod
 		)),
 
@@ -188,7 +183,7 @@ func InitIPFS(auth *auth.Auth, p2pport int, mux *http.ServeMux) *IPFS {
 
 	relay.DesiredRelays = 2
 
-	if  p2p.UseDHT {
+	if p2p.UseDHT {
 		//var ddht *dual.DHT
 		finalOpts = append(finalOpts, libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
 			ddht, err := newDHT(ctx, h, ds)
@@ -201,7 +196,6 @@ func InitIPFS(auth *auth.Auth, p2pport int, mux *http.ServeMux) *IPFS {
 		// in memory peer store
 		// HTTPS/XDS/etc for discovery, using a discovery server with DHT
 		// or other backend.
-
 
 		// This allows the node to be contacted behind NAT
 		// Set the 'official' relays.
@@ -248,11 +242,9 @@ func InitIPFS(auth *auth.Auth, p2pport int, mux *http.ServeMux) *IPFS {
 	log.Println("IPFS Addr: ", h.Addrs())
 	log.Println("IPFS CID: ", peer.ToCid(h.ID()).String())
 
-
 	if err != nil {
 		panic(err)
 	}
-
 
 	h.SetStreamHandler(Protocol, streamHandler)
 
@@ -282,7 +274,6 @@ func InitIPFS(auth *auth.Auth, p2pport int, mux *http.ServeMux) *IPFS {
 		blockInit(p2p)
 	}
 
-
 	//p2p.DHT.Provide(context.Background(), peer.ToCid(h.ID()), true)
 	return p2p
 }
@@ -308,4 +299,3 @@ func newDHT(ctx context.Context, h host.Host, ds datastore.Batching) (*dht.IpfsD
 
 	return dht.New(ctx, h, dhtOpts...)
 }
-

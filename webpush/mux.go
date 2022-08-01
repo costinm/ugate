@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 )
 
 //Old: go:generate protoc --gogofaster_out=$GOPATH/src webpush.proto
@@ -47,7 +47,7 @@ type Mux struct {
 	connections map[string]*MsgConnection
 
 	// Handlers by path, for processing incoming messages to this node or local messages.
-	handlers     map[string]MessageHandler
+	handlers map[string]MessageHandler
 
 	// Allows regular HTTP Handlers to process messages.
 	// A message is mapped to a request. Like CloudEvents, response from the
@@ -60,8 +60,8 @@ type Mux struct {
 
 func NewMux() *Mux {
 	mux := &Mux{
-		connections:  map[string]*MsgConnection{},
-		handlers:     map[string]MessageHandler{},
+		connections: map[string]*MsgConnection{},
+		handlers:    map[string]MessageHandler{},
 	}
 
 	return mux
@@ -86,15 +86,14 @@ func InitMux(mux *Mux, hmux *http.ServeMux, auth *auth.Auth) {
 	hmux.HandleFunc("/s/", mux.HTTPHandlerSend)
 }
 
-
 // Send a message to the default mux. Will serialize the event and save it for debugging.
 //
 // Local handlers and debug tools/admin can subscribe.
 // Calls the internal SendMessage method.
 func (mux *Mux) Send(msgType string, data interface{}, meta ...string) error {
 	ev := &Message{
-		MessageData: MessageData {
-			To: msgType,
+		MessageData: MessageData{
+			To:   msgType,
 			Meta: map[string]string{},
 		},
 		Data: data,
@@ -111,8 +110,8 @@ func (mux *Mux) Send(msgType string, data interface{}, meta ...string) error {
 // Calls the internal SendMessage method.
 func (mux *Mux) SendMeta(msgType string, meta map[string]string, data interface{}) error {
 	ev := &Message{
-		MessageData: MessageData {
-			To: msgType,
+		MessageData: MessageData{
+			To:   msgType,
 			Meta: meta,
 		},
 		Data: data,
@@ -137,20 +136,20 @@ func (mux *Mux) SendMessage(ev *Message) error {
 	mux.HandleMessageForNode(ev)
 
 	switch parts[0] {
-		case ".":
-			return nil
-		case "*":
+	case ".":
+		return nil
+	case "*":
 
-  	default:
-  		 h := parts[0]
-			if h != "" {
-				ch := mux.connections[h]
-				if ch != nil {
-					ch.SendMessageToRemote(ev)
-				} else {
-					// TODO: return err or send to 'master'
-				}
+	default:
+		h := parts[0]
+		if h != "" {
+			ch := mux.connections[h]
+			if ch != nil {
+				ch.SendMessageToRemote(ev)
+			} else {
+				// TODO: return err or send to 'master'
 			}
+		}
 	}
 
 	if parts[0] == "." {
@@ -170,7 +169,6 @@ func (mux *Mux) SendMessage(ev *Message) error {
 	// Send upstream
 	return nil
 }
-
 
 func (ms *MsgConnection) maybeSend(parts []string, ev *Message, k string) {
 	// TODO: check the path !
@@ -201,7 +199,6 @@ func (ms *MsgConnection) maybeSend(parts []string, ev *Message, k string) {
 	log.Println("/mux/Remote", ev.To, ms.Name)
 }
 
-
 // Called for local events (host==. or empty).
 // Called when a message is received from one of the local streams ( UDS, etc ), if
 // the final destination is the current node.
@@ -209,7 +206,7 @@ func (ms *MsgConnection) maybeSend(parts []string, ev *Message, k string) {
 // Message will be passed to one or more of the local handlers, based on type.
 //
 func (mux *Mux) HandleMessageForNode(ev *Message) error {
-	if ev.Time== 0 {
+	if ev.Time == 0 {
 		ev.Time = time.Now().Unix()
 	}
 
@@ -238,7 +235,6 @@ func (mux *Mux) HandleMessageForNode(ev *Message) error {
 
 	payload := ev.Binary()
 	log.Println("MSG: ", argv, ev.Meta, ev.From, ev.Data, len(payload))
-
 
 	if h, f := mux.handlers["*"]; f {
 		h.HandleMessage(context.Background(), ev.To, ev.Meta, payload)
@@ -322,8 +318,7 @@ func (mux *Mux) AddHandler(path string, cp MessageHandler) {
 type handlerSlice []MessageHandler
 
 func (hs handlerSlice) HandleMessage(ctx context.Context, cmdS string, meta map[string]string, data []byte) {
-	for _,x := range hs {
+	for _, x := range hs {
 		x.HandleMessage(ctx, cmdS, meta, data)
 	}
 }
-

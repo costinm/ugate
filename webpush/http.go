@@ -9,7 +9,7 @@ import (
 	"net/textproto"
 	"strings"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 )
 
 type Backoff interface {
@@ -112,7 +112,7 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 			params[k] = v[0]
 		}
 
-		ev := NewMessage("." + strings.Join(parts[3:], "/"), params).SetDataJSON(msgb)
+		ev := NewMessage("."+strings.Join(parts[3:], "/"), params).SetDataJSON(msgb)
 
 		//ev := mux.ProcessMessage(msgb, rctx)
 		log.Println("GOT WEBPUSH: ", rctx.ID(), string(msgb), ev)
@@ -142,7 +142,6 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(201)
 }
-
 
 // MonitorEvents will connect to a mesh address and monitor the messages.
 //

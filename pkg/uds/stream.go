@@ -35,7 +35,7 @@ import (
 // first line: METHOD param:val ...
 // 'subject', '
 
-//type Conn struct {
+//type Stream struct {
 //	Reader *bufio.Reader
 //
 //	delim byte
@@ -145,6 +145,7 @@ func SendFrameLenBinary(con io.Writer, data ...[]byte) (int, error) {
 
 // Parse a message.
 // Currently used in the UDS mapping, using a HTTP1-like text format
+// Matches code in android java code - may be replaced with gRPC proto framing.
 func ParseMessage(data []byte, mtype int) (cmd string, meta map[string]string, outd []byte, end int) {
 	start := 0
 	n := len(data)

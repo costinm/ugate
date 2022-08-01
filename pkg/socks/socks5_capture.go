@@ -22,7 +22,6 @@ import (
 // - send client data in advance, forward to the server
 // - resolve
 
-
 // Note: max DNS size is 255 ( including trailing 0, and len labels )
 //
 
@@ -83,10 +82,10 @@ const (
       DST.PORT desired destination port in network octet order
 */
 func New(ug *ugatesvc.UGate) {
-	p := ug.Config.BasePort+ugate.PORT_SOCKS
+	p := ug.Config.BasePort + ugate.PORT_SOCKS
 	ll := &ugate.Listener{
-		Address:  fmt.Sprintf("127.0.0.1:%d", p),
-		Protocol: ugate.ProtoSocks,
+		Address:     fmt.Sprintf("127.0.0.1:%d", p),
+		Protocol:    ugate.ProtoSocks,
 		PortHandler: &Socks{ug: ug},
 	}
 
@@ -104,7 +103,7 @@ func (s *Socks) String() string {
 	return "socks"
 }
 
-func (s *Socks) Handle(bconn *ugate.Conn) error{
+func (s *Socks) Handle(bconn *ugate.Stream) error {
 	bconn.Direction = ugate.StreamTypeOut
 
 	_, bconn.ReadErr = Unmarshal(bconn)
@@ -117,7 +116,7 @@ func (s *Socks) Handle(bconn *ugate.Conn) error{
 	return bconn.ReadErr
 }
 
-func  Unmarshal(s *ugate.Conn) (done bool, err error) {
+func Unmarshal(s *ugate.Stream) (done bool, err error) {
 	// Fill the read buffer with one Read.
 	// Typically 3-4 bytes unless client is eager.
 
@@ -134,8 +133,8 @@ func  Unmarshal(s *ugate.Conn) (done bool, err error) {
 	// Server: 0x05 0x00
 	off := 1
 	sz := int(head[off])
-	off++ // 2
-	if len(head) < off + sz{ // if it only read 2, probably malicious - 2 < 2 + 1
+	off++                   // 2
+	if len(head) < off+sz { // if it only read 2, probably malicious - 2 < 2 + 1
 		head, err = s.Fill(off + sz)
 		if err != nil {
 			return false, err
@@ -146,7 +145,7 @@ func  Unmarshal(s *ugate.Conn) (done bool, err error) {
 	s.Write([]byte{5, 0})
 
 	// We may have bytes in the buffer, in case sender didn't wait
-	if len(head) <= off  + 6 {
+	if len(head) <= off+6 {
 		head, err = s.Fill(off + sz)
 		if err != nil {
 			return false, err
@@ -163,37 +162,37 @@ func  Unmarshal(s *ugate.Conn) (done bool, err error) {
 	off++
 	off++ // rsvd
 
-	atyp := head[off + 3]
+	atyp := head[off+3]
 	off++
 
-	destName :=  ""
+	destName := ""
 	var destIP []byte
 	// off should be 3 or 4
 	switch atyp {
-		case 1:
-			if len(head) <= off + 6 {
-				head, err = s.Fill(off + 6)
-			}
-			destIP = 	make([]byte, 4)
-			copy(destIP, head[off:off+4])
-			off += 4
-	case 4:
-			if len(head) <= off + 18 {
-				head, err = s.Fill(off + 18)
-			}
-			destIP = 	make([]byte, 16)
-			copy(destIP, head[off:off+16])
-			off += 16
-
-		case 3:
-			dlen := int(head[off])
-			off++
-			if len(head) <= off + dlen + 2 {
-				head, err = s.Fill(off + dlen + 2)
-			}
-			destName = string(head[off:off+dlen])
-			off += dlen
+	case 1:
+		if len(head) <= off+6 {
+			head, err = s.Fill(off + 6)
 		}
+		destIP = make([]byte, 4)
+		copy(destIP, head[off:off+4])
+		off += 4
+	case 4:
+		if len(head) <= off+18 {
+			head, err = s.Fill(off + 18)
+		}
+		destIP = make([]byte, 16)
+		copy(destIP, head[off:off+16])
+		off += 16
+
+	case 3:
+		dlen := int(head[off])
+		off++
+		if len(head) <= off+dlen+2 {
+			head, err = s.Fill(off + dlen + 2)
+		}
+		destName = string(head[off : off+dlen])
+		off += dlen
+	}
 	if err != nil {
 		return false, err
 	}
@@ -207,7 +206,7 @@ func  Unmarshal(s *ugate.Conn) (done bool, err error) {
 		s.Dest = net.JoinHostPort(destName, strconv.Itoa(int(port)))
 		s.Type = "socks5"
 	} else {
-		s.DestAddr= &net.TCPAddr{IP: destIP, Port: int(port)}
+		s.DestAddr = &net.TCPAddr{IP: destIP, Port: int(port)}
 		s.Dest = s.DestAddr.String()
 		s.Type = "socks5IP"
 	}
@@ -223,7 +222,7 @@ func  Unmarshal(s *ugate.Conn) (done bool, err error) {
 		// TODO: pass a 'on connect' callback
 		localAddr := conn.LocalAddr()
 		tcpAddr := localAddr.(*net.TCPAddr)
-		r := make([]byte, len(tcpAddr.IP) + 6)
+		r := make([]byte, len(tcpAddr.IP)+6)
 		r[0] = 5
 		r[1] = 0 // success
 		r[2] = 0 // rsv

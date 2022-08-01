@@ -57,7 +57,6 @@ import (
 // - use websocket - no multiplexing.
 // - binary messages, using websocket frames
 
-
 // StartListener and Start a real port listener on a port.
 // Virtual listeners can be added to ug.Conf or the mux.
 func (ug *UGate) StartListener(ll *ugate.Listener) error {
@@ -69,7 +68,6 @@ func (ug *UGate) StartListener(ll *ugate.Listener) error {
 
 	return nil
 }
-
 
 // Creates a raw (port) TCP listener. Accepts connections
 // on a local port, forwards to a remote destination.
@@ -86,7 +84,7 @@ func (gate *UGate) startPortListener(pl *ugate.Listener) error {
 
 	if pl.NetListener == nil {
 		if strings.HasPrefix(pl.Address, "/") ||
-				strings.HasPrefix(pl.Address, "@") {
+			strings.HasPrefix(pl.Address, "@") {
 			us, err := net.ListenUnix("unix",
 				&net.UnixAddr{
 					Name: pl.Address,
@@ -146,7 +144,7 @@ func (gate *UGate) startPortListener(pl *ugate.Listener) error {
 //	return nil
 //}
 
-//func (pl PortListener) Accept() (net.Conn, error) {
+//func (pl PortListener) Accept() (net.Stream, error) {
 //	return pl.NetListener.Accept()
 //}
 //
@@ -190,7 +188,6 @@ func serve(pl *ugate.Listener, gate *UGate) {
 		}
 	}
 }
-
 
 // port capture is the plain reverse proxy mode: it listens to a port and forwards.
 //

@@ -5,7 +5,7 @@ import (
 	"net/http/httputil"
 	"testing"
 
-	"github.com/costinm/ugate/pkg/auth"
+	"github.com/costinm/ugate/auth"
 )
 
 var (
@@ -37,8 +37,9 @@ func send(t *testing.T, epjson string) {
 
 	message := "I am the testing walrus"
 
-	vapid := auth.NewVapid(vapidPub, vapidPriv)
-	vapid.Domain = "test@example.com"
+	vapid := auth.NewMeshAuth()
+	vapid.SetVapid(vapidPub, vapidPriv)
+	vapid.Name = "test@example.com"
 	req, err := NewRequest(sub.Endpoint, sub.Key, sub.Auth, message, 0, vapid)
 	res, err := http.DefaultClient.Do(req)
 

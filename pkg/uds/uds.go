@@ -266,7 +266,7 @@ func (conn *UdsConn) streamCommon() {
 
 		msg := &msgs.Message{
 			MessageData: msgs.MessageData{
-				To: cmd,
+				To:   cmd,
 				Meta: meta,
 				From: conn.Name,
 			},
@@ -485,7 +485,7 @@ func (uds *UdsConn) File() *os.File {
 	return fd
 }
 
-func processUnixConn(bc *ugate.Conn) error {
+func processUnixConn(bc *ugate.Stream) error {
 	uc, ok := bc.Out.(*net.UnixConn)
 	if !ok {
 		return errors.New("Unexpected con")

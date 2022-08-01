@@ -69,9 +69,9 @@ type H2R struct {
 
 func New(ug *ugatesvc.UGate) *H2R {
 	h2t := &http2.Transport{
-			ReadIdleTimeout: 10000 * time.Second,
-			StrictMaxConcurrentStreams: false,
-			AllowHTTP: true,
+		ReadIdleTimeout:            10000 * time.Second,
+		StrictMaxConcurrentStreams: false,
+		AllowHTTP:                  true,
 	}
 	h2r := &H2R{ug: ug, handler: ug.H2Handler, h2t: h2t, h2Server: &http2.Server{}}
 	ug.Mux.HandleFunc("/h2r/", h2r.HandleH2R)
@@ -84,25 +84,24 @@ func New(ug *ugatesvc.UGate) *H2R {
 type H2RMux struct {
 	*http2.ClientConn
 
-	tlsStr *ugate.Conn
-	dm *ugate.DMNode
+	tlsStr *ugate.Stream
+	dm     *ugate.DMNode
 
 	// Raw frame support
-	m       sync.RWMutex
-	framer  *http2.Framer
-	streams map[uint32]*H2Stream
+	m            sync.RWMutex
+	framer       *http2.Framer
+	streams      map[uint32]*H2Stream
 	handleStream func(*H2Stream)
 	nextStreamID uint32
 }
 
-
 // DialMUX creates one connection to a mesh node, using one of the
 // supported multiplex protocols.
-func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Conn)) (ugate.Muxer, error) {
+func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
 	// TODO: try all published addresses, including all protos
 	addr := dm.Addr
 
-	str, err := t.ug.DialTLS(ctx, addr, []string{ "h2r",  "h2"})
+	str, err := t.ug.DialTLS(ctx, addr, []string{"h2r", "h2"})
 	if err != nil {
 		log.Println("Failed to connect ", addr, err)
 		return nil, err
@@ -112,7 +111,6 @@ func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, e
 	str.ReadCloser = func() {
 		log.Println("H2R-Upstream closed")
 	}
-
 
 	proto := str.TLS.NegotiatedProtocol
 	if proto == "h2r" {
@@ -133,7 +131,7 @@ func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, e
 	// This in turn will call this node, to validate the connection.
 	r, w := io.Pipe() // pipe.New()
 	postR, _ := http.NewRequest("POST",
-		"https://" + addr + "/h2r/", r)
+		"https://"+addr+"/h2r/", r)
 	tok := t.ug.Auth.VAPIDToken(addr)
 	postR.Header.Add("authorization", tok)
 
@@ -173,7 +171,6 @@ func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, e
 	return h2rm, nil
 }
 
-
 // HandleH2R takes a POST "/h2r/" request and set the stream as a H2 client connection.
 //
 // It will start by sending a test "id" request, and associate the muxed connection to the
@@ -208,7 +205,7 @@ func (t *H2R) HandleH2R(w http.ResponseWriter, r *http.Request) {
 	// TODO: remember the IP, use it for the node ? Explicit registration may be better.
 
 	// TODO: use new URL
-	r0, _ := http.NewRequest("GET", "http://localhost/_dm/id/U/" + t.ug.Auth.ID, nil)
+	r0, _ := http.NewRequest("GET", "http://localhost/_dm/id/U/"+t.ug.Auth.ID, nil)
 	tok := t.ug.Auth.VAPIDToken(n.ID)
 	r0.Header.Add("authorization", tok)
 	res0, err := cc.RoundTrip(r0)

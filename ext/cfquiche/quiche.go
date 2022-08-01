@@ -15,10 +15,9 @@ import (
 )
 
 type Quiche struct {
-
 }
 
-func (q Quiche) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Conn)) (ugate.Muxer, error) {
+func (q Quiche) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
 	//quiche.EnableDebugLogging()
 
 	config, err := newConfig(quiche.ProtocolVersion)
@@ -30,7 +29,6 @@ func (q Quiche) DialMux(ctx context.Context, node *ugate.DMNode, meta http.Heade
 	// TODO: config.free at close
 	return connect(config, node.Addr)
 }
-
 
 type client struct {
 	socket net.Conn
@@ -46,8 +44,7 @@ func New(ug *ugatesvc.UGate) *Quiche {
 	//	port = 443
 	//}
 
-	qa := &Quiche{
-	}
+	qa := &Quiche{}
 
 	quiche.EnableDebugLogging()
 	ug.MuxDialers["quiche"] = qa
@@ -127,7 +124,7 @@ func connect(config *quiche.Config, addr string) (*client, error) {
 		conn:   conn,
 	}
 	err = c.connect()
-	log.Println("QUICHE: connect() done ",err)
+	log.Println("QUICHE: connect() done ", err)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +273,6 @@ func (c *client) send(buf []byte) error {
 		}
 	}
 }
-
 
 const maxTokenLen = 64
 

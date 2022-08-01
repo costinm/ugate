@@ -29,7 +29,7 @@ func (ht *H2Transport) ForwardHTTP(w http.ResponseWriter, r *http.Request, pathH
 // Used by both ForwardHTTP and ForwardMesh, after RoundTrip is done.
 // Will copy response headers and body
 func SendBackResponse(w http.ResponseWriter, r *http.Request,
-		res *http.Response, err error) {
+	res *http.Response, err error) {
 
 	if err != nil {
 		if res != nil {
@@ -49,7 +49,7 @@ func SendBackResponse(w http.ResponseWriter, r *http.Request,
 	CopyResponseHeaders(w.Header(), res.Header)
 	w.WriteHeader(res.StatusCode)
 
-	stats := &ugate.Conn{}
+	stats := &ugate.Stream{}
 	n, err := stats.CopyBuffered(w, res.Body, true)
 
 	log.Println("Done: ", r.URL, res.StatusCode, n, err)
@@ -196,4 +196,3 @@ var skipHeaders = map[string]struct{}{
 	"Cache-Control":       {},
 	"Expires":             {},
 }
-
