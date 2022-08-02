@@ -1,5 +1,5 @@
-github.com/costinm/hbone v0.0.0-20220628165743-43be365c5ba8 h1:fbrrjWZrILO6lzjwuFWXyGUUXjuD3pPxY5TGvB/igEI=
-github.com/costinm/hbone v0.0.0-20220628165743-43be365c5ba8/go.mod h1:yPLcqg/t1kIx4twYu56A0L/qLbzD8whnWGMR8oz0ow0=
+github.com/costinm/hbone v0.0.0-20220731143958-835b4d46903e h1:J0xOFzlNNc+MYoEe7hky0S9VOnLomQkLwQdx4TgYpV0=
+github.com/costinm/hbone v0.0.0-20220731143958-835b4d46903e/go.mod h1:yPLcqg/t1kIx4twYu56A0L/qLbzD8whnWGMR8oz0ow0=
 golang.org/x/net v0.0.0-20211014172544-2b766c08f1c0/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
 golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210423082822-04245dca01da/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
