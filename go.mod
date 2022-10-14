@@ -2,17 +2,15 @@ module github.com/costinm/ugate
 
 go 1.18
 
-replace (
-	github.com/costinm/hbone => ../hbone
-	github.com/costinm/ugate/auth => ./auth
-)
+replace github.com/costinm/hbone => ../hbone
+
+replace github.com/costinm/meshauth => ../meshauth
 
 require (
-	golang.org/x/net v0.0.0-20211014172544-2b766c08f1c0
-	golang.org/x/sys v0.0.0-20210423082822-04245dca01da
+	github.com/costinm/meshauth v0.0.0-20221013185453-bb5aae6632f8
+	github.com/costinm/ugate/test v0.0.0-20220802234414-af1ce48b30c0
+	golang.org/x/net v0.0.0-20221012135044-0b7e1fb9d458
+	golang.org/x/sys v0.0.0-20221013171732-95e765b1cc43
 )
 
-require (
-	github.com/costinm/hbone v0.0.0-20220628165743-43be365c5ba8 // indirect
-	github.com/costinm/ugate/auth v0.0.0-00010101000000-000000000000 // indirect
-)
+require golang.org/x/text v0.3.8 // indirect

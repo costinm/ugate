@@ -40,6 +40,11 @@ Packet can be Data, Dial Req/Res, Close Req/Res
 [gost](https://github.com/ginuerzh/gost/blob/master/README_en.md) provides multiple
 integration points, focuses on similar TCP proxy modes.
 
+Includes H2 tunnel, TProxy
+
+Best option: socks5 protocol allows UDP, remote listens
+Transport: ssh or h2 -with certificates
+
 
 Usage:
 
@@ -48,8 +53,59 @@ Usage:
 # socks+http proxy
 gost -L=:8080
 
+gost -L=tcp://:8081/127.0.0.1:5201 http2://127.0.0.1:8080
 
 ```
+
+H2:
+```text
+CONNECT / HTTP/2.0
+Host: 127.0.0.1:5201
+User-Agent: Chrome/78.0.3904.106
+
+
+2022/08/09 09:50:49 http2.go:97: [http2] HTTP/2.0 200 OK
+Connection: close
+Date: Tue, 09 Aug 2022 16:50:49 GMT
+Proxy-Agent: gost/2.11.1
+
+```
+
+- auth support admin:pass@addr, addr?secrets=secrets.txt
+- URL for the local address - http2, socks5
+- Protocols:
+  - quic
+  - socks5+wss
+  - http2 - only tls
+  - h2 - supports h2c
+  - socks
+  - shadowsocks
+  - forward:ssh://:2222
+  - https
+  - http
+  - http+tls
+- Local protocol:
+  - tcp://:LOACLPORT/DEST
+
+
+
+gost -L=udp://:5353/192.168.1.1:53?ttl=60
+Using UDP-over-TCP, must be socks5
+gost -L=rudp://:5353/192.168.1.1:53?ttl=60 [-F=... -F=socks5://172.24.10.1:1080]
+Remote UDP - listens on the socks5
+
+Code:
+- clean, well separated interface: transport, protocol, mux
+- tuntap - direct use of netlink for linux, ip commands for unix
+- sockopts - set socket mark, interface  ( -M -I CLI options)
+- using tenus project for netlink - can create veth, put them in namespaces.
+- using docker/libcontainer for setting routes
+
+Config:
+- 'route' - ServeNodes (-L), ChainNodes (-F) - list of URLs
+- Retries, Mark, Interface
+
+- The URL has the listener config using options
 
 # OpenZiti
 

@@ -47,5 +47,5 @@ start_ssh
 
 cd /
 env
-/ko-app/ugate
-
+#/ko-app/ugate
+sleep infinity

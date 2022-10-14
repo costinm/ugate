@@ -4,7 +4,6 @@ go 1.16
 
 replace (
 	github.com/costinm/ugate => ../../
-	github.com/costinm/ugate/auth => ../../auth/
 )
 
 require (

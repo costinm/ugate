@@ -1,4 +1,0 @@
-#defaultBaseImage: docker.io/library/ubuntu:bionic
-
-defaultBaseImage: gcr.io/dmeshgate/ugate-dev:latest
-

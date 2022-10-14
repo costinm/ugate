@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/auth"
 	"golang.org/x/net/http2"
@@ -85,11 +86,10 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 // This should be used as fallback - QUIC and WebRTC have proper mux and TUN support.
 // In particular, while H2 POST and CONNECT allow req/res Body to act as TCP stream,
 // the closing (FIN/RST) are very tricky:
-// - ResponseWriter (in BTS server) does not have a 'Close' method, it is closed after
-//   the method returns. That means we can't signal the TCP FIN or RST, which breaks some
-//   protocols.
-// - The request must be fully consumed before the method returns.
-//
+//   - ResponseWriter (in BTS server) does not have a 'Close' method, it is closed after
+//     the method returns. That means we can't signal the TCP FIN or RST, which breaks some
+//     protocols.
+//   - The request must be fully consumed before the method returns.
 func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t0 := time.Now()
 	var RemoteID string
@@ -131,7 +131,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	vapidH := r.Header["Authorization"]
 	if len(vapidH) > 0 {
-		tok, pub, err := auth.CheckVAPID(vapidH[0], time.Now())
+		tok, pub, err := meshauth.CheckVAPID(vapidH[0], time.Now())
 		if err == nil {
 			RemoteID = auth.IDFromPublicKeyBytes(pub)
 			SAN = tok.Sub

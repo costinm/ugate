@@ -5,6 +5,8 @@ import (
 	"context"
 	"net"
 	"time"
+
+	"github.com/costinm/meshauth"
 )
 
 type ReqContext struct {
@@ -23,7 +25,7 @@ type ReqContext struct {
 	// VIP associated with the public key.
 	VIP net.IP
 
-	VAPID *JWT
+	VAPID *meshauth.JWT
 }
 
 // ID of the caller, validated based on certs.

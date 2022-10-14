@@ -95,7 +95,7 @@ type H2RMux struct {
 	nextStreamID uint32
 }
 
-// DialMUX creates one connection to a mesh node, using one of the
+// dialH2ClientConn creates one connection to a mesh node, using one of the
 // supported multiplex protocols.
 func (t *H2R) DialMux(ctx context.Context, dm *ugate.DMNode, meta http.Header, ev func(t string, stream *ugate.Stream)) (ugate.Muxer, error) {
 	// TODO: try all published addresses, including all protos

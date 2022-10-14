@@ -1,7 +1,9 @@
 ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 OUT=${ROOT_DIR}/out
 
-IMAGE ?= gcr.io/dmeshgate/ugate
+#IMAGE ?= gcr.io/dmeshgate/ugate
+REPO ?= ghcr.io/costinm/ugate
+IMAGE ?= ${REPO}/ugate
 KO_DOCKER_REPO ?= gcr.io/dmeshgate/ugate
 #KO_DOCKER_REPO ?= costinm/ugate
 export KO_DOCKER_REPO
@@ -18,7 +20,8 @@ docker:
 	docker build -t ${IMAGE}:latest .
 
 docker/dev:
-	docker build -t ${IMAGE}-dev:latest -f tools/dev/Dockerfile .
+	#docker pull golang:latest
+	docker build -t ${IMAGE}-dev:latest -f tools/dev/Dockerfile tools/dev
 
 push/dev:
 	docker push ${IMAGE}-dev:latest

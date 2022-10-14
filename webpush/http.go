@@ -9,6 +9,7 @@ import (
 	"net/textproto"
 	"strings"
 
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate/auth"
 )
 
@@ -28,7 +29,6 @@ var ReceiveBaseUrl = "https://127.0.0.1:5228/"
 // q or path can be used to pass command. Body and query string are sent.
 // TODO: compatibility with cloud events and webpush
 // TODO: RBAC (including admin check for system notifications)
-//
 func (mux *Mux) HTTPHandlerSend(w http.ResponseWriter, r *http.Request) {
 	//transport.GetPeerCertBytes(r) or auth context
 	r.ParseForm()
@@ -91,7 +91,7 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 
 	dest := parts[2]
 	if dest == "" || dest == mux.Auth.Name || dest == mux.Auth.Self() {
-		ec := mux.Auth.NewContextUA(SharedWPAuth)
+		ec := meshauth.NewContextUA(mux.Auth.Priv, mux.Auth.PublicKey, SharedWPAuth)
 		b, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)

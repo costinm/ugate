@@ -1,12 +1,15 @@
 module github.com/costinm/ugate/cmd/ugate
 
-go 1.17
+go 1.19
 
 replace github.com/costinm/ugate => ../../
 
 replace github.com/costinm/ugate/dns => ../../dns
 
+replace github.com/costinm/ugate/test => ../../test
+
 replace github.com/costinm/ugate/ext/bootstrap => ../../ext/bootstrap
+
 replace github.com/costinm/ugate/ext/bootstrapx => ../../ext/bootstrapx
 
 replace github.com/costinm/ugate/ext/quic => ../../ext/quic
@@ -15,32 +18,30 @@ replace github.com/costinm/ugate/ext/h2r => ../../ext/h2r
 
 replace github.com/costinm/ugate/ext/ssh => ../../ext/ssh
 
+replace github.com/costinm/ssh-mesh => ../../../ssh-mesh
+
+replace github.com/costinm/meshauth => ../../../meshauth
+
 require (
-	github.com/costinm/ugate v0.0.0-20210425213441-05024f5e8910
+	github.com/costinm/ugate v0.0.0-20220614135442-cafcfb6d0da4
 	github.com/costinm/ugate/ext/bootstrap v0.0.0-20210510001934-3cec7b4617c7
 	github.com/miekg/dns v1.1.41 // indirect
 )
 
+require github.com/costinm/ugate/test v0.0.0-20220802234414-af1ce48b30c0
+
 require (
-	github.com/cheekybits/genny v1.0.0 // indirect
-	github.com/costinm/ugate/dns v0.0.0-20210425213441-05024f5e8910 // indirect
+	github.com/costinm/meshauth v0.0.0-20221013185453-bb5aae6632f8 // indirect
+	github.com/costinm/ssh-mesh v0.0.0-20220429182219-8b008c6822f6 // indirect
+	github.com/costinm/ugate/dns v0.0.0-20211023174040-9f00d2d3fca1 // indirect
 	github.com/costinm/ugate/ext/h2r v0.0.0-20210425213441-05024f5e8910 // indirect
-	github.com/costinm/ugate/ext/quic v0.0.0-20210425213441-05024f5e8910 // indirect
-	github.com/fsnotify/fsnotify v1.4.9 // indirect
-	github.com/go-task/slim-sprig v0.0.0-20210107165309-348f09dbbbc0 // indirect
-	github.com/lucas-clemente/quic-go v0.25.0 // indirect
-	github.com/marten-seemann/qpack v0.2.1 // indirect
-	github.com/marten-seemann/qtls-go1-16 v0.1.4 // indirect
-	github.com/marten-seemann/qtls-go1-17 v0.1.0 // indirect
-	github.com/marten-seemann/qtls-go1-18 v0.1.0-beta.1 // indirect
-	github.com/nxadm/tail v1.4.8 // indirect
-	github.com/onsi/ginkgo v1.16.4 // indirect
+	github.com/creack/pty v1.1.13 // indirect
+	github.com/gorilla/websocket v1.5.0 // indirect
+	github.com/kr/fs v0.1.0 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pkg/sftp v1.13.1 // indirect
 	golang.org/x/crypto v0.0.0-20210503195802-e9a32991a82e // indirect
-	golang.org/x/mod v0.4.2 // indirect
-	golang.org/x/net v0.0.0-20210428140749-89ef3d95e781 // indirect
-	golang.org/x/sys v0.0.0-20210510120138-977fb7262007 // indirect
-	golang.org/x/text v0.3.6 // indirect
-	golang.org/x/tools v0.1.1 // indirect
-	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
-	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
+	golang.org/x/net v0.0.0-20211014172544-2b766c08f1c0 // indirect
+	golang.org/x/sys v0.0.0-20220926163933-8cfa568d3c25 // indirect
+	golang.org/x/text v0.3.7 // indirect
 )

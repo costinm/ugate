@@ -19,14 +19,9 @@ import (
 	"time"
 )
 
-// Stream is the main abstraction, representing a connection with metadata and additional
-// helpers. The 'canonical' stream in a mesh is a H2 or H3 stream, represented as a http.Request
-// and http.Response pair.
+// Conn implements net.Conn using a tunneled, multi-layer protocol with metadata.
 //
-// In addition to the In/Out (corresponding to the body of req/res in h2 case) and headers, the Stream
-// holds buffers and helpers to copy to another stream and to avoid allocs.
-//
-// The connection is typically:
+// The 'raw' connection is typically:
 // - an accepted connection - In/Out are the raw net.Conn - with sniffing and processing of SNI/TLS-SNI, SOCKS
 // - a TLSConn, wrapping the accepted connection
 // - HTTP2 RequestBody+ResponseWriter
@@ -39,7 +34,7 @@ import (
 // - SNI - extracted 'Server Name' - port based on the listener port
 // - TLS - peer certificates, SNI, ALPN
 //
-// Metrics are maintained.
+// Metrics and security info are also maintained.
 //
 // Implements net.Conn - but does not implement ConnectionState(), so the
 // stream can be used with H2 library to create multiplexed H2 connections over the stream.
@@ -48,6 +43,8 @@ type Stream struct {
 	// StreamId is based on a counter, it is the key in the Active table.
 	// Streams may also have local ids associated with the transport.
 	StreamId int
+
+	ID string
 
 	// In - data from remote.
 	//
@@ -163,7 +160,12 @@ type Stream struct {
 	Closed bool `json:"-"`
 
 	// Errors associated with this stream, read from or write to.
-	ReadErr  error `json:"-"`
+
+	// ReadErr, if not nil, indicates that Read() failed - connection was closed with RST
+	// or timedout instead of FIN
+	ReadErr error `json:"-"`
+
+	// WritErr indicates that Write failed - timeout or a RST closing the stream.
 	WriteErr error `json:"-"`
 
 	// Only for 'accepted' streams (server side), in proxy mode: keep track
@@ -217,6 +219,10 @@ type Stream struct {
 }
 
 type StreamType int
+
+// If true, will debug or close operations.
+// Close is one of the hardest problems, due to FIN/RST multiple interfaces.
+const DebugClose = true
 
 const (
 	StreamTypeUnknown = 0
@@ -296,8 +302,6 @@ func (s *Stream) WBuffer() *Buffer {
 }
 
 // Fill the buffer by doing one Read() from the underlying reader.
-//
-//
 //
 // Future calls to Read() will use the remaining data in the buffer.
 func (s *Stream) Fill(nb int) ([]byte, error) {
@@ -382,7 +386,6 @@ func NewStream() *Stream {
 // For accepted requests, http2/server.go newWriterAndRequests populates the request based on the headers.
 // Server validates method, path and scheme=http|https. Req.Body is a pipe - similar with what we use for egress.
 // Request context is based on stream context, which is a 'with cancel' based on the serverConn baseCtx.
-//
 func NewStreamRequest(r *http.Request, w http.ResponseWriter, con *Stream) *Stream {
 	return &Stream{
 		StreamId: int(atomic.AddUint32(&StreamId, 1)),
@@ -458,7 +461,6 @@ func (s *Stream) Context() context.Context {
 // Write implements the io.Writer. The Write() is flushed if possible.
 //
 // TODO: incorporate the wbuffer, optimize based on size.
-//
 func (s *Stream) Write(b []byte) (n int, err error) {
 	n, err = s.Out.Write(b)
 	if err != nil {
@@ -528,7 +530,6 @@ func (s *Stream) Read(out []byte) (int, error) {
 }
 
 // Must be called at the end. It is expected CloseWrite has been called, for graceful FIN.
-//
 func (s *Stream) Close() error {
 	if s.Closed {
 		return nil
@@ -660,7 +661,9 @@ func (s *Stream) CopyBuffered(dst io.Writer, src io.Reader, srcIsRemote bool) (w
 	bufCap := cap(buf1)
 	buf := buf1[0:bufCap:bufCap]
 
-	// For netstack: src is a gonet.Stream, doesn't implement WriterTo. Dst is a net.TcpConn - and implements ReadFrom.
+	// For netstack: src is a gonet.ReaderCopier, doesn't implement WriterTo. Dst is a net.TcpConn - and
+	//  implements ReadFrom.
+
 	// Copy is the actual implementation of Copy and CopyBuffer.
 	// if buf is nil, one is allocated.
 	// Duplicated from io
@@ -865,28 +868,29 @@ func (s *Stream) ReadFrom(cin io.Reader) (n int64, err error) {
 	buf := buf1[0:bufCap:bufCap]
 
 	for {
+		// TODO: respect cluster timeouts !
 		if srcc, ok := cin.(net.Conn); ok {
 			srcc.SetReadDeadline(time.Now().Add(15 * time.Minute))
 		}
 		nr, er := cin.Read(buf)
-		if er != nil {
-			s.ProxyReadErr = er
-			return n, er
-		}
 		if nr > int(VarzMaxRead.Value()) {
 			VarzMaxRead.Set(int64(nr))
 		}
-
-		nw, err := s.Out.Write(buf[0:nr])
-		n += int64(nw)
-		s.SentBytes += nw
-		s.SentPackets++
-		if f, ok := s.Out.(http.Flusher); ok {
-			f.Flush()
-		}
-
-		if err != nil {
-			return n, err
+		if nr > 0 {
+			nw, err := s.Out.Write(buf[0:nr])
+			n += int64(nw)
+			s.SentBytes += nw
+			s.SentPackets++
+			if f, ok := s.Out.(http.Flusher); ok {
+				f.Flush()
+			}
+			if err != nil {
+				return n, err
+			}
+			if er != nil {
+				s.ProxyReadErr = er
+				return n, er
+			}
 		}
 	}
 
@@ -901,24 +905,28 @@ func (b *Stream) PostDial(nc net.Conn, err error) {
 
 // If true, will debug or close operations.
 // Close is one of the hardest problems, due to FIN/RST multiple interfaces.
-const DebugClose = true
+//const DebugClose = true
 
 // Proxy the accepted connection to a dialed connection.
 // Blocking, will wait for both sides to FIN or RST.
 func (s *Stream) ProxyTo(nc net.Conn) error {
 	errCh := make(chan error, 2)
 	go s.proxyFromClient(nc, errCh)
+
 	// Blocking, returns when all data is read from In, or error
 	var err1 error
 
-	if ncs, ok := nc.(*Stream); ok {
-		if ncs.Out != nil {
-			err1 = s.proxyToClient(nc)
-		}
-		// TODO: we need to wait for the request to consume the stream.
-	} else {
-		err1 = s.proxyToClient(nc)
-	}
+	// Special case - the dialed connection is a Conn, and it has an nil Out field -
+	// this is used with a http.Request without using pipe.
+	// Deprecated, no longer used- the plan is to change the h2 stack, pipe is not the biggest problem...
+	//if ncs, ok := nc.(*Conn); ok {
+	//	if ncs.Out != nil {
+	//		err1 = s.proxyToClient(nc)
+	//	}
+	//	// TODO: we need to wait for the request to consume the stream.
+	//} else {
+
+	err1 = s.proxyToClient(nc)
 
 	// Wait for data to be read from nc and sent to Out, or error
 	remoteErr := <-errCh
@@ -1016,7 +1024,10 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 	bufCap := cap(buf1)
 	buf := buf1[0:bufCap:bufCap]
 
-	for {
+	for { // TODO: respect cluster timeouts !
+		if srcc, ok := s.In.(net.Conn); ok {
+			srcc.SetReadDeadline(time.Now().Add(15 * time.Minute))
+		}
 		sn, sErr := s.In.Read(buf)
 		s.RcvdPackets++
 		s.RcvdBytes += sn
@@ -1075,12 +1086,6 @@ func (s *Stream) proxyFromClient(cin io.ReadCloser, errch chan error) {
 			log.Println(s.StreamId, "proxyFromClient FIN ", s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
 		}
 		s.CloseWrite()
-		//if cc, ok := cin.(CloseReader); ok {
-		//	if debugClose {
-		//		log.Println("proxyFromClient CloseRead", s.StreamId, s.ReadErr, s.WriteErr, s.ProxyReadErr, s.ProxyWriteErr)
-		//	}
-		//	cc.CloseRead()
-		//}
 	}
 
 	errch <- err

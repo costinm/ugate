@@ -4,8 +4,6 @@ go 1.18
 
 replace github.com/costinm/ugate => ../
 
-replace github.com/costinm/ugate/auth => ../auth
-
 replace github.com/costinm/ugate/gen/proto => ../gen/proto
 
 //require github.com/costinm/ugate v0.0.0-20220614135442-cafcfb6d0da4
@@ -15,12 +13,11 @@ replace github.com/costinm/ugate/gen/proto => ../gen/proto
 require (
 	github.com/GoogleCloudPlatform/cloud-run-mesh v0.0.0-20220128230121-cac57262761b
 	github.com/costinm/ugate v0.0.0-20220614135442-cafcfb6d0da4
-	github.com/costinm/ugate/auth v0.0.0-00010101000000-000000000000
 )
 
 require (
 	cloud.google.com/go v0.84.0 // indirect
-	github.com/costinm/hbone v0.0.0-20220628165743-43be365c5ba8 // indirect
+	github.com/costinm/meshauth v0.0.0-20221013185453-bb5aae6632f8 // indirect
 	github.com/creack/pty v1.1.13 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-logr/logr v0.4.0 // indirect
@@ -40,7 +37,7 @@ require (
 	go.opencensus.io v0.23.0 // indirect
 	golang.org/x/net v0.0.0-20211014172544-2b766c08f1c0 // indirect
 	golang.org/x/oauth2 v0.0.0-20210819190943-2bc19b11175f // indirect
-	golang.org/x/sys v0.0.0-20210831042530-f4d43177bf5e // indirect
+	golang.org/x/sys v0.0.0-20220926163933-8cfa568d3c25 // indirect
 	golang.org/x/term v0.0.0-20210220032956-6a3ed077a48d // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba // indirect

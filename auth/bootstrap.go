@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"github.com/costinm/meshauth"
 )
 
 // PlatformInit will attempt to get the identity from the environment.
@@ -29,7 +31,7 @@ func (a *Auth) extractK8sJWT() {
 			if err != nil {
 				continue
 			}
-			_, t, _, _, _ := JwtRawParse(string(data))
+			_, t, _, _, _ := meshauth.JwtRawParse(string(data))
 			if t.Iss != "kubernetes/serviceaccount" {
 				log.Println("Unexpected iss", t.Raw)
 				continue

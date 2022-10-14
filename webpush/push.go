@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate/auth"
 )
 
@@ -79,7 +80,7 @@ func NewRequest(dest string, key, authK []byte,
 
 	// If there is no payload then we don't actually need encryption
 	if message != "" {
-		ec := auth.NewContextSend(key, authK)
+		ec := meshauth.NewContextSend(key, authK)
 		payload, err := ec.Encrypt([]byte(message))
 		if err != nil {
 			return nil, err

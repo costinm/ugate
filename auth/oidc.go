@@ -53,7 +53,6 @@ import (
 //
 
 // JWTRule - from istio API, as json.
-//
 type JWTRule struct {
 
 	// Example: https://foobar.auth0.com
@@ -182,29 +181,6 @@ func (a *Auth) HandleJWK(w http.ResponseWriter, r *http.Request) {
 	//		"crv": "Ed25519",
 	//		"kty": "OKP",
 	//		"x"   : "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
-}
-
-// RFC8693 - token exchange
-// ex. for GCP: https://cloud.google.com/iam/docs/reference/sts/rest/v1beta/TopLevel/token
-// https://cloud.google.com/iam/docs/reference/credentials/rest
-//
-func (a *Auth) HandleSTS(w http.ResponseWriter, req *http.Request) {
-	if parseErr := req.ParseForm(); parseErr != nil {
-		w.WriteHeader(400)
-		return
-	}
-	reqParam := &StsRequestParameters{}
-	reqParam.GrantType = req.PostForm.Get("grant_type")
-	reqParam.Resource = req.PostForm.Get("resource")
-	reqParam.Audience = req.PostForm.Get("audience")
-	reqParam.Scope = req.PostForm.Get("scope")
-	reqParam.RequestedTokenType = req.PostForm.Get("requested_token_type")
-	reqParam.SubjectToken = req.PostForm.Get("subject_token")
-	reqParam.SubjectTokenType = req.PostForm.Get("subject_token_type")
-	reqParam.ActorToken = req.PostForm.Get("actor_token")
-	reqParam.ActorTokenType = req.PostForm.Get("actor_token_type")
-
-	// TODO:
 }
 
 // See golang.org/x/oauth2/google

@@ -27,7 +27,6 @@ type StartFunc func(ug *UGate)
 // TODO: convert them to take cfg as input, return an interface.
 // The interface should have CfgEvent(xx), with empty indicating start.
 // A Map[component]CfgEvent will be maintained. The interface impl may be the UGate
-//
 var InitHooks []func(gate *UGate) StartFunc
 
 type UGate struct {
@@ -199,7 +198,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	ug.Mux.Handle("/debug/echo/", &EchoHandler{})
 	ug.Mux.HandleFunc("/.well-known/openid-configuration", ug.Auth.HandleDisc)
 	ug.Mux.HandleFunc("/jwks", ug.Auth.HandleJWK)
-	ug.Mux.HandleFunc("/sts", ug.Auth.HandleSTS)
+	//ug.Mux.HandleFunc("/sts", ug.Auth.HandleSTS)
 
 	return ug
 }
@@ -237,8 +236,6 @@ func NewDMNode() *ugate.DMNode {
 }
 
 // GetNode returns a node, using an encoded id string.
-//
-//
 func (ug *UGate) GetNode(id string) *ugate.DMNode {
 	ug.m.RLock()
 	n := ug.NodesByID[id]
@@ -346,7 +343,6 @@ func (ug *UGate) OnStreamDone(str *ugate.Stream) {
 }
 
 // RemoteID returns the node ID based on authentication.
-//
 func RemoteID(s *ugate.Stream) string {
 	if s.TLS == nil {
 		return ""

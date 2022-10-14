@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
+// import (
 //
-//import (
 //	"context"
 //	"crypto/tls"
 //	"crypto/x509"
@@ -22,70 +22,74 @@ import (
 //	"path/filepath"
 //	"strings"
 //	"time"
-//)
 //
-//// This handles the ideal mesh case - platform managed workload certificates.
-//// Also handles pilot-agent managing the certs.
+// )
 //
-//// MeshAuth represents a workload identity and associated info required for minimal Mesh-compatible security.
-//type MeshAuth struct {
-//	// Will attempt to load certificates from this directory, defaults to
-//	// "./var/run/secrets/istio.io/"
-//	CertDir string
+// // This handles the ideal mesh case - platform managed workload certificates.
+// // Also handles pilot-agent managing the certs.
 //
-//	// Current certificate, after calling GetCertificate("")
-//	Cert *tls.Certificate
+// // MeshAuth represents a workload identity and associated info required for minimal Mesh-compatible security.
 //
-//	// MeshTLSConfig is a tls.Config that requires mTLS with a spiffee identity,
-//	// using the configured roots, trustdomains.
-//	//
-//	// By default only same namespace or istio-system are allowed - can be changed by
-//	// setting AllowedNamespaces. A "*" will allow all.
-//	MeshTLSConfig *tls.Config
+//	type MeshAuth struct {
+//		// Will attempt to load certificates from this directory, defaults to
+//		// "./var/run/secrets/istio.io/"
+//		CertDir string
 //
-//	// TrustDomain is extracted from the cert or set by user, used to verify
-//	// peer certificates.
-//	TrustDomain string
+//		// Current certificate, after calling GetCertificate("")
+//		Cert *tls.Certificate
 //
-//	// Namespace and SA are extracted from the certificate or set by user.
-//	// Namespace is used to verify peer certificates
-//	Namespace string
-//	SA        string
+//		// MeshTLSConfig is a tls.Config that requires mTLS with a spiffee identity,
+//		// using the configured roots, trustdomains.
+//		//
+//		// By default only same namespace or istio-system are allowed - can be changed by
+//		// setting AllowedNamespaces. A "*" will allow all.
+//		MeshTLSConfig *tls.Config
 //
-//	// Additional namespaces to allow access from. By default 'same namespace' and 'istio-system' are allowed.
-//	AllowedNamespaces []string
+//		// TrustDomain is extracted from the cert or set by user, used to verify
+//		// peer certificates.
+//		TrustDomain string
 //
-//	// Trusted roots
-//	// TODO: copy Istiod multiple trust domains code. This will be a map[trustDomain]roots and a
-//	// list of TrustDomains. XDS will return the info via ProxyConfig.
-//	// This can also be done by krun - loading a config map with same info.
-//	TrustedCertPool *x509.CertPool
+//		// Namespace and SA are extracted from the certificate or set by user.
+//		// Namespace is used to verify peer certificates
+//		Namespace string
+//		SA        string
 //
-//	// GetCertificateHook allows plugging in an alternative certificate provider. By default files are used.
-//	GetCertificateHook func(host string) (*tls.Certificate, error)
-//}
+//		// Additional namespaces to allow access from. By default 'same namespace' and 'istio-system' are allowed.
+//		AllowedNamespaces []string
 //
-//func (a *MeshAuth) GenerateTLSConfigServer() *tls.Config {
-//	return a.MeshTLSConfig
-//}
+//		// Trusted roots
+//		// TODO: copy Istiod multiple trust domains code. This will be a map[trustDomain]roots and a
+//		// list of TrustDomains. XDS will return the info via ProxyConfig.
+//		// This can also be done by krun - loading a config map with same info.
+//		TrustedCertPool *x509.CertPool
 //
-//func (a *MeshAuth) GenerateTLSConfigClient(name string) *tls.Config {
-//	return a.MeshTLSConfig.Clone()
-//}
-//
-//// NewMeshAuth creates the auth object. No keys are set.
-////
-//// Private key, roots, config must be initialized and loaded. Use NewAuth(...) for automated loading
-//// from environment/filesystem.
-//func NewMeshAuth() *Auth {
-//	a := &Auth{
-//		TrustedCertPool: x509.NewCertPool(),
+//		// GetCertificateHook allows plugging in an alternative certificate provider. By default files are used.
+//		GetCertificateHook func(host string) (*tls.Certificate, error)
 //	}
-//	return a
-//}
 //
-//// mesh certificates - new style
-//const (
+//	func (a *MeshAuth) GenerateTLSConfigServer() *tls.Config {
+//		return a.MeshTLSConfig
+//	}
+//
+//	func (a *MeshAuth) GenerateTLSConfigClient(name string) *tls.Config {
+//		return a.MeshTLSConfig.Clone()
+//	}
+//
+// // NewMeshAuth creates the auth object. No keys are set.
+// //
+// // Private key, roots, config must be initialized and loaded. Use NewAuth(...) for automated loading
+// // from environment/filesystem.
+//
+//	func NewMeshAuth() *Auth {
+//		a := &Auth{
+//			TrustedCertPool: x509.NewCertPool(),
+//		}
+//		return a
+//	}
+//
+// // mesh certificates - new style
+// const (
+//
 //	WorkloadCertDir = "/var/run/secrets/workload-spiffe-credentials"
 //
 //	// Different from typical Istio  and CertManager key.pem - we can check both
@@ -100,286 +104,291 @@ import (
 //	//
 //	// Outside of GKE, this is loaded from the mesh.env - the mesh gate is responsible to keep it up to date.
 //	WorkloadRootCAs = "ca_certificates.pem"
-//)
 //
-//// CSRSigner is the provider interface for signing certs, defined in Istio.
-//// CSR is generated by Auth.
-//type CSRSigner interface {
-//	CSRSign(ctx context.Context, csrPEM []byte, certValidTTLInSec int64) ([]string, error)
-//	GetRootCertBundle() ([]string, error)
-//}
+// )
 //
-//// Will load the credentials and create an Auth object.
-////
-//// This uses pilot-agent or some other platform tool creating ./var/run/secrets/istio.io/{key,cert-chain}.pem
-////
-////
-//// TODO: ./etc/certs support: krun should copy the files, for consistency (simper code for frameworks).
-//// TODO: periodic reload
-//func (a *Auth) SetKeysDir(dir string) error {
-//	a.CertDir = dir
-//	err := a.waitAndInitFromDir()
-//	if err != nil {
-//		return err
-//	}
-//	return nil
-//}
+// // CSRSigner is the provider interface for signing certs, defined in Istio.
+// // CSR is generated by Auth.
 //
-//func (a *Auth) SetKeysPEM(privatePEM []byte, chainPEM []string) error {
-//	chainPEMCat := strings.Join(chainPEM, "\n")
-//	tlsCert, err := tls.X509KeyPair([]byte(chainPEMCat), privatePEM)
-//	if err != nil {
-//		return err
-//	}
-//	if tlsCert.Certificate == nil || len(tlsCert.Certificate) == 0 {
-//		return errors.New("missing certificate")
+//	type CSRSigner interface {
+//		CSRSign(ctx context.Context, csrPEM []byte, certValidTTLInSec int64) ([]string, error)
+//		GetRootCertBundle() ([]string, error)
 //	}
 //
-//	return a.SetTLSCertificate(&tlsCert)
-//}
+// // Will load the credentials and create an Auth object.
+// //
+// // This uses pilot-agent or some other platform tool creating ./var/run/secrets/istio.io/{key,cert-chain}.pem
+// //
+// //
+// // TODO: ./etc/certs support: krun should copy the files, for consistency (simper code for frameworks).
+// // TODO: periodic reload
 //
+//	func (a *Auth) SetKeysDir(dir string) error {
+//		a.CertDir = dir
+//		err := a.waitAndInitFromDir()
+//		if err != nil {
+//			return err
+//		}
+//		return nil
+//	}
+//
+//	func (a *Auth) SetKeysPEM(privatePEM []byte, chainPEM []string) error {
+//		chainPEMCat := strings.Join(chainPEM, "\n")
+//		tlsCert, err := tls.X509KeyPair([]byte(chainPEMCat), privatePEM)
+//		if err != nil {
+//			return err
+//		}
+//		if tlsCert.Certificate == nil || len(tlsCert.Certificate) == 0 {
+//			return errors.New("missing certificate")
+//		}
+//
+//		return a.SetTLSCertificate(&tlsCert)
+//	}
 func (a *Auth) SetTLSCertificate(cert *tls.Certificate) error {
 	a.Cert = cert
 	a.initTLS()
 	return nil
 }
 
+// // GetCertificate is typically called during handshake, both server and client.
+// // "sni" will be empty for client certificates, and set for server certificates - if not set, workload id is returned.
+// //
+// // ctx is the handshake context - may include additional metadata about the operation.
 //
-//// GetCertificate is typically called during handshake, both server and client.
-//// "sni" will be empty for client certificates, and set for server certificates - if not set, workload id is returned.
-////
-//// ctx is the handshake context - may include additional metadata about the operation.
-//func (a *Auth) GetCertificate(ctx context.Context, sni string) (*tls.Certificate, error) {
-//	// TODO: if host != "", allow returning DNS certs for the host.
-//	// Default (and currently only impl) is to return the spiffe cert
-//	// May refresh.
-//	c, ok := a.CertMap[sni]
-//	if ok {
-//		return c, nil
-//	}
-//
-//	// Have cert, not expired
-//	if a.Cert != nil {
-//		if !a.leaf().NotAfter.Before(time.Now()) {
-//			return a.Cert, nil
+//	func (a *Auth) GetCertificate(ctx context.Context, sni string) (*tls.Certificate, error) {
+//		// TODO: if host != "", allow returning DNS certs for the host.
+//		// Default (and currently only impl) is to return the spiffe cert
+//		// May refresh.
+//		c, ok := a.CertMap[sni]
+//		if ok {
+//			return c, nil
 //		}
-//	}
 //
-//	if a.CertDir != "" {
-//		c, err := a.loadCertFromDir(a.CertDir)
-//		if err == nil {
-//			if !c.Leaf.NotAfter.Before(time.Now()) {
-//				a.Cert = c
+//		// Have cert, not expired
+//		if a.Cert != nil {
+//			if !a.leaf().NotAfter.Before(time.Now()) {
+//				return a.Cert, nil
 //			}
-//		} else {
-//			log.Println("Cert from dir failed", err)
 //		}
+//
+//		if a.CertDir != "" {
+//			c, err := a.loadCertFromDir(a.CertDir)
+//			if err == nil {
+//				if !c.Leaf.NotAfter.Before(time.Now()) {
+//					a.Cert = c
+//				}
+//			} else {
+//				log.Println("Cert from dir failed", err)
+//			}
+//		}
+//
+//		if a.GetCertificateHook != nil {
+//			c, err := a.GetCertificateHook(sni)
+//			if err != nil {
+//				return nil, err
+//			}
+//			a.Cert = c
+//		}
+//
+//		return a.Cert, nil
 //	}
 //
-//	if a.GetCertificateHook != nil {
-//		c, err := a.GetCertificateHook(sni)
+//	func (a *Auth) loadCertFromDir(dir string) (*tls.Certificate, error) {
+//		// Load cert from file
+//		keyFile := filepath.Join(dir, "key.pem")
+//		keyBytes, err := ioutil.ReadFile(keyFile)
 //		if err != nil {
 //			return nil, err
 //		}
-//		a.Cert = c
+//		certBytes, err := ioutil.ReadFile(filepath.Join(dir, "cert-chain.pem"))
+//		if err != nil {
+//			return nil, err
+//		}
+//
+//		tlsCert, err := tls.X509KeyPair(certBytes, keyBytes)
+//		if err != nil {
+//			return nil, err
+//		}
+//		if tlsCert.Certificate == nil || len(tlsCert.Certificate) == 0 {
+//			return nil, errors.New("missing certificate")
+//		}
+//		tlsCert.Leaf, _ = x509.ParseCertificate(tlsCert.Certificate[0])
+//
+//		return &tlsCert, nil
 //	}
 //
-//	return a.Cert, nil
-//}
-//
-//func (a *Auth) loadCertFromDir(dir string) (*tls.Certificate, error) {
-//	// Load cert from file
-//	keyFile := filepath.Join(dir, "key.pem")
-//	keyBytes, err := ioutil.ReadFile(keyFile)
-//	if err != nil {
-//		return nil, err
-//	}
-//	certBytes, err := ioutil.ReadFile(filepath.Join(dir, "cert-chain.pem"))
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	tlsCert, err := tls.X509KeyPair(certBytes, keyBytes)
-//	if err != nil {
-//		return nil, err
-//	}
-//	if tlsCert.Certificate == nil || len(tlsCert.Certificate) == 0 {
-//		return nil, errors.New("missing certificate")
-//	}
-//	tlsCert.Leaf, _ = x509.ParseCertificate(tlsCert.Certificate[0])
-//
-//	return &tlsCert, nil
-//}
-//
-//func (a *Auth) waitAndInitFromDir() error {
-//	if a.CertDir == "" {
-//		a.CertDir = "./var/run/secrets/istio.io/"
-//	}
-//	keyFile := filepath.Join(a.CertDir, "key.pem")
-//	err := waitFile(keyFile, 5*time.Second)
-//	if err != nil {
-//		return err
-//	}
-//
-//	err = a.initFromDir()
-//	if err != nil {
-//		return err
-//	}
-//
-//	time.AfterFunc(30*time.Minute, a.initFromDirPeriodic)
-//	return nil
-//}
-//
-//func (a *Auth) initFromDirPeriodic() {
-//	err := a.initFromDir()
-//	if err != nil {
-//		log.Println("certRefresh", err)
-//	}
-//	time.AfterFunc(30*time.Minute, a.initFromDirPeriodic)
-//}
-//
-//func (a *Auth) initFromDir() error {
-//
-//	if a.Cert == nil {
-//		_, err := a.GetCertificate(context.Background(), "")
+//	func (a *Auth) waitAndInitFromDir() error {
+//		if a.CertDir == "" {
+//			a.CertDir = "./var/run/secrets/istio.io/"
+//		}
+//		keyFile := filepath.Join(a.CertDir, "key.pem")
+//		err := waitFile(keyFile, 5*time.Second)
 //		if err != nil {
 //			return err
 //		}
-//	}
 //
-//	rootCert, _ := ioutil.ReadFile(filepath.Join(a.CertDir, "root-cert.pem"))
-//	if rootCert != nil {
-//		err2 := a.AddRoots(rootCert)
-//		if err2 != nil {
-//			return err2
+//		err = a.initFromDir()
+//		if err != nil {
+//			return err
 //		}
+//
+//		time.AfterFunc(30*time.Minute, a.initFromDirPeriodic)
+//		return nil
 //	}
 //
-//	istioCert, _ := ioutil.ReadFile("./var/run/secrets/istio/root-cert.pem")
-//	if istioCert != nil {
-//		err2 := a.AddRoots(istioCert)
-//		if err2 != nil {
-//			return err2
+//	func (a *Auth) initFromDirPeriodic() {
+//		err := a.initFromDir()
+//		if err != nil {
+//			log.Println("certRefresh", err)
 //		}
+//		time.AfterFunc(30*time.Minute, a.initFromDirPeriodic)
 //	}
 //
-//	// Similar with /etc/ssl/certs/ca-certificates.crt - the concatenated list of PEM certs.
-//	rootCertExtra, _ := ioutil.ReadFile(filepath.Join(a.CertDir, "ca-certificates.crt"))
-//	if rootCertExtra != nil {
-//		err2 := a.AddRoots(rootCertExtra)
-//		if err2 != nil {
-//			return err2
-//		}
-//	}
-//	// If the certificate has a chain, use the last cert - similar with Istio
-//	if len(a.Cert.Certificate) > 1 {
-//		last := a.Cert.Certificate[len(a.Cert.Certificate)-1]
+// func (a *Auth) initFromDir() error {
 //
-//		rootCAs, err := x509.ParseCertificates(last)
-//		if err == nil {
-//			for _, c := range rootCAs {
-//				log.Println("Adding root CA from cert chain: ", c.Subject)
-//				a.TrustedCertPool.AddCert(c)
-//			}
-//		}
-//	}
-//
-//	a.initTLS()
-//	return nil
-//}
-//
-//// InitRoots will find the mesh roots.
-////
-//// - if Zatar or another CSI provider are enabled, we do nothing - Zatar config is the root of trust for everything
-//// - otherwise the roots are expected to be part of mesh-env. The mesh connector or other tools will
-////  populate it - ideally from the CSI/Zatar or TrustConfig CRD.
-//func (kr *Auth) InitRoots(ctx context.Context, outDir string) error {
-//	if outDir != "" {
-//		rootFile := filepath.Join(outDir, WorkloadRootCAs)
-//		rootCertPEM, err := ioutil.ReadFile(rootFile)
-//		if err == nil {
-//			block, rest := pem.Decode(rootCertPEM)
-//
-//			var blockBytes []byte
-//			for block != nil {
-//				blockBytes = append(blockBytes, block.Bytes...)
-//				block, rest = pem.Decode(rest)
-//			}
-//
-//			rootCAs, err := x509.ParseCertificates(blockBytes)
+//		if a.Cert == nil {
+//			_, err := a.GetCertificate(context.Background(), "")
 //			if err != nil {
 //				return err
 //			}
-//			for _, c := range rootCAs {
-//				kr.TrustedCertPool.AddCert(c)
+//		}
+//
+//		rootCert, _ := ioutil.ReadFile(filepath.Join(a.CertDir, "root-cert.pem"))
+//		if rootCert != nil {
+//			err2 := a.AddRoots(rootCert)
+//			if err2 != nil {
+//				return err2
 //			}
-//			return nil
+//		}
+//
+//		istioCert, _ := ioutil.ReadFile("./var/run/secrets/istio/root-cert.pem")
+//		if istioCert != nil {
+//			err2 := a.AddRoots(istioCert)
+//			if err2 != nil {
+//				return err2
+//			}
+//		}
+//
+//		// Similar with /etc/ssl/certs/ca-certificates.crt - the concatenated list of PEM certs.
+//		rootCertExtra, _ := ioutil.ReadFile(filepath.Join(a.CertDir, "ca-certificates.crt"))
+//		if rootCertExtra != nil {
+//			err2 := a.AddRoots(rootCertExtra)
+//			if err2 != nil {
+//				return err2
+//			}
+//		}
+//		// If the certificate has a chain, use the last cert - similar with Istio
+//		if len(a.Cert.Certificate) > 1 {
+//			last := a.Cert.Certificate[len(a.Cert.Certificate)-1]
+//
+//			rootCAs, err := x509.ParseCertificates(last)
+//			if err == nil {
+//				for _, c := range rootCAs {
+//					log.Println("Adding root CA from cert chain: ", c.Subject)
+//					a.TrustedCertPool.AddCert(c)
+//				}
+//			}
+//		}
+//
+//		a.initTLS()
+//		return nil
+//	}
+//
+// // InitRoots will find the mesh roots.
+// //
+// // - if Zatar or another CSI provider are enabled, we do nothing - Zatar config is the root of trust for everything
+// // - otherwise the roots are expected to be part of mesh-env. The mesh connector or other tools will
+// //  populate it - ideally from the CSI/Zatar or TrustConfig CRD.
+//
+//	func (kr *Auth) InitRoots(ctx context.Context, outDir string) error {
+//		if outDir != "" {
+//			rootFile := filepath.Join(outDir, WorkloadRootCAs)
+//			rootCertPEM, err := ioutil.ReadFile(rootFile)
+//			if err == nil {
+//				block, rest := pem.Decode(rootCertPEM)
+//
+//				var blockBytes []byte
+//				for block != nil {
+//					blockBytes = append(blockBytes, block.Bytes...)
+//					block, rest = pem.Decode(rest)
+//				}
+//
+//				rootCAs, err := x509.ParseCertificates(blockBytes)
+//				if err != nil {
+//					return err
+//				}
+//				for _, c := range rootCAs {
+//					kr.TrustedCertPool.AddCert(c)
+//				}
+//				return nil
+//			}
+//		}
+//
+//		// File not found - extract it from mesh env, and save it.
+//		// This includes Citadel root (if active in the mesh) or other roots.
+//		roots := ""
+//		block, rest := pem.Decode([]byte(roots))
+//		var blockBytes []byte
+//		for block != nil {
+//			blockBytes = append(blockBytes, block.Bytes...)
+//			block, rest = pem.Decode(rest)
+//		}
+//
+//		rootCAs, err := x509.ParseCertificates(blockBytes)
+//		if err != nil {
+//			return err
+//		}
+//		for _, c := range rootCAs {
+//			kr.TrustedCertPool.AddCert(c)
+//		}
+//
+//		return nil
+//	}
+//
+// // TODO: save last cert in the chain to roots
+//
+// // Common setup for cert management.
+// // After the 'mesh-env' is loaded (from env, k8s, URL) the next step is to init the workload identity.
+// // This must happen before connecting to XDS - since certs is one of the possible auth methods.
+// //
+// // The logic is:
+// // - (best case) certificates already provisioned by platform. Detects GKE paths (CAS), old Istio, CertManager style
+// //   If workload certs are platform-provisioned: extract trust domain, namespace, name, pod id from cert.
+// //
+// // - Detect the WORKLOAD_SERVICE_ACCOUNT, trust domain from JWT or mesh-env
+// // - Use WORKLOAD_CERT json to load the config for the CSR, create a CSR
+// // - Call CSRSigner.
+// // - Save the certificates if running as root or an output dir is set. This will use CAS naming convention.
+// //
+// // If envoy + pilot-agent are used, they should be configured to use the cert files.
+// // This is done by setting "CA_PROVIDER=GoogleGkeWorkloadCertificate" when starting pilot-agent
+//
+//	func (kr *Auth) InitCertificates(ctx context.Context, certDir string) error {
+//		if certDir == "" {
+//			certDir = WorkloadCertDir
+//		}
+//		var err error
+//		keyFile := filepath.Join(certDir, privateKey)
+//		chainFile := filepath.Join(certDir, cert)
+//		kr.privPEM, err = ioutil.ReadFile(keyFile)
+//		kr.certPEM, err = ioutil.ReadFile(chainFile)
+//
+//		kp, err := tls.X509KeyPair(kr.certPEM, kr.privPEM)
+//		if err == nil && len(kp.Certificate) > 0 {
+//			kr.CertDir = certDir
+//
+//			kp.Leaf, _ = x509.ParseCertificate(kp.Certificate[0])
+//
+//			exp := kp.Leaf.NotAfter.Sub(time.Now())
+//			if exp > -5*time.Minute {
+//				kr.Cert = &kp
+//				log.Println("Existing Cert", "expires", exp)
+//				return nil
+//			}
 //		}
 //	}
 //
-//	// File not found - extract it from mesh env, and save it.
-//	// This includes Citadel root (if active in the mesh) or other roots.
-//	roots := ""
-//	block, rest := pem.Decode([]byte(roots))
-//	var blockBytes []byte
-//	for block != nil {
-//		blockBytes = append(blockBytes, block.Bytes...)
-//		block, rest = pem.Decode(rest)
-//	}
-//
-//	rootCAs, err := x509.ParseCertificates(blockBytes)
-//	if err != nil {
-//		return err
-//	}
-//	for _, c := range rootCAs {
-//		kr.TrustedCertPool.AddCert(c)
-//	}
-//
 //	return nil
-//}
-//
-//// TODO: save last cert in the chain to roots
-//
-//// Common setup for cert management.
-//// After the 'mesh-env' is loaded (from env, k8s, URL) the next step is to init the workload identity.
-//// This must happen before connecting to XDS - since certs is one of the possible auth methods.
-////
-//// The logic is:
-//// - (best case) certificates already provisioned by platform. Detects GKE paths (CAS), old Istio, CertManager style
-////   If workload certs are platform-provisioned: extract trust domain, namespace, name, pod id from cert.
-////
-//// - Detect the WORKLOAD_SERVICE_ACCOUNT, trust domain from JWT or mesh-env
-//// - Use WORKLOAD_CERT json to load the config for the CSR, create a CSR
-//// - Call CSRSigner.
-//// - Save the certificates if running as root or an output dir is set. This will use CAS naming convention.
-////
-//// If envoy + pilot-agent are used, they should be configured to use the cert files.
-//// This is done by setting "CA_PROVIDER=GoogleGkeWorkloadCertificate" when starting pilot-agent
-//func (kr *Auth) InitCertificates(ctx context.Context, certDir string) error {
-//	if certDir == "" {
-//		certDir = WorkloadCertDir
-//	}
-//	var err error
-//	keyFile := filepath.Join(certDir, privateKey)
-//	chainFile := filepath.Join(certDir, cert)
-//	kr.privPEM, err = ioutil.ReadFile(keyFile)
-//	kr.certPEM, err = ioutil.ReadFile(chainFile)
-//
-//	kp, err := tls.X509KeyPair(kr.certPEM, kr.privPEM)
-//	if err == nil && len(kp.Certificate) > 0 {
-//		kr.CertDir = certDir
-//
-//		kp.Leaf, _ = x509.ParseCertificate(kp.Certificate[0])
-//
-//		exp := kp.Leaf.NotAfter.Sub(time.Now())
-//		if exp > -5*time.Minute {
-//			kr.Cert = &kp
-//			log.Println("Existing Cert", "expires", exp)
-//			return nil
-//		}
-//	}
-//	return nil
-//}
 //
 // Extract the trustDomain, namespace and Name from a spiffee certificate
 func (a *Auth) Spiffee() (*url.URL, string, string, string) {
@@ -397,42 +406,41 @@ func (a *Auth) Spiffee() (*url.URL, string, string, string) {
 	return nil, "", "", ""
 }
 
-//
-//func (a *Auth) SpiffeeID() string {
-//	su, _, _, _ := a.Spiffee()
-//	return su.String()
-//}
-//
-//func (a *Auth) String() string {
-//	cert, err := x509.ParseCertificate(a.Cert.Certificate[0])
-//	if err != nil {
-//		return ""
-//	}
-//	id := ""
-//	if len(cert.URIs) > 0 {
-//		id = cert.URIs[0].String()
-//	}
-//	return fmt.Sprintf("ID=%s,iss=%s,exp=%v,org=%s", id, cert.Issuer,
-//		cert.NotAfter, cert.Subject.Organization)
-//}
-//
-//func (a *Auth) AddRoots(rootCertPEM []byte) error {
-//	block, rest := pem.Decode(rootCertPEM)
-//	var blockBytes []byte
-//	for block != nil {
-//		blockBytes = append(blockBytes, block.Bytes...)
-//		block, rest = pem.Decode(rest)
+//	func (a *Auth) SpiffeeID() string {
+//		su, _, _, _ := a.Spiffee()
+//		return su.String()
 //	}
 //
-//	rootCAs, err := x509.ParseCertificates(blockBytes)
-//	if err != nil {
-//		return err
+//	func (a *Auth) String() string {
+//		cert, err := x509.ParseCertificate(a.Cert.Certificate[0])
+//		if err != nil {
+//			return ""
+//		}
+//		id := ""
+//		if len(cert.URIs) > 0 {
+//			id = cert.URIs[0].String()
+//		}
+//		return fmt.Sprintf("ID=%s,iss=%s,exp=%v,org=%s", id, cert.Issuer,
+//			cert.NotAfter, cert.Subject.Organization)
 //	}
-//	for _, c := range rootCAs {
-//		a.TrustedCertPool.AddCert(c)
+//
+//	func (a *Auth) AddRoots(rootCertPEM []byte) error {
+//		block, rest := pem.Decode(rootCertPEM)
+//		var blockBytes []byte
+//		for block != nil {
+//			blockBytes = append(blockBytes, block.Bytes...)
+//			block, rest = pem.Decode(rest)
+//		}
+//
+//		rootCAs, err := x509.ParseCertificates(blockBytes)
+//		if err != nil {
+//			return err
+//		}
+//		for _, c := range rootCAs {
+//			a.TrustedCertPool.AddCert(c)
+//		}
+//		return nil
 //	}
-//	return nil
-//}
 //
 // initTLS initializes the MeshTLSConfig with the workload certificate
 func (a *Auth) initTLS() {

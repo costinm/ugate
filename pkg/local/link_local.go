@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/auth"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
@@ -75,7 +76,7 @@ func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.DMNode, addr *net.UDPAddr,
 
 	//if fromMySTA && node.TunClient == nil {
 	//log.Println("TODO: connect to ", add)
-	//sshVpn, err := gw.gw.SSHGate.DialMUX(add.String(), node.PublicKey, nil)
+	//sshVpn, err := gw.gw.SSHGate.dialH2ClientConn(add.String(), node.PublicKey, nil)
 	//if err != nil {
 	//	log.Println("SSH STA ERR ", add, node.VIP, err)
 	//	return
@@ -94,7 +95,6 @@ func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.DMNode, addr *net.UDPAddr,
 }
 
 // Format an address + zone + port for use in HTTP request
-//
 func (gw *LLDiscovery) FixIp6ForHTTP(addr *net.UDPAddr) string {
 	if addr.IP.To4() != nil {
 		return net.JoinHostPort(addr.IP.String(), strconv.Itoa(addr.Port))
@@ -133,11 +133,11 @@ func (gw *LLDiscovery) ensureConnectedUp(laddr *net.UDPAddr, node *ugate.DMNode)
 	//	addr := ""
 	//	if laddr != nil {
 	//		addr = laddr.String()
-	//		conMux, err = gw.gw.SSHGate.DialMUX(addr, node.PublicKey, nil)
+	//		conMux, err = gw.gw.SSHGate.dialH2ClientConn(addr, node.PublicKey, nil)
 	//	}
 	//	if conMux == nil {
 	//		addr = "192.168.49.1:5222"
-	//		conMux, err = gw.gw.SSHGate.DialMUX(addr, nil, nil)
+	//		conMux, err = gw.gw.SSHGate.dialH2ClientConn(addr, nil, nil)
 	//	}
 	//	if err != nil {
 	//		log.Println("MCDirect: announce P2P ToAP 49.1 fail ", err)
@@ -678,7 +678,7 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 	sig := data[dl-64 : dl]
 
 	// Check signature. Verified Public key is the identity
-	err := auth.Verify(data[0:dl-64], pub, sig)
+	err := meshauth.Verify(data[0:dl-64], pub, sig)
 	if err != nil {
 		log.Println("MCDirect: Signature ", err)
 		return nil, nil, err

@@ -6,11 +6,12 @@ ENV GO111MODULE=on
 ENV CGO_ENABLED=0
 ENV GOOS=linux
 ENV GOPROXY=https://proxy.golang.org
+LABEL org.opencontainers.image.source https://github.com/costinm/ugate
 
 RUN apt-get update && \
     apt install -y --no-install-recommends \
        less net-tools openssh-server sudo \
-       lsof netcat tcpdump iptables iproute2 git && \
+       lsof netcat tcpdump iptables iproute2 git syncthing && \
     apt-get clean && \
     rm -rf  /var/log/*log /var/lib/apt/lists/* /var/log/apt/* /var/lib/dpkg/*-old /var/cache/debconf/*-old
 
@@ -25,7 +26,6 @@ RUN useradd -u 1337 -U -d /var/run/istio -s /bin/bash istio-proxy && \
 #RUN curl -fsSL https://code-server.dev/install.sh > /tmp/install.sh && \
 #    sh /tmp/install.sh
 
-
 RUN mkdir -p /etc/certs && \
     mkdir -p /run/ssh && \
     mkdir -p /etc/istio/proxy && \
@@ -35,15 +35,13 @@ RUN mkdir -p /etc/certs && \
     mkdir -p /var/lib/istio/proxy && \
     chown -R 1337 /etc/certs /etc/istio /var/lib/istio && \
     mkdir /run/ugate && \
-    ln -s /ko-app/ugate /usr/local/bin/ugate && \
     mkdir /run/sshd && \
     chmod 700 /run/sshd
 
 # Binaries to /go/bin
 #RUN go get github.com/githubnemo/CompileDaemon
 
-RUN go get github.com/google/ko@latest && \
-    go get github.com/go-delve/delve/cmd/dlv && \
+RUN go install github.com/go-delve/delve/cmd/dlv@latest && \
     rm -rf /root/.cache && rm -rf /go/pkg && go clean -cache
 
 # Default is /go directory, which is set a GOPATH
@@ -53,14 +51,14 @@ WORKDIR /ws
 EXPOSE 8080
 EXPOSE 15007
 
-COPY tools/dev/sshd_config /etc/ssh/sshd_config
+COPY sshd_config /etc/ssh/sshd_config
 
 # Test only
-RUN echo 'root:test' | chpasswd
+#RUN echo 'root:test' | chpasswd
 
 RUN sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
 
-COPY tools/dev/run.sh /usr/local/bin/
+COPY run.sh /usr/local/bin/
 
 # Runs in /go directory
 #COPY . .

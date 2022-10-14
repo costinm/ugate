@@ -38,7 +38,6 @@ var (
 )
 
 // Configuration for the micro Gateway.
-//
 type GateCfg struct {
 	// BasePort is the first port used for the virtual/control ports.
 	// For Istio interop, it defaults to 15000 and uses same offsets.
@@ -153,7 +152,6 @@ type HostStats struct {
 //
 // This struct includes statistics about the node and current active association/mux
 // connections.
-//
 type DMNode struct {
 	// ID is the (best) primary id known for the node. Format is:
 	//    base32(SHA256(EC_256_pub)) - 32 bytes binary, 52 bytes encoded
@@ -580,7 +578,7 @@ type NodeAnnounce struct {
 //	// or a child. The subsriptions are used to indicate what messages will be forwarded to the server.
 //	// Typically VPN will receive all events, AP will receive subset of events related to topology while
 //	// child/peer only receive directed messages.
-//	DialMUX(addr string, pub []byte, subs []string) (MuxedConn, error)
+//	dialH2ClientConn(addr string, pub []byte, subs []string) (MuxedConn, error)
 //}
 
 //// A Connection that can multiplex.
