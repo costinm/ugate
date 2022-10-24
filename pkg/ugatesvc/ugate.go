@@ -16,8 +16,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/costinm/hbone"
+	"github.com/costinm/hbone/nio"
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/cfgfs"
 	msgs "github.com/costinm/ugate/webpush"
 )
@@ -30,7 +32,7 @@ type StartFunc func(ug *UGate)
 var InitHooks []func(gate *UGate) StartFunc
 
 type UGate struct {
-	Config *ugate.GateCfg
+	Config *ugate.MeshSettings
 
 	// Default dialer used to connect to host:port extracted from metadata.
 	// Defaults to net.Dialer, making real connections.
@@ -39,12 +41,12 @@ type UGate struct {
 	// integration.
 	parentDialer ugate.ContextDialer
 
-	DefaultRoute *ugate.Route
+	DefaultRoute *nio.Route
 
 	// Handlers for incoming connections - local accept or forwarding.
 	Mux *http.ServeMux
 
-	// template, used for TLS connections and the host ID
+	// template, used for TLS connections and the host WorkloadID
 	TLSConfig *tls.Config
 
 	H2Handler *H2Transport
@@ -53,17 +55,17 @@ type UGate struct {
 	// directly connected notes - either Wifi on same segment, or VPNs and
 	// connected devices - with TLS termination and mutual auth. The nodes typically
 	// have a multiplexed connection.
-	Nodes     map[uint64]*ugate.DMNode
-	NodesByID map[string]*ugate.DMNode
+	Nodes     map[uint64]*ugate.Cluster
+	NodesByID map[string]*ugate.Cluster
 
-	// Active connection by internal stream ID.
+	// Active connection by internal stream WorkloadID.
 	// Tracks incoming Streams - if the stream is getting proxied to
 	// a net.Conn or Stream, the dest will not be tracked here.
-	ActiveTcp map[int]*ugate.Stream
+	ActiveTcp map[int]*nio.Stream
 
 	m sync.RWMutex
 
-	Auth *auth.Auth
+	Auth *meshauth.MeshAuth
 
 	Msg *msgs.Mux
 
@@ -93,7 +95,7 @@ func Get(h2 ugate.ConfStore, name string, to interface{}) error {
 	return nil
 }
 
-func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.ConfStore) *UGate {
+func NewGate(d ugate.ContextDialer, a *meshauth.MeshAuth, cfg *ugate.MeshSettings, cs ugate.ConfStore) *UGate {
 	ug := New(cs, a, cfg)
 	if d != nil {
 		ug.parentDialer = d
@@ -105,28 +107,28 @@ func NewGate(d ugate.ContextDialer, a *auth.Auth, cfg *ugate.GateCfg, cs ugate.C
 	return ug
 }
 
-func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
+func New(cs ugate.ConfStore, a *meshauth.MeshAuth, cfg *ugate.MeshSettings) *UGate {
 	if cs == nil {
 		cs = cfgfs.NewConf()
 	}
 	if cfg == nil {
 		bp := ugate.ConfInt(cs, "BASE_PORT", 15000)
 
-		cfg = &ugate.GateCfg{
+		cfg = &ugate.MeshSettings{
 			BasePort: bp,
 		}
 	}
 	if cfg.H2R == nil {
 		cfg.H2R = map[string]string{}
 	}
-	if cfg.Hosts == nil {
-		cfg.Hosts = map[string]*ugate.DMNode{}
+	if cfg.Clusters == nil {
+		cfg.Clusters = map[string]*ugate.Cluster{}
 	}
 	if cfg.Listeners == nil {
-		cfg.Listeners = map[string]*ugate.Listener{}
+		cfg.Listeners = map[string]*hbone.Listener{}
 	}
 	if cfg.Routes == nil {
-		cfg.Routes = map[string]*ugate.Route{}
+		cfg.Routes = map[string]*nio.Route{}
 	}
 
 	// Merge 'ugate' JSON config, from config store.
@@ -140,22 +142,20 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	}
 
 	if a == nil {
-		a = auth.NewAuth(cs, cfg.Name, cfg.Domain)
+		a = meshauth.NewAuth(cfg.Name, cfg.Domain)
 	}
 
 	ug := &UGate{
 		parentDialer: &net.Dialer{},
 		MuxDialers:   map[string]ugate.MuxDialer{},
 		Config:       cfg,
-		NodesByID:    map[string]*ugate.DMNode{},
-		Nodes:        map[uint64]*ugate.DMNode{},
+		NodesByID:    map[string]*ugate.Cluster{},
+		Nodes:        map[uint64]*ugate.Cluster{},
 		Mux:          http.NewServeMux(),
 		Auth:         a,
-		ActiveTcp:    map[int]*ugate.Stream{},
-		DefaultRoute: &ugate.Route{
-			Protocol: "OriginalDST",
-		},
-		Msg: msgs.DefaultMux,
+		ActiveTcp:    map[int]*nio.Stream{},
+		DefaultRoute: &nio.Route{},
+		Msg:          msgs.DefaultMux,
 	}
 
 	if l, ok := cfg.Routes["*"]; ok {
@@ -198,7 +198,7 @@ func New(cs ugate.ConfStore, a *auth.Auth, cfg *ugate.GateCfg) *UGate {
 	ug.Mux.Handle("/debug/echo/", &EchoHandler{})
 	ug.Mux.HandleFunc("/.well-known/openid-configuration", ug.Auth.HandleDisc)
 	ug.Mux.HandleFunc("/jwks", ug.Auth.HandleJWK)
-	//ug.Mux.HandleFunc("/sts", ug.Auth.HandleSTS)
+	//ug.Transport.HandleFunc("/sts", ug.Auth.HandleSTS)
 
 	return ug
 }
@@ -216,7 +216,7 @@ func (ug *UGate) Start() {
 
 	log.Println("Starting uGate ", ug.Config.Name,
 		ug.Config.BasePort,
-		auth.IDFromPublicKey(auth.PublicKey(ug.Auth.Cert.PrivateKey)),
+		meshauth.IDFromPublicKey(meshauth.PublicKey(ug.Auth.Cert.PrivateKey)),
 		ug.Auth.VIP6)
 }
 
@@ -225,9 +225,9 @@ func (ug *UGate) Start() {
 //
 //}
 
-func NewDMNode() *ugate.DMNode {
+func NewDMNode() *ugate.Cluster {
 	now := time.Now()
-	return &ugate.DMNode{
+	return &ugate.Cluster{
 		Labels:       map[string]string{},
 		FirstSeen:    now,
 		LastSeen:     now,
@@ -236,11 +236,11 @@ func NewDMNode() *ugate.DMNode {
 }
 
 // GetNode returns a node, using an encoded id string.
-func (ug *UGate) GetNode(id string) *ugate.DMNode {
+func (ug *UGate) GetNode(id string) *ugate.Cluster {
 	ug.m.RLock()
 	n := ug.NodesByID[id]
 	if n == nil {
-		n = ug.Config.Hosts[id]
+		n = ug.Config.Clusters[id]
 	}
 	// Make sure it is set correctly.
 	if n != nil && n.ID == "" {
@@ -255,18 +255,18 @@ func (ug *UGate) GetNode(id string) *ugate.DMNode {
 // NodesByID will be updated.
 //
 // id is a hostname or meshid, without port.
-func (ug *UGate) GetOrAddNode(id string) *ugate.DMNode {
+func (ug *UGate) GetOrAddNode(id string) *ugate.Cluster {
 	ug.m.Lock()
 	n := ug.NodesByID[id]
 	if n == nil {
-		n = ug.Config.Hosts[id]
+		n = ug.Config.Clusters[id]
 	}
 	// Make sure it is set correctly.
 	if n != nil && n.ID == "" {
 		n.ID = id
 	}
 	if n == nil {
-		n = &ugate.DMNode{
+		n = &ugate.Cluster{
 			FirstSeen: time.Now(),
 			ID:        id,
 		}
@@ -278,7 +278,7 @@ func (ug *UGate) GetOrAddNode(id string) *ugate.DMNode {
 }
 
 // All streams must call this method, and defer OnStreamDone
-func (ug *UGate) OnStream(s *ugate.Stream) {
+func (ug *UGate) OnStream(s *nio.Stream) {
 	ug.m.Lock()
 	ug.ActiveTcp[s.StreamId] = s
 	ug.m.Unlock()
@@ -290,7 +290,7 @@ func (ug *UGate) OnStream(s *ugate.Stream) {
 // Called at the end of the connection handling. After this point
 // nothing should use or refer to the connection, both proxy directions
 // should already be closed for write or fully closed.
-func (ug *UGate) OnStreamDone(str *ugate.Stream) {
+func (ug *UGate) OnStreamDone(str *nio.Stream) {
 
 	ug.m.Lock()
 	delete(ug.ActiveTcp, str.StreamId)
@@ -328,10 +328,10 @@ func (ug *UGate) OnStreamDone(str *ugate.Stream) {
 		log.Println("AC: Recovered in f", r, err)
 	}
 
-	if ugate.NoEOF(str.ReadErr) != nil || str.WriteErr != nil {
+	if nio.NoEOF(str.ReadErr) != nil || str.WriteErr != nil {
 		log.Println(str.StreamId, "AE:", "Err in:", str.ReadErr, str.WriteErr)
 	}
-	if ugate.NoEOF(str.ProxyReadErr) != nil || str.ProxyWriteErr != nil {
+	if nio.NoEOF(str.ProxyReadErr) != nil || str.ProxyWriteErr != nil {
 		log.Println(str.StreamId, "AE:", "Err out:", str.ProxyReadErr, str.ProxyWriteErr)
 	}
 	if !str.Closed {
@@ -342,20 +342,20 @@ func (ug *UGate) OnStreamDone(str *ugate.Stream) {
 
 }
 
-// RemoteID returns the node ID based on authentication.
-func RemoteID(s *ugate.Stream) string {
+// RemoteID returns the node WorkloadID based on authentication.
+func RemoteID(s *nio.Stream) string {
 	if s.TLS == nil {
 		return ""
 	}
 	if len(s.TLS.PeerCertificates) == 0 {
 		return ""
 	}
-	pk, err := auth.PubKeyFromCertChain(s.TLS.PeerCertificates)
+	pk, err := meshauth.PubKeyFromCertChain(s.TLS.PeerCertificates)
 	if err != nil {
 		return ""
 	}
 
-	return auth.IDFromPublicKey(pk)
+	return meshauth.IDFromPublicKey(pk)
 }
 
 func (ug *UGate) Close() error {
@@ -391,8 +391,8 @@ func (ug *UGate) DefaultPorts(base int) error {
 		haddr = fmt.Sprintf("0.0.0.0:%d", base)
 	}
 	// ProtoHTTP detects H1/H2 and sends to ug.H2Handler
-	// That deals with auth and dispatches to ugate.Mux
-	ug.StartListener(&ugate.Listener{
+	// That deals with auth and dispatches to ugate.Transport
+	ug.StartListener(&hbone.Listener{
 		Address:  haddr,
 		Protocol: ugate.ProtoHTTP,
 	})
@@ -404,22 +404,22 @@ func (ug *UGate) DefaultPorts(base int) error {
 	// Main BTS port, with TLS certificates
 	// Normally should be 443 for SNI gateways, when running as root
 	// Use iptables to redirect, or an explicit config for port 443 if running as root.
-	ug.StartListener(&ugate.Listener{
+	ug.StartListener(&hbone.Listener{
 		Address:  btsAddr,
 		Protocol: ugate.ProtoBTS,
 		ALPN:     []string{"h2", "h2r"},
 	})
-	ug.StartListener(&ugate.Listener{
+	ug.StartListener(&hbone.Listener{
 		Address:  btscAddr,
 		Protocol: ugate.ProtoBTSC,
 	})
 	if os.Getuid() == 0 {
-		ug.StartListener(&ugate.Listener{
+		ug.StartListener(&hbone.Listener{
 			Address:  "0.0.0.0:443",
 			Protocol: ugate.ProtoTLS,
 			ALPN:     []string{"h2", "h2r"},
 		})
-		ug.StartListener(&ugate.Listener{
+		ug.StartListener(&hbone.Listener{
 			Address:  "0.0.0.0:80",
 			Protocol: ugate.ProtoHTTP,
 		})
@@ -430,7 +430,7 @@ func (ug *UGate) DefaultPorts(base int) error {
 
 // Based on the port in the Dest, find the Listener config.
 // Used when the dest IP:port is extracted from the metadata
-func (ug *UGate) FindRouteIn(m *ugate.Stream) *ugate.Route {
+func (ug *UGate) FindRouteIn(m *nio.Stream) *nio.Route {
 	//_, p, _ := net.SplitHostPort(m.Dest)
 	//l := ug.Config.Listeners[":"+p]
 	//if l != nil {
@@ -446,7 +446,7 @@ func (ug *UGate) FindRouteIn(m *ugate.Stream) *ugate.Route {
 
 // FindRouteOut will use the IP in Dest, and find the cluster
 // and endpoints.
-func (ug *UGate) FindRouteOut(m *ugate.Stream) *ugate.Route {
+func (ug *UGate) FindRouteOut(m *nio.Stream) *nio.Route {
 	l := ug.Config.Routes[m.Dest]
 	if l != nil {
 		return l
@@ -464,7 +464,7 @@ func (ug *UGate) FindRouteOut(m *ugate.Stream) *ugate.Route {
 	return ug.DefaultRoute
 }
 
-func (ug *UGate) FindRoutePrefix(dstaddr net.IP, p uint16, prefix string) *ugate.Route {
+func (ug *UGate) FindRoutePrefix(dstaddr net.IP, p uint16, prefix string) *nio.Route {
 	port := ":" + strconv.Itoa(int(p))
 	l := ug.Config.Routes[prefix+dstaddr.String()+port]
 	if l != nil {
@@ -498,7 +498,7 @@ func (ug *UGate) FindRoutePrefix(dstaddr net.IP, p uint16, prefix string) *ugate
 //
 // In addition TrackStreamIn has been called.
 // This is a blocking method.
-func (ug *UGate) HandleStream(str *ugate.Stream) error {
+func (ug *UGate) HandleStream(str *nio.Stream) error {
 	if str.Route == nil {
 		str.Route = ug.FindRouteOut(str)
 	}
@@ -538,7 +538,7 @@ func (ug *UGate) HandleStream(str *ugate.Stream) error {
 	return ug.DialAndProxy(str)
 }
 
-func (gw *UGate) OnMuxClose(dm *ugate.DMNode) {
+func (gw *UGate) OnMuxClose(dm *ugate.Cluster) {
 	if _, f := gw.Config.H2R[dm.ID]; !f {
 		return
 	}
@@ -555,7 +555,7 @@ func (gw *UGate) OnHClose(s string, id string, san string, r *http.Request, sinc
 	}
 }
 
-func (gw *UGate) OnSClose(str *ugate.Stream, addr net.Addr) {
+func (gw *UGate) OnSClose(str *nio.Stream, addr net.Addr) {
 	if !gw.Config.NoAccessLog {
 		if str.ReadErr != nil || str.WriteErr != nil {
 			log.Printf("%d AC: src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v %v %v",

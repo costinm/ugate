@@ -10,8 +10,8 @@ import (
 	"net/http/httputil"
 	"os"
 
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	msgs "github.com/costinm/ugate/webpush"
 )
@@ -31,19 +31,20 @@ func main() {
 	flag.Parse()
 
 	config := ugatesvc.NewConf("./", "./var/lib/dmesh/")
-	authz := auth.NewAuth(config, "", "")
+	authz, _ := meshauth.FromEnv("", false)
 
+	// Use ug as transport - will route to the mesh nodes.
 	ug := ugatesvc.New(config, authz, nil)
 
 	hc = &http.Client{
 		Transport: ug,
 	}
 
-	sendMessage(*to, authz, *verbose, *data)
+	sendMessage(config, *to, authz, *verbose, *data)
 }
 
 // Send an encrypted message to a node.
-func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
+func sendMessage(config ugate.ConfStore, toS string, vapid *meshauth.MeshAuth, show bool, msg string) {
 	var err error
 	if msg == "" {
 		msgB, err := ioutil.ReadAll(os.Stdin)
@@ -59,7 +60,7 @@ func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
 	var authk []byte
 
 	// Format expected to be same as the browser sub in webpush
-	subs := ugate.ConfStr(vapid.Config, "sub_"+toS, "")
+	subs := ugate.ConfStr(config, "sub_"+toS, "")
 	if subs != "" {
 		to, err := msgs.SubscriptionFromJSON([]byte(subs))
 		if err != nil {
@@ -74,7 +75,7 @@ func sendMessage(toS string, vapid *auth.Auth, show bool, msg string) {
 		}
 	}
 
-	ec := auth.NewContextSend(destPubK, authk)
+	ec := meshauth.NewContextSend(destPubK, authk)
 	c, _ := ec.Encrypt([]byte(msg))
 
 	ah := vapid.VAPIDToken(destURL)

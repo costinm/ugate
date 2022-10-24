@@ -1050,7 +1050,7 @@ type CertificateRevocationList struct {
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	// Output only. The time at which this [CertificateRevocationList][google.cloud.security.privateca.v1.CertificateRevocationList] was updated.
 	UpdateTime *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
-	// Output only. The revision ID of this [CertificateRevocationList][google.cloud.security.privateca.v1.CertificateRevocationList]. A new revision is
+	// Output only. The revision WorkloadID of this [CertificateRevocationList][google.cloud.security.privateca.v1.CertificateRevocationList]. A new revision is
 	// committed whenever a new CRL is published. The format is an 8-character
 	// hexadecimal string.
 	RevisionId string `protobuf:"bytes,9,opt,name=revision_id,json=revisionId,proto3" json:"revision_id,omitempty"`

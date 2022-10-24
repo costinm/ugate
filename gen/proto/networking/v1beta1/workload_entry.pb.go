@@ -321,7 +321,7 @@ type WorkloadEntry struct {
 	// us/us-east-1/az-1/r11. Istio will configure the sidecar to route to
 	// endpoints within the same locality as the sidecar. If none of the
 	// endpoints in the locality are available, endpoints parent locality
-	// (but within the same network ID) will be chosen. For example, if
+	// (but within the same network WorkloadID) will be chosen. For example, if
 	// there are two endpoints in same network (networkID "n1"), say e1
 	// with locality us/us-east-1/az-1/r11 and e2 with locality
 	// us/us-east-1/az-2/r12, a sidecar from us/us-east-1/az-1/r11 locality

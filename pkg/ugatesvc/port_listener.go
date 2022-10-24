@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/costinm/hbone"
+	"github.com/costinm/hbone/nio"
 	"github.com/costinm/ugate"
 )
-
-// Similar with go-ipfs/p2p
 
 // K8S:
 // API_SERVER/api/v1/namespaces/%s/pods/%s/portforward
@@ -59,7 +59,7 @@ import (
 
 // StartListener and Start a real port listener on a port.
 // Virtual listeners can be added to ug.Conf or the mux.
-func (ug *UGate) StartListener(ll *ugate.Listener) error {
+func (ug *UGate) StartListener(ll *hbone.Listener) error {
 
 	err := ug.startPortListener(ll)
 	if err != nil {
@@ -71,7 +71,7 @@ func (ug *UGate) StartListener(ll *ugate.Listener) error {
 
 // Creates a raw (port) TCP listener. Accepts connections
 // on a local port, forwards to a remote destination.
-func (gate *UGate) startPortListener(pl *ugate.Listener) error {
+func (gate *UGate) startPortListener(pl *hbone.Listener) error {
 	ll := pl
 
 	if pl.Address == "" {
@@ -111,54 +111,38 @@ func (gate *UGate) startPortListener(pl *ugate.Listener) error {
 	}
 	switch pl.Protocol {
 	case ugate.ProtoTLS:
-		pl.PortHandler = ugate.HandlerFunc(gate.handleTLSorSNI)
+		pl.PortHandler = nio.HandlerFunc(gate.handleSNI)
 	case ugate.ProtoSNI:
-		pl.PortHandler = ugate.HandlerFunc(gate.handleSNI)
+		pl.PortHandler = nio.HandlerFunc(gate.handleSNI)
 	case ugate.ProtoBTS:
-		pl.PortHandler = ugate.HandlerFunc(gate.acceptedHbone)
+		pl.PortHandler = nio.HandlerFunc(gate.acceptedHbone)
 	case ugate.ProtoBTSC:
-		pl.PortHandler = ugate.HandlerFunc(gate.acceptedHboneC)
+		pl.PortHandler = nio.HandlerFunc(gate.acceptedHboneC)
 	case ugate.ProtoHTTP:
-		pl.PortHandler = ugate.HandlerFunc(gate.H2Handler.handleHTTPListener)
+		pl.PortHandler = nio.HandlerFunc(gate.H2Handler.handleHTTPListener)
 	case ugate.ProtoTCPOut:
 		if pl.ForwardTo == "" {
 			return errors.New("invalid TCPOut, missing ForwardTo")
 		}
-		pl.PortHandler = ugate.HandlerFunc(gate.handleTCPEgress)
+		pl.PortHandler = nio.HandlerFunc(gate.handleTCPEgress)
 	case ugate.ProtoTCPIn:
 		if pl.ForwardTo == "" {
 			return errors.New("invalid TCPIn, missing ForwardTo")
 		}
-		pl.PortHandler = ugate.HandlerFunc(gate.handleTCPForward)
+		pl.PortHandler = nio.HandlerFunc(gate.handleTCPForward)
 	default:
 		log.Println("Unspecified port, default to forward (in)")
-		pl.PortHandler = ugate.HandlerFunc(gate.handleTCPForward)
+		pl.PortHandler = nio.HandlerFunc(gate.handleTCPForward)
 	}
 
 	go serve(ll, gate)
 	return nil
 }
 
-//func (pl *PortListener) Close() error {
-//	pl.NetListener.Close()
-//	return nil
-//}
-
-//func (pl PortListener) Accept() (net.Stream, error) {
-//	return pl.NetListener.Accept()
-//}
-//
-//func (pl PortListener) Addr() net.Addr {
-//	if pl.NetListener == nil {
-//		return nil
-//	}
-//	return pl.NetListener.Addr()
-//}
-
 // For -R, runs on the remote ssh server to accept connections and forward back to client, which in turn
 // will forward to a Port/app.
 // Blocking.
-func serve(pl *ugate.Listener, gate *UGate) {
+func serve(pl *hbone.Listener, gate *UGate) {
 	log.Println("uGate: listen ", pl.Address, pl.NetListener.Addr(), pl.ForwardTo, pl.Protocol, pl.Handler, pl.PortHandler)
 	for {
 		remoteConn, err := pl.NetListener.Accept()
@@ -176,7 +160,7 @@ func serve(pl *ugate.Listener, gate *UGate) {
 		}
 		if pl.PortHandler != nil {
 			go func() {
-				bconn := ugate.GetStream(remoteConn, remoteConn)
+				bconn := nio.GetStream(remoteConn, remoteConn)
 				bconn.Listener = pl
 				bconn.Type = pl.Protocol
 				gate.OnStream(bconn)
@@ -188,14 +172,3 @@ func serve(pl *ugate.Listener, gate *UGate) {
 		}
 	}
 }
-
-// port capture is the plain reverse proxy mode: it listens to a port and forwards.
-//
-// Clients will use "localhost:port" for TCP or UDP proxy, and http will use some DNS
-// resolver override to map hostname to localhost.
-// The config is static (mesh config) or it can be dynamic (http admin interface or mesh control)
-
-// Start a port capture or forwarding.
-// listenPort: port on local host, or :0. May include 127.0.0.1 or 0.0.0.0 or specific interface.
-// host: destination. Any connection on listenPort will result on a TCP stream to the destination.
-//       May be a chain of DMesh nodes, with an IP:port at the end.

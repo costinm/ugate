@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/costinm/ugate"
+	"github.com/costinm/hbone/nio"
 )
 
 func (ht *H2Transport) ForwardHTTP(w http.ResponseWriter, r *http.Request, pathH string) {
@@ -49,7 +49,7 @@ func SendBackResponse(w http.ResponseWriter, r *http.Request,
 	CopyResponseHeaders(w.Header(), res.Header)
 	w.WriteHeader(res.StatusCode)
 
-	stats := &ugate.Stream{}
+	stats := &nio.Stream{}
 	n, err := stats.CopyBuffered(w, res.Body, true)
 
 	log.Println("Done: ", r.URL, res.StatusCode, n, err)

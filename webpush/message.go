@@ -34,7 +34,7 @@ import (
 // ce-id: "1234-1234-1234"
 // ce-source: "/mycontext/subcontext"
 //
-// Producer==actual instance ( ID/labels/etc)
+// Producer==actual instance ( WorkloadID/labels/etc)
 // Source==URI, 'context' - group of producers originating, direclty or via proxy
 // Consumer== receives the event
 // Context==metadata
@@ -43,10 +43,10 @@ import (
 // Subject can be encoded in from/to URLs
 
 type MessageData struct {
-	Id string
-	To string
-	Meta map[string]string
-	From string
+	Id    string
+	To    string
+	Meta  map[string]string
+	From  string
 	Topic string
 
 	Time int64
@@ -59,7 +59,7 @@ type Message struct {
 	//// ev.Time = time.Now().Format("01-02T15:04:05")
 	//Time int64 `json:"time,omitempty"`
 	//
-	//// ID of event, to dedup. Included as meta 'id'
+	//// WorkloadID of event, to dedup. Included as meta 'id'
 	//Id string `json:"id,omitempty"`
 	//
 	//// Original destination - can be a group/topic or individual URL
@@ -144,7 +144,7 @@ func (ev *Message) SetDataJSON(data interface{}) *Message {
 }
 
 // Propagate the event to all handlers (internal and external) that are subscribed
-//func (em *Mux) SendMessageType(cmd string, meta map[string]string, data []byte) error {
+//func (em *Transport) SendMessageType(cmd string, meta map[string]string, data []byte) error {
 //	em.SendMessageDirect(&Message{Type: cmd, Meta: meta, Data: data})
 //	return nil
 //}

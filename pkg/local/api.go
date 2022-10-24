@@ -4,7 +4,7 @@ import (
 	"net"
 	"sync"
 
-	auth2 "github.com/costinm/ugate/auth"
+	"github.com/costinm/meshauth"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
@@ -52,7 +52,7 @@ type LLDiscovery struct {
 	UDPMsgConn *net.UDPConn
 
 	// My credentials
-	auth *auth2.Auth
+	auth *meshauth.MeshAuth
 }
 
 // ActiveInterface tracks one 'up' interface. Used for IPv6 multicast,

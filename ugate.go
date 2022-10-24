@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/costinm/hbone"
+	"github.com/costinm/hbone/nio"
 )
 
 var (
@@ -38,7 +41,9 @@ var (
 )
 
 // Configuration for the micro Gateway.
-type GateCfg struct {
+type MeshSettings struct {
+	hbone.MeshSettings
+
 	// BasePort is the first port used for the virtual/control ports.
 	// For Istio interop, it defaults to 15000 and uses same offsets.
 	// Primarily used for testing, or if Istio is also used.
@@ -62,32 +67,26 @@ type GateCfg struct {
 	//
 	// Port proxies: will register a listener for each port, forwarding to the
 	// given address.
-	Listeners map[string]*Listener `json:"listeners,omitempty"`
+	Listeners map[string]*hbone.Listener `json:"listeners,omitempty"`
 
 	//Local map[string]*Route `json:"local,omitempty"`
 
-	Routes map[string]*Route `json:"routes,omitempty"`
+	Routes map[string]*nio.Route `json:"routes,omitempty"`
 
 	// Configured hosts, key is a domain name without port.
 	// This includes public keys, active addresses. Discovery and on-demand
 	// are also used to load this info.
-	// TODO: move to separate files:
-	// [namespace]/Node/[ID]
-	// ID can be 32B SHA256(cert), 16 or 8B (VIP6) or 'trusted' IP (if infra is
+	// [namespace]/Node/[WorkloadID]
+	// WorkloadID can be 32B SHA256(cert), 16 or 8B (VIP6) or 'trusted' IP (if infra is
 	// secure - Wireguard or IPsec equivalent).
-	Hosts map[string]*DMNode `json:"hosts,omitempty"`
+	Clusters map[string]*Cluster `json:"hosts,omitempty"`
 
 	// Routes gateways for reverse H2 - key is the domain name, value is the
 	// pubkey or root CA. If IsEmpty, public certificates are required.
 	H2R map[string]string `json:"remoteAccept,omitempty"`
 
-	// ALPN to announce on the main BTS port
-	ALPN []string
-
 	// NoAccessLog enables logging HTTP and stream close stats (sort of access log)
 	NoAccessLog bool `json:"noAccessLog,omitempty"`
-
-	TunProto []string `json:"tunProto,omitempty"`
 }
 
 const (
@@ -152,7 +151,7 @@ type HostStats struct {
 //
 // This struct includes statistics about the node and current active association/mux
 // connections.
-type DMNode struct {
+type Cluster struct {
 	// ID is the (best) primary id known for the node. Format is:
 	//    base32(SHA256(EC_256_pub)) - 32 bytes binary, 52 bytes encoded
 	//    base32(ED_pub) - same size, for nodes with ED keys.
@@ -175,7 +174,6 @@ type DMNode struct {
 	//  -  [B32_SHA].reviews.bookinfo.svc.example.com
 	//  -  IP6 (based on SHA or 'trusted' IP)
 	//  -  IP4 ('trusted' IP)
-	// TODO: To support captured traffic, the IP6 format is also supported.
 	//
 	ID string `json:"id,omitempty"`
 
@@ -183,24 +181,21 @@ type DMNode struct {
 	// node.
 	//
 	// TODO: implement
-	IDAlias []string `json:"alias,omitempty"`
+	//IDAlias []string `json:"alias,omitempty"`
 
 	// Groups is a list of groups and roles the node is associated with.
 	//
-	Groups []string `json:"groups,omitempty"`
+	//Groups []string `json:"groups,omitempty"`
 
-	// TODO: rename to node ID - use truncated or full form.
+	// TODO: rename to node WorkloadID - use truncated or full form.
 
 	// TODO: print Hex form as well, make sure the 8 bytes of the VIP are visible
 
 	// Primary/main address and port of the BTS endpoint.
-	// Can be a DNS name that resolves, or some other node.
-	// Individual IPs (relay, etc) will be in the info.addrs field
-	// May also be a URL (webpush endpoint).
 	Addr string `json:"addr,omitempty"`
 
 	// Alternate addresses, list of URLs
-	URLs []string `json:"urls,omitempty"`
+	//URLs []string `json:"urls,omitempty"`
 
 	// Primary public key of the node.
 	// EC256: 65 bytes, uncompressed format
@@ -212,7 +207,7 @@ type DMNode struct {
 
 	// Auth for webpush. A shared secret known by uGate and remote
 	// node.
-	Auth []byte `json:"auth,omitempty"`
+	//Auth []byte `json:"auth,omitempty"`
 
 	// Information from the node - from an announce or message.
 	// Not trusted, self-signed.
@@ -270,82 +265,6 @@ const ProtoSocks = "socks5"
 const ProtoIPTables = "iptables"
 const ProtoIPTablesIn = "iptables-in"
 
-// Listener represents the configuration for a real port listener.
-// uGate has a set of special listeners that multiplex requests:
-// - socks5 dest
-// - iptables original dst ( may be combined with DNS interception )
-// - NAT dst address
-// - SNI for TLS
-// - :host header for HTTP
-// - ALPN - after TLS handshake
-//
-// Multiplexed channels do an additional lookup to find the listener
-// based on the channel address.
-type Listener struct {
-
-	// Address address (ex :8080). This is the requested address.
-	//
-	// BTS, SOCKS, HTTP_PROXY and IPTABLES have default ports and bindings, don't
-	// need to be configured here.
-	Address string `json:"address,omitempty"`
-
-	// Port can have multiple protocols:
-	// If missing or other value, this is a dedicated port, specific to a single
-	// destination.
-	// Deprecated - use CERTS to indicate TLS.
-	Protocol string `json:"proto,omitempty"`
-
-	// ForwardTo where to forward the proxied connections.
-	// Used for accepting on a dedicated port. Will be set as Dest in
-	// the stream, can be mesh node.
-	// host:port format.
-	ForwardTo string `json:"forwardTo,omitempty"`
-
-	// Must block until the connection is fully handled !
-	Handler Handler `json:-`
-
-	// ALPN to announce, for TLS listeners
-	ALPN []string
-
-	//	gate *UGate `json:-`
-
-	// Certificates to use.
-	// Key is a domain, *.domain or *.
-	Certs map[string]string
-
-	NetListener net.Listener `json:-`
-	PortHandler Handler      `json:-`
-}
-
-// Route controls the routing in the gate.
-// Address is used to match the destination of a stream:
-// - VIP or IP from iptables capture
-// -
-type Route struct {
-	// Address address (ex :8080). This is the requested address.
-	//
-	// BTS, SOCKS, HTTP_PROXY and IPTABLES have default ports and bindings, don't
-	// need to be configured here.
-	Address string `json:"address,omitempty"`
-
-	// How to connect. Default: original dst
-	Protocol string `json:"proto,omitempty"`
-
-	// ForwardTo where to forward the proxied connections.
-	// Used for accepting on a dedicated port. Will be set as Dest in
-	// the stream, can be mesh node.
-	// host:port format.
-	ForwardTo string `json:"forwardTo,omitempty"`
-
-	// Must block until the connection is fully handled !
-	// @Deprecated - use ForwardTo -:NAME and register handlers
-	Handler Handler `json:-`
-
-	//SAN []string
-
-	//Endpoints []string
-}
-
 // Mapping to Istio:
 // - gateway port -> listener conf
 // - Remote -> shortcut for a TCP listener with  single deset.
@@ -363,7 +282,7 @@ type Route struct {
 
 // nettrace: internal, uses TraceKey in context used for httptrace,
 // but not exposed. Net has hooks into it.
-// Dial, lookup keep track of DNSStart, DNSDone, ConnectStart, ConnectDone
+// RoundTripStart, lookup keep track of DNSStart, DNSDone, ConnectStart, ConnectDone
 
 // httptrace:
 // WithClientTrace(ctx, trace) Context
@@ -371,7 +290,7 @@ type Route struct {
 
 // ContextDialer is same with x.net.proxy.ContextDialer
 // Used to create the actual connection to an address using the mesh.
-// The result may have metadata, and be an instance of ugate.Stream.
+// The result may have metadata, and be an instance of nio.Stream.
 //
 // A uGate implements this interface, it is the primary interface
 // for creating streams where the caller does not want to pass custom
@@ -402,11 +321,10 @@ type StreamDialer interface {
 	// inStream.In, if not nil, will be automatically forwarded to new dialed stream.
 	// inStream in headers, if set, will be forwarded to the remote host.
 	//
-	DialStream(ctx context.Context, addr string, inStream *Stream) (*Stream, error)
+	DialStream(ctx context.Context, addr string, inStream *nio.Stream) (*nio.Stream, error)
 }
 
 // Muxer is the interface implemented by a multiplexed connection with metadata
-// http2.ClientConn is the default implementation used.
 type Muxer interface {
 	http.RoundTripper
 
@@ -423,20 +341,7 @@ type MuxDialer interface {
 	// For non-mesh nodes the H2 connection may not allow incoming streams or
 	// messages. Mesh nodes emulate incoming streams using /h2r/ and send/receive
 	// messages using /.dm/msg/
-	DialMux(ctx context.Context, node *DMNode, meta http.Header, ev func(t string, stream *Stream)) (Muxer, error)
-}
-
-// Handler is a handler for net.Conn with metadata.
-// Lighter alternative to http.Handler
-type Handler interface {
-	Handle(conn *Stream) error
-}
-
-// Wrap a function as a stream handler.
-type HandlerFunc func(conn *Stream) error
-
-func (c HandlerFunc) Handle(conn *Stream) error {
-	return c(conn)
+	DialMux(ctx context.Context, node *Cluster, meta http.Header, ev func(t string, stream *nio.Stream)) (Muxer, error)
 }
 
 // HeaderEncoder abstracts the encoding of metadata.
@@ -447,14 +352,14 @@ func (c HandlerFunc) Handle(conn *Stream) error {
 type HeaderEncoder interface {
 	// Marshall will encode the headers into the wBuffer.
 	// Flush will need to be called to send to s.Out
-	Marshal(s *Stream) error
+	Marshal(s *nio.Stream) error
 
 	// AddHeader directly to the stream buffer - without adding it to the meta.
-	AddHeader(s *Stream, k, v []byte)
+	AddHeader(s *nio.Stream, k, v []byte)
 
 	// Unmarshall will decode from s.rBuffer. s.Fill() may be called to get
 	// additional data. The decoded headers will be set on the stream.
-	Unmarshal(s *Stream) (done bool, err error)
+	Unmarshal(s *nio.Stream) (done bool, err error)
 }
 
 // IPResolver uses DNS cache or lookups to return the name
@@ -483,7 +388,7 @@ type UdpWriter interface {
 // http://<gateway host>/ipfs/CID/path
 // http://<cid>.ipfs.<gateway host>/<path>
 // http://gateway/ipns/IPNDS_ID/path
-// ipfs://<CID>/<path>, ipns://<peer ID>/<path>, and dweb://<IPFS address>
+// ipfs://<CID>/<path>, ipns://<peer WorkloadID>/<path>, and dweb://<IPFS address>
 //
 // Multiaddr: TLV
 
@@ -565,50 +470,14 @@ type NodeAnnounce struct {
 	Vpn string `json:"Vpn,omitempty"`
 }
 
-//// Transport is creates multiplexed connections.
-////
-//// On the server side, MuxedConn are created when a client connects.
-//type Transport interface {
-//	// Dial one TCP/mux connection to the IP:port.
-//	// The destination is a mesh node - port typically 5222, or 22 for 'regular' SSH serves.
-//	//
-//	// After handshake, an initial message is sent, including informations about the current node.
-//	//
-//	// The remote can be a trusted VPN, an untrusted AP/Gateway, a peer (link local or with public IP),
-//	// or a child. The subsriptions are used to indicate what messages will be forwarded to the server.
-//	// Typically VPN will receive all events, AP will receive subset of events related to topology while
-//	// child/peer only receive directed messages.
-//	dialH2ClientConn(addr string, pub []byte, subs []string) (MuxedConn, error)
-//}
-
-//// A Connection that can multiplex.
-//// Will dial a stream, may also accept streams and dispatch them.
-////
-//// For example SSHClient, SSHServer, Quic can support this.
-//type MuxedConn interface {
-//	// DialProxy will use the remote gateway to jump to
-//	// a different destination, indicated by stream.
-//	// On return, the stream ServerOut and ServerIn will be
-//	// populated, and connected to stream Dest.
-//	// deprecated:  use CreateStream
-//	DialProxy(tp *Stream) error
-//
-//	// The VIP of the remote host, after authentication.
-//	RemoteVIP() net.IP
-//
-//	// Wait for the conn to finish.
-//	Wait() error
-//}
-//
-
 // Textual representation of the node registration data.
-func (n *DMNode) String() string {
+func (n *Cluster) String() string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
 
 // Return the list of gateways for the node, starting with the link local if any.
-func (n *DMNode) GWs() []*net.UDPAddr {
+func (n *Cluster) GWs() []*net.UDPAddr {
 	res := []*net.UDPAddr{}
 
 	if n.Last4 != nil {
@@ -620,10 +489,11 @@ func (n *DMNode) GWs() []*net.UDPAddr {
 	return res
 }
 
-func (n *DMNode) BackoffReset() {
+func (n *Cluster) BackoffReset() {
 	n.Backoff = 0
 }
-func (n *DMNode) BackoffSleep() {
+
+func (n *Cluster) BackoffSleep() {
 	if n.Backoff == 0 {
 		n.Backoff = 5 * time.Second
 	}

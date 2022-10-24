@@ -1,3 +1,4 @@
+//go:build darwin || linux || freebsd
 // +build darwin linux freebsd
 
 package udp
@@ -16,10 +17,9 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
-
 )
 
-// If the PacketConn passed to Dial or Listen satisfies this interface, quic-go will read the ECN bits from the IP header.
+// If the PacketConn passed to RoundTripStart or Listen satisfies this interface, quic-go will read the ECN bits from the IP header.
 // In this case, ReadMsgUDP() will be used instead of ReadFrom() to read packets.
 type OOBCapablePacketConn interface {
 	net.PacketConn
@@ -31,7 +31,6 @@ type packetInfo struct {
 	addr    net.IP
 	ifIndex uint32
 }
-
 
 type receivedPacket struct {
 	buffer *packetBuffer

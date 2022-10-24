@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/costinm/hbone/nio"
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/auth"
-	"github.com/costinm/ugate/pkg/cfgfs"
 	"github.com/costinm/ugate/test"
 )
 
@@ -23,26 +23,26 @@ func TestSrv(t *testing.T) {
 	// "/dm/" -> POST-based tunnel ( more portable than CONNECT )
 
 	// Bob connected to Carol
-	bob := test.InitTestServer(test.BOB_KEYS, &ugate.GateCfg{
+	bob := test.InitTestServer(test.BOB_KEYS, &ugate.MeshSettings{
 		BasePort: 6100,
 		Name:     "bob",
 	}, nil)
 
 	// Alice connected to Bob
-	alice := test.InitTestServer(test.ALICE_KEYS, &ugate.GateCfg{
+	alice := test.InitTestServer(test.ALICE_KEYS, &ugate.MeshSettings{
 		BasePort: 6000,
 		Name:     "alice",
 		H2R: map[string]string{
 			"bob": "-",
 		},
-		Hosts: map[string]*ugate.DMNode{
-			"bob": &ugate.DMNode{
+		Clusters: map[string]*ugate.Cluster{
+			"bob": &ugate.Cluster{
 				Addr: "127.0.0.1:6107",
 			},
 		},
 	}, nil)
 
-	//carol := test.InitTestServer(test.CAROL_KEYS, &ugate.GateCfg{
+	//carol := test.InitTestServer(test.CAROL_KEYS, &ugate.MeshSettings{
 	//	BasePort: 6200,
 	//	Name:     "carol",
 	//}, nil)
@@ -75,7 +75,7 @@ func TestSrv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mc := ab.(*ugate.Stream)
+		mc := ab.(*nio.Stream)
 		log.Println("Result ", res, mc)
 	})
 
@@ -103,12 +103,12 @@ func TestSrv(t *testing.T) {
 	//// Bob -> H2R -> Alice
 	//t.Run("H2R1", func(t *testing.T) {
 	//	p := pipe.New()
-	//	r, _ := http.NewRequest("POST", "https://" + alice.Auth.ID + "/dm/127.0.0.1:6112", p)
+	//	r, _ := http.NewRequest("POST", "https://" + alice.Auth.WorkloadID + "/dm/127.0.0.1:6112", p)
 	//	res, err := bob.RoundTrip(r)
 	//	if err != nil {
 	//		t.Fatal(err)
 	//	}
-	//	nc := ugate.NewStreamRequestOut(r, p, res, nil)
+	//	nc := nio.NewStreamRequestOut(r, p, res, nil)
 	//
 	//	if err != nil {
 	//		t.Fatal(err)
@@ -128,12 +128,12 @@ func TestSrv(t *testing.T) {
 	//	// Connecting to Bob's gateway (from c). Request should go to Alice.
 	//	//
 	//	p := pipe.New()
-	//	r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+alice.Auth.ID + "/dm/127.0.0.1:6112", p)
+	//	r, _ := http.NewRequest("POST", "https://127.0.0.1:6107/dm/"+alice.Auth.WorkloadID + "/dm/127.0.0.1:6112", p)
 	//	res, err := carol.RoundTrip(r)
 	//	if err != nil {
 	//		t.Fatal(err)
 	//	}
-	//	nc := ugate.NewStreamRequestOut(r, p, res, nil)
+	//	nc := nio.NewStreamRequestOut(r, p, res, nil)
 	//
 	//	if err != nil {
 	//		t.Fatal(err)
@@ -149,11 +149,11 @@ func TestSrv(t *testing.T) {
 
 // Run a suite of tests with a specific key, to repeat the tests for all types of keys.
 func testKey(k crypto.PrivateKey, t *testing.T) {
-	pk := auth.PublicKey(k)
+	pk := meshauth.PublicKey(k)
 	if pk == nil {
 		t.Fatal("Invalid public")
 	}
-	id := auth.IDFromPublicKey(pk)
+	id := meshauth.IDFromPublicKey(pk)
 	//crt, err := KeyToCertificate(k)
 	//if err != nil {
 	//	t.Fatal(err)
@@ -167,13 +167,12 @@ func testKey(k crypto.PrivateKey, t *testing.T) {
 	//	t.Fatal("Cert chain public key not matching", id, IDFromPublicKey(certPub))
 	//}
 
-	t.Log("Key ID:", id)
+	t.Log("Key WorkloadID:", id)
 }
 
 func TestCrypto(t *testing.T) {
 	t.Run("AuthInit", func(t *testing.T) {
-		cfg := cfgfs.NewConf()
-		a := auth.NewAuth(cfg, "", "")
+		a := meshauth.NewAuth("", "")
 
 		//if a.RSACert == nil {
 		//	t.Error("Missing RSA")
@@ -185,7 +184,7 @@ func TestCrypto(t *testing.T) {
 		//	t.Error("Missing ED")
 		//}
 
-		b := auth.NewAuth(cfg, "", "")
+		b := meshauth.NewAuth("", "")
 		//if !bytes.Equal(a.ED25519Cert.PrivateKey.(ed25519.PrivateKey),
 		//	b.ED25519Cert.PrivateKey.(ed25519.PrivateKey)) {
 		//	t.Error("Error loading")

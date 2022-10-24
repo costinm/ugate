@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/costinm/ugate/auth"
+	"github.com/costinm/meshauth"
 )
 
 /*
@@ -93,7 +93,7 @@ func TestSendWebPush(t *testing.T) {
 			t.Errorf("Expected Encryption header to have a salt field, got %v", request.Header.Get("Encryption"))
 		}
 
-		dc := auth.NewContextUA(privkeySub, uaPublic, authSecret)
+		dc := meshauth.NewContextUA(privkeySub, uaPublic, authSecret)
 
 		plain, err := dc.Decrypt(body)
 		if err != nil {
@@ -114,7 +114,7 @@ func TestSendWebPush(t *testing.T) {
 
 	//sub := &Subscription{ts.URL, key, a, ""}
 	message := "I am the walrus"
-	vapid := auth.NewAuth(nil, "", "")
+	vapid := meshauth.NewAuth("", "")
 	pushReq, err := NewRequest(ts.URL+"/push/", uaPublic, authSecret, message, 0, vapid)
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestSendTickle(t *testing.T) {
 
 	//sub := &Subscription{Endpoint: ts.URL}
 
-	vapid := auth.NewAuth(nil, "", "")
+	vapid := meshauth.NewAuth("", "")
 	pushReq, err := NewRequest(ts.URL+"/push/", nil, nil, "", 0, vapid)
 	if err != nil {
 		t.Error(err)

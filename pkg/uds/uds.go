@@ -15,7 +15,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/costinm/ugate"
+	"github.com/costinm/hbone/nio"
 	msgs "github.com/costinm/ugate/webpush"
 )
 
@@ -86,7 +86,7 @@ var (
 )
 
 // Create a UDS server listening on 'name'.
-// go Start()  must be called to accept.
+// go Dial()  must be called to accept.
 //
 // Messages posted on the mux will be sent to all clients (that subscribe - TODO).
 // Messages received from clients will be passed to mux handlers.
@@ -104,8 +104,6 @@ func NewServer(name string, mux *msgs.Mux) (*UdsServer, error) {
 }
 
 // Dial a single client connection and handshake.
-//
-//
 func Dial(ifname string, mux *msgs.Mux, initial map[string]string) (*UdsConn, error) {
 	uds := &UdsConn{
 		oob:     make([]byte, syscall.CmsgSpace(256)),
@@ -160,7 +158,6 @@ func (uds *UdsServer) accept() (*UdsConn, error) {
 	return uc, nil
 }
 
-//
 func (uds *UdsServer) Start() error {
 	// TODO: stop and it's channel
 	for {
@@ -233,7 +230,7 @@ func (uds *UdsConn) Close() {
 
 func (uds *UdsServer) serverStream(conn *UdsConn) {
 
-	// TODO: add connection ID
+	// TODO: add connection WorkloadID
 	conn.serverHandshake(uds)
 
 	conn.streamCommon()
@@ -457,7 +454,7 @@ func (uds *UdsConn) nextMessage() (int, []byte, error) {
 }
 
 // Distribute the message to all UDS connections
-// Implements the Mux interface.
+// Implements the Transport interface.
 func (uds *UdsConn) SendMessage(m *msgs.Message) error {
 	// TODO: may need go routines to avoid blocking
 	_, err := SendFrameLenBinary(uds.con, []byte(m.To), []byte{'\n'}, packMeta(m.Meta), m.Binary())
@@ -485,7 +482,7 @@ func (uds *UdsConn) File() *os.File {
 	return fd
 }
 
-func processUnixConn(bc *ugate.Stream) error {
+func processUnixConn(bc *nio.Stream) error {
 	uc, ok := bc.Out.(*net.UnixConn)
 	if !ok {
 		return errors.New("Unexpected con")

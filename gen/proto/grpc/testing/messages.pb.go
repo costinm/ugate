@@ -499,7 +499,7 @@ type SimpleResponse struct {
 	Username string `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
 	// OAuth scope.
 	OauthScope string `protobuf:"bytes,3,opt,name=oauth_scope,json=oauthScope,proto3" json:"oauth_scope,omitempty"`
-	// Server ID. This must be unique among different server instances,
+	// Server WorkloadID. This must be unique among different server instances,
 	// but the same across all RPC's made to a particular server instance.
 	ServerId string `protobuf:"bytes,4,opt,name=server_id,json=serverId,proto3" json:"server_id,omitempty"`
 	// gRPCLB Path.

@@ -41,7 +41,6 @@ type MsgConnection struct {
 }
 
 // id - remote id. "uds" for the primary upstream uds connection to host (android app or wifi/root app)
-//
 func (mux *Mux) AddConnection(id string, cp *MsgConnection) {
 	cp.Name = id
 	cp.gate = mux
@@ -78,17 +77,16 @@ func (mc *MsgConnection) Close() {
 	mc.gate.RemoveConnection(mc.Name, mc)
 }
 
-
 //// ProcessMessage parses an incoming message, from a remote connection.
 //// Message is further processed using one of the methods.
-//func (mux *Mux) ProcessMessage(line []byte, ctx *auth.ReqContext) *Message {
+//func (mux *Transport) ProcessMessage(line []byte, ctx *auth.ReqContext) *Message {
 //	if len(line) == 0 {
 //		return nil
 //	}
 //	var ev *Message
 //	var from string
 //	if ctx != nil {
-//		from = ctx.ID()
+//		from = ctx.WorkloadID()
 //	}
 //
 //	if line[0] == '{' {
@@ -193,7 +191,7 @@ func (mc *MsgConnection) Close() {
 //}
 //
 //// Message from a remote, will be forwarded to subscribed connections.
-//func (mux *Mux) onRemoteMessage(ev *Message, connName string) error {
+//func (mux *Transport) onRemoteMessage(ev *Message, connName string) error {
 //	// Local handlers first
 //	if ev.Time == 0 {
 //		ev.Time = time.Now().Unix()

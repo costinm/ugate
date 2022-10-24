@@ -33,7 +33,7 @@ func (t *H2Transport) UpdateReverseAccept() {
 
 		go t.maintainPinnedConnection(dm, ev)
 	}
-	<- ev
+	<-ev
 	log.Println("maintainPinned connected for ", t.ug.Auth.VIP6)
 
 }
@@ -42,7 +42,7 @@ func (t *H2Transport) UpdateReverseAccept() {
 // conn on it. The other end will register a H2 client, and create streams.
 // The client cert will be used to associate incoming streams, based on config or direct mapping.
 // TODO: break it in 2 for tests to know when accept is in effect.
-func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string) {
+func (t *H2Transport) maintainPinnedConnection(dm *ugate.Cluster, ev chan string) {
 	// maintain while the host is in the 'pinned' list
 	if _, f := t.ug.Config.H2R[dm.ID]; !f {
 		return
@@ -57,16 +57,13 @@ func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string)
 	//ctx, ctxCancel := context.WithTimeout(ctx, 5*time.Second)
 	//defer ctxCancel()
 
-	protos := t.ug.Config.TunProto
-	if len(protos) == 0 {
-		protos = []string{"quic", "h2r"}
-	}
+	protos := []string{"quic", "h2r"}
 	var err error
 	var muxer ugate.Muxer
 	for _, k := range protos {
 		muxer, err = t.ug.DialMUX(ctx, k, dm, nil)
 		if err == nil {
-			break;
+			break
 		}
 	}
 	if err == nil {
@@ -100,4 +97,3 @@ func (t *H2Transport) maintainPinnedConnection(dm *ugate.DMNode, ev chan string)
 	//		})
 	//}
 }
-

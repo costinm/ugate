@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/costinm/hbone"
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
@@ -119,7 +120,7 @@ type UdpNat struct {
 	// External address
 	DestAddr *net.UDPAddr
 
-	//ugate.Stream
+	//nio.Stream
 	// bound to a local port (on the real network).
 	UDP *net.UDPConn
 
@@ -219,8 +220,10 @@ func (udpg *UDPGate) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
 //
 // localAddr is the accept remote address - received packets will be sent there.
 // upstreamConn is the 'accepting connection' (for forward), or fallback for capture if a src-preserving
-//   method doesn't exist. TUN can preserve src, so app can see the real remote add/port. Otherwise
-//   the client will see the local address of this node, and the same port that is used with the remote.
+//
+//	method doesn't exist. TUN can preserve src, so app can see the real remote add/port. Otherwise
+//	the client will see the local address of this node, and the same port that is used with the remote.
+//
 // udpN is the 'dialed connection' -
 func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *net.UDPConn, udpN *UdpNat, writer ugate.UdpWriter) {
 	if DumpUdp {
@@ -272,7 +275,7 @@ func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *n
 	}
 }
 
-func forwardReadLoop(gw *UDPGate, l *ugate.Listener, udpL *net.UDPConn) {
+func forwardReadLoop(gw *UDPGate, l *hbone.Listener, udpL *net.UDPConn) {
 	remoteA, err := net.ResolveUDPAddr("udp", l.ForwardTo)
 	if err != nil {
 		log.Println("Invalid forward address ", l.ForwardTo, err)
@@ -351,7 +354,7 @@ func forwardReadLoop(gw *UDPGate, l *ugate.Listener, udpL *net.UDPConn) {
 //	}
 //}
 
-func (udpg *UDPGate) Listener(lc *ugate.Listener) {
+func (udpg *UDPGate) Listener(lc *hbone.Listener) {
 	log.Println("Adding UDP ", lc)
 	// port 0
 	// TODO: attempt to use the localPort first

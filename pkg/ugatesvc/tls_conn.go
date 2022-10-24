@@ -10,8 +10,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/costinm/hbone/nio"
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/auth"
 )
 
 // TLSConn extends tls.Conn with extra metadata.
@@ -19,22 +20,22 @@ import (
 type TLSConn struct {
 	// Raw TCP connection, for remote address and stats
 	// TODO: for H2-over-TLS-over-WS, it will be a WS conn
-	*ugate.Stream
+	*nio.Stream
 
 	// wrapps the original conn for Local/RemoteAddress and deadlines
 	// Implements CloseWrite, ConnectionState,
 	tls *tls.Conn
 }
 
-func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*ugate.Stream, error) {
+func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config, peerID string, alpn []string) (*nio.Stream, error) {
 	lc := &TLSConn{}
-	if mc, ok := nc.(*ugate.Stream); ok {
+	if mc, ok := nc.(*nio.Stream); ok {
 		lc.Stream = mc
 		if rnc, ok := lc.Out.(net.Conn); ok {
 			nc = rnc
 		}
 	} else {
-		lc.Stream = ugate.NewStream()
+		lc.Stream = nio.NewStream()
 	}
 
 	config, keyCh := ConfigForPeer(ug.Auth, cfg, peerID)
@@ -60,18 +61,16 @@ func (ug *UGate) NewTLSConnOut(ctx context.Context, nc net.Conn, cfg *tls.Config
 // SecureInbound runs the TLS handshake as a server.
 // Accepts connections without client certificate - alternate form of auth will be used, either
 // an inner TLS connection or JWT in metadata.
-func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Conn, cfg *tls.Config) (*ugate.Stream, error) {
+func (ug *UGate) NewTLSConnIn(ctx context.Context, l net.Listener, alpn []string, nc net.Conn, cfg *tls.Config) (*nio.Stream, error) {
 	config, keyCh := ConfigForPeer(ug.Auth, cfg, "")
-	if l != nil {
-		if l.ALPN == nil {
-			config.NextProtos = []string{"h2r", "h2"}
-		} else {
-			config.NextProtos = l.ALPN
-		}
+	if alpn == nil {
+		config.NextProtos = []string{"h2r", "h2"}
+	} else {
+		config.NextProtos = alpn
 	}
 	tc := &TLSConn{}
-	tc.Stream = ugate.NewStream()
-	if mc, ok := nc.(*ugate.Stream); ok {
+	tc.Stream = nio.NewStream()
+	if mc, ok := nc.(*nio.Stream); ok {
 		m := mc
 		// Sniffed, etc
 		tc.Route = m.Route
@@ -92,11 +91,11 @@ func (ug *UGate) NewTLSConnIn(ctx context.Context, l *ugate.Listener, nc net.Con
 	return tc.Stream, err
 }
 
-func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
+func ConfigForPeer(a *meshauth.MeshAuth, cfg *tls.Config, remotePeerID string) (*tls.Config, <-chan []*x509.Certificate) {
 	keyCh := make(chan []*x509.Certificate, 1)
-	// We need to check the peer ID in the VerifyPeerCertificate callback.
+	// We need to check the peer WorkloadID in the VerifyPeerCertificate callback.
 	// The tls.Config it is also used for listening, and we might also have concurrent dials.
-	// Clone it so we can check for the specific peer ID we're dialing here.
+	// Clone it so we can check for the specific peer WorkloadID we're dialing here.
 	conf := cfg.Clone()
 	// We're using InsecureSkipVerify, so the verifiedChains parameter will always be empty.
 	// We need to parse the certificates ourselves from the raw certs.
@@ -109,14 +108,14 @@ func ConfigForPeer(a *auth.Auth, cfg *tls.Config, remotePeerID string) (*tls.Con
 			return nil
 		}
 
-		chain, err := auth.RawToCertChain(rawCerts)
+		chain, err := meshauth.RawToCertChain(rawCerts)
 		if err != nil {
 			return err
 		}
 
-		pubKey, err := auth.PubKeyFromCertChain(chain)
+		pubKey, err := meshauth.PubKeyFromCertChain(chain)
 		//pubKeyPeerID := auth.IDFromCert(chain)
-		pubKeyPeerID := auth.IDFromPublicKey(pubKey)
+		pubKeyPeerID := meshauth.IDFromPublicKey(pubKey)
 		if err != nil {
 			return err
 		}
@@ -211,13 +210,13 @@ const (
 	extensionServerName uint16 = 0
 )
 
-// TODO: if a session ID is provided, use it as a cookie and attempt
+// TODO: if a session WorkloadID is provided, use it as a cookie and attempt
 // to find the corresponding host.
 // On server side generate session IDs !
 //
 // TODO: in mesh, use one cypher suite (TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
 // maybe 2 ( since keys are ECDSA )
-func ParseTLS(acc *ugate.Stream) (*clientHelloMsg, error) {
+func ParseTLS(acc *nio.Stream) (*clientHelloMsg, error) {
 	buf, err := acc.Fill(5)
 	if err != nil {
 		return nil, err

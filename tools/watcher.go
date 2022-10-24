@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/auth"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 	msgs "github.com/costinm/ugate/webpush"
 )
@@ -40,15 +40,13 @@ var hc *http.Client
 // Current client is authenticated using local credentials, or a kube.json file. If no kube.json is found, one
 // will be generated.
 //
-//
-//
 // Example:
 // ssh -v -o ProxyCommand='wp -nc https://c1.webinf.info:443/dm/PZ5LWHIYFLSUZB7VHNAMGJICH7YVRU2CNFRT4TXFFQSXEITCJUCQ:22'  root@PZ5LWHIYFLSUZB7VHNAMGJICH7YVRU2CNFRT4TXFFQSXEITCJUCQ
 func main() {
 	flag.Parse()
 
 	config := ugatesvc.NewConf("./", "./var/lib/dmesh/")
-	authz := auth.NewAuth(config, "", "")
+	authz := meshauth.NewAuth("", "")
 
 	ug := ugatesvc.New(config, authz, nil)
 
@@ -64,7 +62,7 @@ var watchers = map[uint64]*watcher{}
 
 // Track a single node
 type watcher struct {
-	Node *ugate.DMNode
+	Node *ugate.Cluster
 
 	Path []string
 
@@ -117,7 +115,7 @@ func watchNodes(ug *ugatesvc.UGate) {
 		return
 	}
 
-	n0 := &ugate.DMNode{
+	n0 := &ugate.Cluster{
 		Addr: *addr,
 	}
 
@@ -125,7 +123,7 @@ func watchNodes(ug *ugatesvc.UGate) {
 }
 
 // Get neighbors from a node. Side effect: updates the watchers table.
-func neighbors(url string, path []string) map[uint64]*ugate.DMNode {
+func neighbors(url string, path []string) map[uint64]*ugate.Cluster {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.Print("HTTP_ERROR1", url, err)
@@ -145,7 +143,7 @@ func neighbors(url string, path []string) map[uint64]*ugate.DMNode {
 	}
 
 	cnodes, _ := ioutil.ReadAll(res.Body)
-	connectedNodes := map[uint64]*ugate.DMNode{}
+	connectedNodes := map[uint64]*ugate.Cluster{}
 	err = json.Unmarshal(cnodes, &connectedNodes)
 	if err != nil {
 		log.Println("HTTP_ERROR_RES", url, err, string(cnodes))
@@ -191,7 +189,6 @@ func neighbors(url string, path []string) map[uint64]*ugate.DMNode {
 // - repeat until all nodes are !dirty
 // - at the end, the set of nodes that are new will be marked as New.
 // -
-//
 func crawl() {
 	for _, v := range watchers {
 		v.dirty = true

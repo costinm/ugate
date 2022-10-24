@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/costinm/ugate/auth"
-	"github.com/costinm/ugate/pkg/ugatesvc"
+	"github.com/costinm/meshauth"
 )
 
 // Generate a self-signed VAPID token
@@ -16,7 +15,6 @@ func main() {
 		aud = os.Args[0]
 	}
 
-	config := ugatesvc.NewConf("./", "./var/lib/dmesh/")
-	authz := auth.NewAuth(config, "", "")
+	authz := meshauth.NewAuth("", "")
 	fmt.Println(authz.VAPIDToken(aud))
 }

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/costinm/ugate"
+	"github.com/costinm/hbone/nio"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
@@ -28,7 +28,7 @@ func NewHTTPProxy(gw *ugatesvc.UGate) *HTTPGate {
 	}
 }
 
-// Start listening on the addr, as a HTTP_PROXY
+// RoundTripStart listening on the addr, as a HTTP_PROXY
 // Handles CONNECT and PROXY requests using the gateway
 // for streams.
 func (gw *HTTPGate) HttpProxyCapture(addr string) error {
@@ -58,7 +58,7 @@ func (gw *HTTPGate) HttpProxyCapture(addr string) error {
 func (gw *HTTPGate) proxy(w http.ResponseWriter, r *http.Request) bool {
 	// TODO: if host is XXXX.m.SUFFIX -> forward to node.
 
-	host, found := gw.gw.Config.Hosts[r.Host]
+	host, found := gw.gw.Config.Clusters[r.Host]
 	if !found {
 		return false
 	}
@@ -89,7 +89,7 @@ func (gw *HTTPGate) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Reques
 	}
 	hc := &http.Client{Transport: ht}
 
-	// TODO: use VPN to Dial !!!
+	// TODO: use VPN to RoundTripStart !!!
 	//
 	resp, err := hc.Transport.RoundTrip(r)
 	if err != nil {
@@ -133,16 +133,16 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//ra := proxyClient.RemoteAddr().(*net.TCPAddr)
-	str := ugate.GetStream(proxyClient, proxyClient)
+	str := nio.GetStream(proxyClient, proxyClient)
 	defer gw.gw.OnStreamDone(str)
 	gw.gw.OnStream(str)
 
 	str.Dest = host
-	str.Direction = ugate.StreamTypeOut
+	str.Direction = nio.StreamTypeOut
 	str.PostDialHandler = func(conn net.Conn, err error) {
 		if err != nil {
 			w.WriteHeader(503)
-			w.Write([]byte("Dial error" + err.Error()))
+			w.Write([]byte("RoundTripStart error" + err.Error()))
 			return
 		}
 		proxyClient.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))

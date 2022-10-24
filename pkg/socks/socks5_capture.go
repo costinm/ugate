@@ -8,6 +8,8 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/costinm/hbone"
+	"github.com/costinm/hbone/nio"
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
@@ -56,34 +58,34 @@ const (
 )
 
 /*
-  RFC1928
+	  RFC1928
 
-  1. Req:
-  VER 0x05
-  NMETHODS 0x01
-  METHOD 0x00 [one byte for each method - NoAuth]
-  (other auth not supported - we bind on 127.0.0.1 or use mtls)
+	  1. Req:
+	  VER 0x05
+	  NMETHODS 0x01
+	  METHOD 0x00 [one byte for each method - NoAuth]
+	  (other auth not supported - we bind on 127.0.0.1 or use mtls)
 
-  Res:
-  VER 0x05
-	METHOD 0x00
+	  Res:
+	  VER 0x05
+		METHOD 0x00
 
-	2.  VER: X'05'
-      CMD
-             o  CONNECT X'01'
-             o  BIND X'02'
-             o  UDP ASSOCIATE X'03'
-      RSV    RESERVED 0x00
-      ATYP   address type of following address
-             o  IP V4 address: X'01'
-             o  DOMAINNAME: X'03'
-             o  IP V6 address: X'04'
-      DST.ADDR       desired destination address
-      DST.PORT desired destination port in network octet order
+		2.  VER: X'05'
+	      CMD
+	             o  CONNECT X'01'
+	             o  BIND X'02'
+	             o  UDP ASSOCIATE X'03'
+	      RSV    RESERVED 0x00
+	      ATYP   address type of following address
+	             o  IP V4 address: X'01'
+	             o  DOMAINNAME: X'03'
+	             o  IP V6 address: X'04'
+	      DST.ADDR       desired destination address
+	      DST.PORT desired destination port in network octet order
 */
 func New(ug *ugatesvc.UGate) {
 	p := ug.Config.BasePort + ugate.PORT_SOCKS
-	ll := &ugate.Listener{
+	ll := &hbone.Listener{
 		Address:     fmt.Sprintf("127.0.0.1:%d", p),
 		Protocol:    ugate.ProtoSocks,
 		PortHandler: &Socks{ug: ug},
@@ -103,8 +105,8 @@ func (s *Socks) String() string {
 	return "socks"
 }
 
-func (s *Socks) Handle(bconn *ugate.Stream) error {
-	bconn.Direction = ugate.StreamTypeOut
+func (s *Socks) Handle(bconn *nio.Stream) error {
+	bconn.Direction = nio.StreamTypeOut
 
 	_, bconn.ReadErr = Unmarshal(bconn)
 	if bconn.ReadErr != nil {
@@ -116,7 +118,7 @@ func (s *Socks) Handle(bconn *ugate.Stream) error {
 	return bconn.ReadErr
 }
 
-func Unmarshal(s *ugate.Stream) (done bool, err error) {
+func Unmarshal(s *nio.Stream) (done bool, err error) {
 	// Fill the read buffer with one Read.
 	// Typically 3-4 bytes unless client is eager.
 

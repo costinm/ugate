@@ -1963,7 +1963,7 @@ type GetTopChannelsRequest struct {
 	// included in the results.
 	// To request the first page, this should be set to 0. To request
 	// subsequent pages, the client generates this value by adding 1 to
-	// the highest seen result ID.
+	// the highest seen result WorkloadID.
 	StartChannelId int64 `protobuf:"varint,1,opt,name=start_channel_id,json=startChannelId,proto3" json:"start_channel_id,omitempty"`
 	// If non-zero, the server will return a page of results containing
 	// at most this many items. If zero, the server will choose a
@@ -2087,7 +2087,7 @@ type GetServersRequest struct {
 	// included in the results.
 	// To request the first page, this must be set to 0. To request
 	// subsequent pages, the client generates this value by adding 1 to
-	// the highest seen result ID.
+	// the highest seen result WorkloadID.
 	StartServerId int64 `protobuf:"varint,1,opt,name=start_server_id,json=startServerId,proto3" json:"start_server_id,omitempty"`
 	// If non-zero, the server will return a page of results containing
 	// at most this many items. If zero, the server will choose a
@@ -2309,7 +2309,7 @@ type GetServerSocketsRequest struct {
 	// included in the results.
 	// To request the first page, this must be set to 0. To request
 	// subsequent pages, the client generates this value by adding 1 to
-	// the highest seen result ID.
+	// the highest seen result WorkloadID.
 	StartSocketId int64 `protobuf:"varint,2,opt,name=start_socket_id,json=startSocketId,proto3" json:"start_socket_id,omitempty"`
 	// If non-zero, the server will return a page of results containing
 	// at most this many items. If zero, the server will choose a

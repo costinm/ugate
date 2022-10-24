@@ -28,7 +28,7 @@ type MessageData struct {
 
 	// Time when the message was sent, according to the sender clock.
 	Time int64 `protobuf:"varint,1,opt,name=time,proto3" json:"time,omitempty"`
-	// Original ID. If missing, the envelope ID will be used.
+	// Original WorkloadID. If missing, the envelope WorkloadID will be used.
 	Id string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
 	// Original destination
 	To    string            `protobuf:"bytes,3,opt,name=to,proto3" json:"to,omitempty"`

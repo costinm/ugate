@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/costinm/meshauth"
-	"github.com/costinm/ugate/auth"
 )
 
 // RFC8291 - Message Encryption for Web push
@@ -61,7 +60,7 @@ import (
 //
 // You can add more headers to configure collapsing, TTL.
 func NewRequest(dest string, key, authK []byte,
-	message string, ttlSec int, vapid *auth.Auth) (*http.Request, error) {
+	message string, ttlSec int, vapid *meshauth.MeshAuth) (*http.Request, error) {
 
 	// If the endpoint is GCM then we temporarily need to rewrite it, as not all
 	// GCM servers support the Web Push protocol. This should go away in the

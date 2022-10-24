@@ -1,0 +1,19 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: prom
+spec:
+  selector:
+    matchExpressions  :
+      - key: monitoring
+        operator: NotIn
+        values:
+            - "false"
+
+  endpoints:
+    # prometheus.io/path: /stats/prometheus
+    #    prometheus.io/port: "15020"
+    #    prometheus.io/scrape: "true"
+    - port: 15020 # "metrics" is recommended, envoy doesn't add containerPort
+      interval: 30s
+      path: /stats/prometheus # default is /metrics

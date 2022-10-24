@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/costinm/hbone/nio"
 	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/auth"
 	"golang.org/x/net/http2"
 )
 
@@ -39,7 +39,7 @@ type H2Transport struct {
 
 	// Included file server, for UI.
 	fs    http.Handler
-	conns map[*http2.ClientConn]*ugate.DMNode
+	conns map[*http2.ClientConn]*ugate.Cluster
 
 	m sync.RWMutex
 }
@@ -48,7 +48,7 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 	h2 := &H2Transport{
 		ug:           ug,
 		httpListener: newListener(),
-		conns:        map[*http2.ClientConn]*ugate.DMNode{},
+		conns:        map[*http2.ClientConn]*ugate.Cluster{},
 		h2t: &http2.Transport{
 			ReadIdleTimeout:            10000 * time.Second,
 			StrictMaxConcurrentStreams: false,
@@ -62,7 +62,7 @@ func NewH2Transport(ug *UGate) (*H2Transport, error) {
 		ug.Mux.Handle("/", h2.fs)
 	}
 
-	//ug.Mux.HandleFunc("/h2r/", h2.HandleH2R)
+	//ug.Transport.HandleFunc("/h2r/", h2.HandleH2R)
 
 	ug.Mux.HandleFunc("/_dm/", ug.HandleID)
 	ug.Mux.HandleFunc("/dm/", ug.HandleTCPProxy)
@@ -133,15 +133,15 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(vapidH) > 0 {
 		tok, pub, err := meshauth.CheckVAPID(vapidH[0], time.Now())
 		if err == nil {
-			RemoteID = auth.IDFromPublicKeyBytes(pub)
+			RemoteID = meshauth.IDFromPublicKeyBytes(pub)
 			SAN = tok.Sub
 		}
 	}
 
 	tls := r.TLS
 	// If the request was handled by normal uGate listener.
-	us := r.Context().Value("ugate.stream")
-	if ugs, ok := us.(*ugate.Stream); ok {
+	us := r.Context().Value("nio.Stream")
+	if ugs, ok := us.(*nio.Stream); ok {
 		tls = ugs.TLS
 		r.TLS = tls
 	}
@@ -152,9 +152,9 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if tls != nil && len(tls.PeerCertificates) > 0 {
 		pk1 := tls.PeerCertificates[0].PublicKey
-		RemoteID = auth.IDFromPublicKey(pk1)
+		RemoteID = meshauth.IDFromPublicKey(pk1)
 		// TODO: Istio-style, signed by a trusted CA. This is also for SSH-with-cert
-		sans, _ := auth.GetSAN(tls.PeerCertificates[0])
+		sans, _ := meshauth.GetSAN(tls.PeerCertificates[0])
 		if len(sans) > 0 {
 			SAN = sans[0]
 		}
@@ -166,8 +166,8 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Del("from")
 	}
 
-	if ugate.DebugClose {
-		log.Println("HTTP-Start ", r.Method, r.URL, r.Proto, r.Header, RemoteID, SAN, r.RemoteAddr)
+	if nio.DebugClose {
+		log.Println("HTTP-RoundTripStart ", r.Method, r.URL, r.Proto, r.Header, RemoteID, SAN, r.RemoteAddr)
 	}
 
 	// TODO: authz for each case !!!!
@@ -177,7 +177,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// if the dest is a mesh node (BTS).
 	//
 	// Special case: local plain text http or http2 server ( sidecar )
-	host, found := l.ug.Config.Hosts[r.Host]
+	host, found := l.ug.Config.Clusters[r.Host]
 	if found {
 		l.ForwardHTTP(w, r, host.Addr)
 		return
@@ -195,7 +195,7 @@ func (l *H2Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Will sniff H2 and http/1.1 and use the right handler.
 //
 // Ex: curl localhost:9080/debug/vars --http2-prior-knowledge
-func (t *H2Transport) handleHTTPListener(bconn *ugate.Stream) error {
+func (t *H2Transport) handleHTTPListener(bconn *nio.Stream) error {
 
 	err := SniffH2(bconn)
 	if err != nil {
@@ -235,7 +235,7 @@ var (
 	h2ClientPreface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
 )
 
-func SniffH2(s *ugate.Stream) error {
+func SniffH2(s *nio.Stream) error {
 	var proto string
 
 	for {
@@ -267,7 +267,7 @@ func SniffH2(s *ugate.Stream) error {
 // listeners.
 //
 // Blocking.
-func (t *H2Transport) HandleHTTPS(str *ugate.Stream) error {
+func (t *H2Transport) HandleHTTPS(str *nio.Stream) error {
 	// http2 and http expect a net.Listener, and do their own accept()
 	if str.TLS != nil && str.TLS.NegotiatedProtocol == "h2" {
 		t.h2Server.ServeConn(
@@ -345,24 +345,24 @@ func (l *listener) Accept() (net.Conn, error) {
 }
 
 //type HttpClientStream struct {
-//	ugate.Stream
+//	nio.Stream
 //	*http.Response
 //	request *http.Request
 //}
 //
-//func NewHttpClientStream(s *ugate.Stream) *HttpClientStream {
+//func NewHttpClientStream(s *nio.Stream) *HttpClientStream {
 //	h := &HttpClientStream{
 //	}
 //	return h
 //}
 //
 //type HttpServerStream struct {
-//	ugate.Stream
+//	nio.Stream
 //	http.ResponseWriter
 //	request *http.Request
 //}
 //
-//func NewHttpServerStream(s *ugate.Stream) *HttpServerStream {
+//func NewHttpServerStream(s *nio.Stream) *HttpServerStream {
 //	h := &HttpServerStream{
 //	}
 //	return h

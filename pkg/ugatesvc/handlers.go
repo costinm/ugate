@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/costinm/hbone/nio"
 	"github.com/costinm/ugate"
 )
 
@@ -30,7 +31,7 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// H2 requests require write to be flushed - buffering happens !
 	// Wrap w.Body into Stream which does this automatically
-	str := ugate.NewStreamRequest(r, w, nil)
+	str := nio.NewStreamRequest(r, w, nil)
 
 	eh.handle(str, false)
 }
@@ -51,7 +52,7 @@ type StreamInfo struct {
 	Type string
 }
 
-func GetStreamInfo(str *ugate.Stream) *StreamInfo {
+func GetStreamInfo(str *nio.Stream) *StreamInfo {
 	si := &StreamInfo{
 		LocalAddr:  str.LocalAddr(),
 		RemoteAddr: str.RemoteAddr(),
@@ -68,7 +69,7 @@ func GetStreamInfo(str *ugate.Stream) *StreamInfo {
 	return si
 }
 
-func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
+func (*EchoHandler) handle(str *nio.Stream, serverFirst bool) error {
 	d := make([]byte, 2048)
 	si := GetStreamInfo(str)
 	si.RemoteID = RemoteID(str)
@@ -94,7 +95,7 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 	str.Write(d[0:n])
 
 	io.Copy(str, str)
-	if ugate.DebugClose {
+	if nio.DebugClose {
 		log.Println("ECHO DONE", str.StreamId)
 	}
 	return nil
@@ -102,7 +103,7 @@ func (*EchoHandler) handle(str *ugate.Stream, serverFirst bool) error {
 func (eh *EchoHandler) String() string {
 	return "Echo"
 }
-func (eh *EchoHandler) Handle(ac *ugate.Stream) error {
+func (eh *EchoHandler) Handle(ac *nio.Stream) error {
 	if DebugEcho {
 		log.Println("ECHOS ", ac)
 	}
@@ -114,12 +115,12 @@ func (eh *EchoHandler) Handle(ac *ugate.Stream) error {
 //}
 //
 //type H2P struct {
-//	// Key is peer ID.
+//	// Key is peer WorkloadID.
 //	// TODO: multiple monitors per peer ?
 //	mons map[string]*Pusher
 //
 //	// Active pushed connections.
-//	// Key is peerID / stream ID
+//	// Key is peerID / stream WorkloadID
 //	active map[string]*net.Stream
 //}
 //
@@ -215,7 +216,7 @@ func (gw *UGate) HttpNodesFilter(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	w.Header().Add("content-type", "application/json")
 	t := r.Form.Get("t")
-	rec := []*ugate.DMNode{}
+	rec := []*ugate.Cluster{}
 	t0 := time.Now()
 	for _, n := range gw.NodesByID {
 		if t != "" {
@@ -270,7 +271,7 @@ func (gw *UGate) HandleID(w http.ResponseWriter, r *http.Request) {
 func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Create a stream, used for proxy with caching.
-	str := ugate.NewStreamRequest(r, w, nil)
+	str := nio.NewStreamRequest(r, w, nil)
 
 	if r.Method == "CONNECT" {
 		str.Dest = r.Host
@@ -292,7 +293,7 @@ func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() {
 		// Handler is done - even if it didn't call close, prevent calling it again.
-		if ugate.DebugClose {
+		if nio.DebugClose {
 			log.Println("HTTP.Close - handler done, no close ", str.Dest)
 		}
 		str.ServerClose = true
@@ -301,7 +302,7 @@ func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
 	// Treat it as regular stream forwarding
 	gw.HandleVirtualIN(str)
 
-	if ugate.DebugClose {
+	if nio.DebugClose {
 		log.Println("Handler closed for ", r.RequestURI)
 	}
 
@@ -312,7 +313,7 @@ func (gw *UGate) HandleTCPProxy(w http.ResponseWriter, r *http.Request) {
 // Dest is local.
 func (gw *UGate) HandleTLSoverH2(w http.ResponseWriter, r *http.Request) {
 	// Create a stream, used for proxy with caching.
-	str := ugate.NewStreamRequest(r, w, nil)
+	str := nio.NewStreamRequest(r, w, nil)
 
 	parts := strings.Split(r.RequestURI, "/")
 	str.Dest = parts[2]
@@ -330,24 +331,24 @@ func (gw *UGate) HandleTLSoverH2(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() {
 		// Handler is done - even if it didn't call close, prevent calling it again.
-		if ugate.DebugClose {
+		if nio.DebugClose {
 			log.Println("HTTP.Close - handler done, no close ", str.Dest)
 		}
 		str.ServerClose = true
 	}()
 
 	tlsCfg := gw.TLSConfig
-	tc, err := gw.NewTLSConnIn(str.Context(), nil, str, tlsCfg)
+	tc, err := gw.NewTLSConnIn(str.Context(), nil, nil, str, tlsCfg)
 	if err != nil {
 		str.ReadErr = err
-		log.Println("TLS: ", str.RemoteAddr(), str.Dest, str.Route, err)
+		log.Println("TLS: ", str.RemoteAddr(), str.Dest, err)
 		return
 	}
 
 	// Treat it as regular stream forwarding
 	gw.HandleVirtualIN(tc)
 
-	if ugate.DebugClose {
+	if nio.DebugClose {
 		log.Println("Handler closed for ", r.RequestURI)
 	}
 

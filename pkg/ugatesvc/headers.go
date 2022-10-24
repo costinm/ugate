@@ -9,12 +9,12 @@ import (
 	"net/http"
 	"net/textproto"
 
-	"github.com/costinm/ugate"
+	"github.com/costinm/hbone/nio"
 )
 
 // There are few options on how to pass stream metadata around:
 //
-// Mux proto:
+// Transport proto:
 // - H2 - clear protocol, but has overhead and complexity and because
 // of muxing we can't splice
 //
@@ -31,7 +31,7 @@ import (
 type MimeEncoder struct {
 }
 
-func (*MimeEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
+func (*MimeEncoder) Unmarshal(s *nio.Stream) (done bool, err error) {
 	buf, err := s.Fill(5)
 	if err != nil {
 		return false, err
@@ -54,18 +54,18 @@ func (*MimeEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
 	// Skip the headers -
 	s.Skip(5 + int(len))
 
-	if ugate.DebugClose {
+	if nio.DebugClose {
 		log.Println("Stream.receiveHeaders ", s.StreamId, s.InHeader, s.RBuffer().Size())
 	}
 
 	return true, nil
 }
 
-func (*MimeEncoder) Marshal(s *ugate.Stream) error {
+func (*MimeEncoder) Marshal(s *nio.Stream) error {
 	bb := s.WBuffer()
 	h := s.InHeader
-	if s.Direction == ugate.StreamTypeOut ||
-		s.Direction == ugate.StreamTypeUnknown {
+	if s.Direction == nio.StreamTypeOut ||
+		s.Direction == nio.StreamTypeUnknown {
 		h = s.OutHeader
 	}
 
@@ -85,7 +85,7 @@ func (*MimeEncoder) Marshal(s *ugate.Stream) error {
 		return err
 	}
 
-	if ugate.DebugClose {
+	if nio.DebugClose {
 		log.Println("Stream.sendHeaders ", s.StreamId, h)
 	}
 
@@ -100,25 +100,24 @@ func (*MimeEncoder) Marshal(s *ugate.Stream) error {
 //
 // I am trying to keep the actual encoding wire-compatible with protobuf,
 // but with a careful proto:
-//  - flat - to avoid the length-prefix
-//  - short tags - look like 1 byte tag in other encodings
-//  - 'Start' and 'end' fields - regular fields used as delimiters.
-//    Could also use (deprecated) Start(3)/stop(4) group.
-//   See https://groups.google.com/g/protobuf/c/UKpsthqAmjw for benefits
-//   of the deprecated group.
+//   - flat - to avoid the length-prefix
+//   - short tags - look like 1 byte tag in other encodings
+//   - 'RoundTripStart' and 'end' fields - regular fields used as delimiters.
+//     Could also use (deprecated) RoundTripStart(3)/stop(4) group.
+//     See https://groups.google.com/g/protobuf/c/UKpsthqAmjw for benefits
+//     of the deprecated group.
 //
 // Tags use last 3 bits as:
 // 0=varint, 1-64fixed, 2=len-delim, 5=32fixed.
-//
 type BEncoder struct {
 }
 
-func (*BEncoder) AddHeader(s *ugate.Stream, k, v []byte) {
+func (*BEncoder) AddHeader(s *nio.Stream, k, v []byte) {
 	bb := s.WBuffer()
 	if bb.Size() == 0 {
 		bb.WriteByte(0)
 		//bb.WriteByte(0x08) // tag=1, varint
-		bb.WriteUnint32(0) // header-Start
+		bb.WriteUnint32(0) // header-RoundTripStart
 	}
 	bb.WriteByte(0x12) // tag=2, len-delim
 	bb.WriteVarint(int64(len(k)))
@@ -128,7 +127,7 @@ func (*BEncoder) AddHeader(s *ugate.Stream, k, v []byte) {
 	bb.Write(v)
 }
 
-func (*BEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
+func (*BEncoder) Unmarshal(s *nio.Stream) (done bool, err error) {
 	h, err := s.Fill(5)
 	if err != nil {
 		return false, err
@@ -142,16 +141,16 @@ func (*BEncoder) Unmarshal(s *ugate.Stream) (done bool, err error) {
 	return true, nil
 }
 
-func (*BEncoder) Marshal(s *ugate.Stream) error {
+func (*BEncoder) Marshal(s *nio.Stream) error {
 	bb := s.WBuffer()
 	h := s.InHeader
-	if s.Direction == ugate.StreamTypeOut ||
-		s.Direction == ugate.StreamTypeUnknown {
+	if s.Direction == nio.StreamTypeOut ||
+		s.Direction == nio.StreamTypeUnknown {
 		h = s.OutHeader
 	}
-	// TODO: leave 5 bytes at Start to reproduce streaming gRPC format
+	// TODO: leave 5 bytes at RoundTripStart to reproduce streaming gRPC format
 	bb.WriteByte(0x08) // tag=1, varint
-	bb.WriteByte(1)    // header-Start
+	bb.WriteByte(1)    // header-RoundTripStart
 
 	for k, vv := range h {
 		for _, v := range vv {
@@ -166,7 +165,7 @@ func (*BEncoder) Marshal(s *ugate.Stream) error {
 	bb.WriteByte(0x08)
 	bb.WriteByte(2)
 
-	if ugate.DebugClose {
+	if nio.DebugClose {
 		log.Println("Stream.sendHeaders ", s.StreamId, h)
 	}
 

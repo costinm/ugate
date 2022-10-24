@@ -172,7 +172,7 @@ var file_grpc_testing_test_proto_depIdxs = []int32{
 	2,  // 6: grpc.testing.TestService.HalfDuplexCall:input_type -> grpc.testing.StreamingOutputCallRequest
 	0,  // 7: grpc.testing.TestService.UnimplementedCall:input_type -> grpc.testing.Empty
 	0,  // 8: grpc.testing.UnimplementedService.UnimplementedCall:input_type -> grpc.testing.Empty
-	4,  // 9: grpc.testing.ReconnectService.Start:input_type -> grpc.testing.ReconnectParams
+	4,  // 9: grpc.testing.ReconnectService.RoundTripStart:input_type -> grpc.testing.ReconnectParams
 	0,  // 10: grpc.testing.ReconnectService.Stop:input_type -> grpc.testing.Empty
 	5,  // 11: grpc.testing.LoadBalancerStatsService.GetClientStats:input_type -> grpc.testing.LoadBalancerStatsRequest
 	6,  // 12: grpc.testing.LoadBalancerStatsService.GetClientAccumulatedStats:input_type -> grpc.testing.LoadBalancerAccumulatedStatsRequest
@@ -188,7 +188,7 @@ var file_grpc_testing_test_proto_depIdxs = []int32{
 	9,  // 22: grpc.testing.TestService.HalfDuplexCall:output_type -> grpc.testing.StreamingOutputCallResponse
 	0,  // 23: grpc.testing.TestService.UnimplementedCall:output_type -> grpc.testing.Empty
 	0,  // 24: grpc.testing.UnimplementedService.UnimplementedCall:output_type -> grpc.testing.Empty
-	0,  // 25: grpc.testing.ReconnectService.Start:output_type -> grpc.testing.Empty
+	0,  // 25: grpc.testing.ReconnectService.RoundTripStart:output_type -> grpc.testing.Empty
 	11, // 26: grpc.testing.ReconnectService.Stop:output_type -> grpc.testing.ReconnectInfo
 	12, // 27: grpc.testing.LoadBalancerStatsService.GetClientStats:output_type -> grpc.testing.LoadBalancerStatsResponse
 	13, // 28: grpc.testing.LoadBalancerStatsService.GetClientAccumulatedStats:output_type -> grpc.testing.LoadBalancerAccumulatedStatsResponse

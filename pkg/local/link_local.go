@@ -15,7 +15,6 @@ import (
 
 	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/auth"
 	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
@@ -40,7 +39,7 @@ var (
 	regDNCE = expvar.NewInt("RegDCE")
 )
 
-func NewLocal(gw *ug.UGate, auth *auth.Auth) *LLDiscovery {
+func NewLocal(gw *ug.UGate, auth *meshauth.MeshAuth) *LLDiscovery {
 	return &LLDiscovery{
 		mcPort:  5227,
 		udpPort: gw.Config.BasePort + 8,
@@ -70,7 +69,7 @@ func ListenUDP(gw *LLDiscovery) {
 // Called after connection to the VPN has been created.
 //
 // Currently used only for Mesh AP chains.
-func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.DMNode, addr *net.UDPAddr, fromMySTA bool) {
+func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.Cluster, addr *net.UDPAddr, fromMySTA bool) {
 	//now := time.Now()
 	//add := &net.UDPAddr{IP: addr.IP, Zone: addr.Zone, Port: 5222}
 
@@ -117,7 +116,7 @@ func (gw *LLDiscovery) FixIp6ForHTTP(addr *net.UDPAddr) string {
 // or IP6 announce.
 //
 // Should be called after network changes and announce
-func (gw *LLDiscovery) ensureConnectedUp(laddr *net.UDPAddr, node *ugate.DMNode) error {
+func (gw *LLDiscovery) ensureConnectedUp(laddr *net.UDPAddr, node *ugate.Cluster) error {
 	//if gw.gw.SSHClientUp != nil {
 	//	return nil
 	//}
@@ -256,7 +255,7 @@ func mcMessage(gw *LLDiscovery, i *ActiveInterface, isAck bool) []byte {
 }
 
 // Sign the message in the buffer.
-func signedMessage(buf *bytes.Buffer, auth *auth.Auth) []byte {
+func signedMessage(buf *bytes.Buffer, auth *meshauth.MeshAuth) []byte {
 
 	buf.Write(auth.PublicKey[1:])
 	buf.Write(auth.PublicKey[1:]) // to add another 64 bytes
@@ -575,10 +574,10 @@ func (gw *LLDiscovery) multicastReaderThread(c net.PacketConn, iface *ActiveInte
 		//}
 
 		// For a 'direct' child, if this node is not an AP/GW, all we really need is a map
-		// from uint24 session ID to IP6 GW address.
+		// from uint24 session WorkloadID to IP6 GW address.
 		// The child only need the parent IP6 address (selected from multiple responses)
 
-		// For a GW node, the session ID is enough as well, unless a whitelist and
+		// For a GW node, the session WorkloadID is enough as well, unless a whitelist and
 		// auth is used for access.
 
 		// Current android doesn't support arbitrary ports
@@ -614,7 +613,7 @@ func (gw *LLDiscovery) multicastReaderThread(c net.PacketConn, iface *ActiveInte
 		log.Println("LL: MC Received:", directNode.ID, addr, directNode.NodeAnnounce.UA, isAp)
 
 		if !ann.Ack {
-			// Send an 'ack' back to the device, including our own ID/sig and info
+			// Send an 'ack' back to the device, including our own WorkloadID/sig and info
 			addr.Port = port0
 			jsonAnn := mcMessage(gw, iface, true)
 
@@ -661,7 +660,7 @@ func (gw *LLDiscovery) HttpGetLLIf(w http.ResponseWriter, r *http.Request) {
 //
 // Currently the info is only for debugging - all registration happens in the /register handshake,
 // using mtls.
-func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *ActiveInterface) (*ugate.DMNode, *ugate.NodeAnnounce, error) {
+func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *ActiveInterface) (*ugate.Cluster, *ugate.NodeAnnounce, error) {
 
 	dl := len(data)
 
@@ -684,7 +683,7 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 		return nil, nil, err
 	}
 
-	dmFrom := auth.Pub2ID(pub)
+	dmFrom := meshauth.Pub2ID(pub)
 	if gw.auth.VIP64 == dmFrom {
 		return nil, nil, selfRegister
 	}
@@ -698,7 +697,7 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 
 	now := time.Now()
 
-	node := gw.gw.GetOrAddNode(auth.IDFromPublicKey(pub))
+	node := gw.gw.GetOrAddNode(meshauth.IDFromPublicKey(pub))
 
 	since := int(now.Sub(node.LastSeen) / time.Second)
 	if since > 2 {

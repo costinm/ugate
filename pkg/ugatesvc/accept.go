@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
 
-	"github.com/costinm/ugate"
+	"github.com/costinm/hbone"
+	"github.com/costinm/hbone/nio"
 )
 
 // Accepting connections on ports and extracting metadata, including sniffing.
@@ -41,8 +41,8 @@ import (
 
 // New style, based on lwip. Blocks until connect, proxy runs in background.
 func (ug *UGate) HandleTUN(conn net.Conn, ra *net.TCPAddr, la *net.TCPAddr) error {
-	bconn := ugate.GetStream(conn, conn)
-	bconn.Direction = ugate.StreamTypeOut
+	bconn := nio.GetStream(conn, conn)
+	bconn.Direction = nio.StreamTypeOut
 	ug.OnStream(bconn)
 	defer ug.OnStreamDone(bconn)
 
@@ -63,7 +63,7 @@ func (ug *UGate) HandleTUN(conn net.Conn, ra *net.TCPAddr, la *net.TCPAddr) erro
 // Handle a virtual (multiplexed) stream, received over
 // another connection, for example H2 POST/CONNECT, etc
 // The connection will have metadata, may include identify of the caller.
-func (ug *UGate) HandleVirtualIN(bconn *ugate.Stream) error {
+func (ug *UGate) HandleVirtualIN(bconn *nio.Stream) error {
 	ug.OnStream(bconn)
 	defer ug.OnStreamDone(bconn)
 
@@ -73,7 +73,7 @@ func (ug *UGate) HandleVirtualIN(bconn *ugate.Stream) error {
 // handleSNI is intended for a dedicated SNI port.
 // Will use the Config.Routes to map the SNI host to a ForwardTo address. If not found,
 // will use a callback for a dynamic route.
-func (ug *UGate) handleSNI(str *ugate.Stream) error {
+func (ug *UGate) handleSNI(str *nio.Stream) error {
 	// Used to present the right cert
 	_, str.ReadErr = ParseTLS(str)
 	if str.ReadErr != nil {
@@ -102,134 +102,42 @@ func (ug *UGate) handleSNI(str *ugate.Stream) error {
 	return nil
 }
 
-// handles a directly accepted TCP connection for a TLS port.
-// May SNI-forward or terminate, based on listener config.
-//
-// If terminating, based on ALPN and domain will route the stream.
-// For SNI - will use the SNI name to route the stream.
-//
-// TODO: depreacte, too complex. Dedicated port for SNI is better and cleaner.
-func (ug *UGate) handleTLSorSNI(rawStream *ugate.Stream) error {
-
-	// Used to present the right cert
-	_, rawStream.ReadErr = ParseTLS(rawStream)
-	if rawStream.ReadErr != nil {
-		return rawStream.ReadErr
-	}
-
-	sni := rawStream.Dest
-
-	tlsTerm := false
-	cert := ""
-
-	if rawStream.Dest == "" {
-		// No explicit destination - terminate here
-		tlsTerm = true
-	} else if rawStream.Dest == ug.Auth.ID {
-		tlsTerm = true
-	} else {
-		// Not sure if this is worth it, may be too complex
-		// TODO: try to find certificate for domain or parent.
-		//if ug.Auth.Config.Get("key/" + dest) {
-		//
-		//}
-		_, ok := ug.Auth.CertMap[sni]
-		if ok {
-			tlsTerm = true
-			cert = sni
-		} else {
-			// Check certs defined for the listener
-			wild := ""
-			for cn, k := range rawStream.Listener.Certs {
-				if cn == "*" {
-					wild = k
-				} else {
-					if cn[0] == '*' && len(cn) > 2 {
-						if strings.HasSuffix(sni, cn[2:]) {
-							tlsTerm = true
-							cert = k
-						}
-					} else if sni == cn {
-						tlsTerm = true
-						cert = k
-					}
-				}
-			}
-			if !tlsTerm && wild != "" {
-				tlsTerm = true
-				cert = wild
-			}
-		}
-	}
-
-	// At this point, if tlsTerm is true it means we should terminate
-	// and handle the connection.
-	// Else - SNI forward
-
-	// TODO: local routes if tlsTerm
-	sniCfg := ug.Config.Routes[rawStream.Dest]
-	if sniCfg != nil {
-		if sniCfg.ForwardTo != "" {
-			rawStream.Dest = sniCfg.ForwardTo
-		}
-	}
-
-	// Terminate TLS if the stream is detected as TLS and the matched config
-	// is configured for termination.
-	// Else it's just a proxied SNI connection.
-	if tlsTerm {
-		tlsCfg := ug.TLSConfig
-		if cert != "" {
-			// explicit cert based on listener config
-			// TODO: tlsCfg = ug.Auth.GetServerConfig(cert)
-		}
-		// TODO: present the right ALPN for the port ( if not set, use default)
-		tc, err := ug.NewTLSConnIn(rawStream.Context(), rawStream.Listener, rawStream, tlsCfg)
-		if err != nil {
-			rawStream.ReadErr = err
-			log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, rawStream.Route, err)
-			return err
-		}
-
-		// Handshake done. Now we have access to the ALPN.
-		tc.PostDial(tc, nil)
-		rawStream.ReadErr = ug.H2Handler.HandleHTTPS(tc)
-	} else {
-		// Default stream handling is proxy to the SNI dest.
-		// Note that SNI does not include port number.
-
-		rawStream.ReadErr = ug.HandleStream(rawStream)
-	}
-	return nil
-}
-
 // Hamdle implements the common interface for handling accepted streams.
 // Will init and log the stream, then handle.
-//
-func (ug *UGate) Handle(s *ugate.Stream) {
+func (ug *UGate) Handle(s *nio.Stream) {
 	ug.OnStream(s)
 	defer ug.OnStreamDone(s)
 
 	ug.HandleStream(s)
 }
 
+func forwardTo(l net.Listener) string {
+	if ul, ok := l.(*hbone.Listener); ok {
+		return ul.ForwardTo
+	}
+	return ""
+}
+
 // A real accepted connection on a 'legacy' port. Will be forwarded to
 // the mesh.
-func (ug *UGate) handleTCPForward(bconn *ugate.Stream) error {
-	bconn.Direction = ugate.StreamTypeForward
+func (ug *UGate) handleTCPForward(bconn *nio.Stream) error {
+	bconn.Direction = nio.StreamTypeForward
 
-	if bconn.Listener.ForwardTo != "" {
-		bconn.Dest = bconn.Listener.ForwardTo
+	ft := forwardTo(bconn.Listener)
+	if ft != "" {
+		bconn.Dest = ft
 	}
 
 	bconn.ReadErr = ug.HandleStream(bconn)
 	return bconn.ReadErr
 }
 
-func (ug *UGate) handleTCPEgress(bconn *ugate.Stream) error {
-	bconn.Direction = ugate.StreamTypeOut
+func (ug *UGate) handleTCPEgress(bconn *nio.Stream) error {
+	bconn.Direction = nio.StreamTypeOut
 
-	bconn.Dest = bconn.Listener.ForwardTo
+	ft := forwardTo(bconn.Listener)
+
+	bconn.Dest = ft
 
 	bconn.ReadErr = ug.HandleStream(bconn)
 	return bconn.ReadErr

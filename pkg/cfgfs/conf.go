@@ -11,6 +11,10 @@ import (
 	"github.com/costinm/ugate"
 )
 
+// TODO: map FOO_BAR to foo.bar, construct yaml equivalent
+// Reload the files
+// Dynamic Flags - https://github.com/mwitkow/go-flagz, fortio:
+
 // Simple file-based config and secret store.
 //
 // Implements a ConfStore interface with List/Get/Set interface.
@@ -43,17 +47,16 @@ func NewConf(base ...string) *Conf {
 	// TODO: https for remote - possibly using local creds and K8S style or XDS
 	env := os.Environ()
 	envconf := map[string]string{}
-	for _, ev:= range env {
+	for _, ev := range env {
 		kv := strings.SplitN(ev, "=", 2)
 		if len(kv) == 2 {
 			envconf[kv[0]] = kv[1]
 		}
 	}
 	return &Conf{
-		base: base,
-		Conf: envconf,
+		base:     base,
+		Conf:     envconf,
 		inMemory: map[string][]byte{},
-
 	}
 }
 

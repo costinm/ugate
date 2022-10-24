@@ -12,7 +12,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/costinm/ugate/auth"
+	"github.com/costinm/meshauth"
 )
 
 var (
@@ -43,7 +43,7 @@ func decode(jwt, aud string) {
 	log.Printf("Cert subject: %#v\n", xc.Subject)
 	pubk1 := xc.PublicKey
 
-	h, t, txt, sig, _ := auth.JwtRawParse(jwt)
+	h, t, txt, sig, _ := meshauth.JwtRawParse(jwt)
 	log.Printf("%#v %#v\n", h, t)
 
 	if h.Alg == "RS256" {

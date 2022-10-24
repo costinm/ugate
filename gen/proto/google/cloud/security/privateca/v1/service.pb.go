@@ -55,28 +55,28 @@ type CreateCertificateRequest struct {
 	CertificateId string `protobuf:"bytes,2,opt,name=certificate_id,json=certificateId,proto3" json:"certificate_id,omitempty"`
 	// Required. A [Certificate][google.cloud.security.privateca.v1.Certificate] with initial field values.
 	Certificate *Certificate `protobuf:"bytes,3,opt,name=certificate,proto3" json:"certificate,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and the
-	// request times out. If you make the request again with the same request ID,
-	// the server can check if original operation with the same request ID was
+	// request times out. If you make the request again with the same request WorkloadID,
+	// the server can check if original operation with the same request WorkloadID was
 	// received, and if so, will ignore the second request. This prevents clients
 	// from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	// Optional. If this is true, no [Certificate][google.cloud.security.privateca.v1.Certificate] resource will be persisted regardless
 	// of the [CaPool][google.cloud.security.privateca.v1.CaPool]'s [tier][google.cloud.security.privateca.v1.CaPool.tier], and the returned [Certificate][google.cloud.security.privateca.v1.Certificate]
 	// will not contain the [pem_certificate][google.cloud.security.privateca.v1.Certificate.pem_certificate] field.
 	ValidateOnly bool `protobuf:"varint,5,opt,name=validate_only,json=validateOnly,proto3" json:"validate_only,omitempty"`
-	// Optional. The resource ID of the [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] that should issue the
+	// Optional. The resource WorkloadID of the [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] that should issue the
 	// certificate.  This optional field will ignore the load-balancing scheme of
 	// the Pool and directly issue the certificate from the CA with the specified
-	// ID, contained in the same [CaPool][google.cloud.security.privateca.v1.CaPool] referenced by `parent`. Per-CA quota
+	// WorkloadID, contained in the same [CaPool][google.cloud.security.privateca.v1.CaPool] referenced by `parent`. Per-CA quota
 	// rules apply. If left empty, a [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] will be chosen from
 	// the [CaPool][google.cloud.security.privateca.v1.CaPool] by the service. For example, to issue a [Certificate][google.cloud.security.privateca.v1.Certificate] from
 	// a Certificate Authority with resource name
@@ -390,18 +390,18 @@ type RevokeCertificateRequest struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Required. The [RevocationReason][google.cloud.security.privateca.v1.RevocationReason] for revoking this certificate.
 	Reason RevocationReason `protobuf:"varint,2,opt,name=reason,proto3,enum=google.cloud.security.privateca.v1.RevocationReason" json:"reason,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -469,18 +469,18 @@ type UpdateCertificateRequest struct {
 	Certificate *Certificate `protobuf:"bytes,1,opt,name=certificate,proto3" json:"certificate,omitempty"`
 	// Required. A list of fields to be updated in this request.
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -554,18 +554,18 @@ type ActivateCertificateAuthorityRequest struct {
 	// Required. Must include information about the issuer of 'pem_ca_certificate', and any
 	// further issuers until the self-signed CA.
 	SubordinateConfig *SubordinateConfig `protobuf:"bytes,3,opt,name=subordinate_config,json=subordinateConfig,proto3" json:"subordinate_config,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -646,18 +646,18 @@ type CreateCertificateAuthorityRequest struct {
 	CertificateAuthorityId string `protobuf:"bytes,2,opt,name=certificate_authority_id,json=certificateAuthorityId,proto3" json:"certificate_authority_id,omitempty"`
 	// Required. A [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] with initial field values.
 	CertificateAuthority *CertificateAuthority `protobuf:"bytes,3,opt,name=certificate_authority,json=certificateAuthority,proto3" json:"certificate_authority,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -732,18 +732,18 @@ type DisableCertificateAuthorityRequest struct {
 	// Required. The resource name for this [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] in the
 	// format `projects/*/locations/*/caPools/*/certificateAuthorities/*`.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -804,18 +804,18 @@ type EnableCertificateAuthorityRequest struct {
 	// Required. The resource name for this [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] in the
 	// format `projects/*/locations/*/caPools/*/certificateAuthorities/*`.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -1191,18 +1191,18 @@ type UndeleteCertificateAuthorityRequest struct {
 	// Required. The resource name for this [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] in the
 	// format `projects/*/locations/*/caPools/*/certificateAuthorities/*`.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -1263,18 +1263,18 @@ type DeleteCertificateAuthorityRequest struct {
 	// Required. The resource name for this [CertificateAuthority][google.cloud.security.privateca.v1.CertificateAuthority] in the
 	// format `projects/*/locations/*/caPools/*/certificateAuthorities/*`.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	// Optional. This field allows the CA to be deleted even if the CA has
@@ -1346,18 +1346,18 @@ type UpdateCertificateAuthorityRequest struct {
 	CertificateAuthority *CertificateAuthority `protobuf:"bytes,1,opt,name=certificate_authority,json=certificateAuthority,proto3" json:"certificate_authority,omitempty"`
 	// Required. A list of fields to be updated in this request.
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -1430,18 +1430,18 @@ type CreateCaPoolRequest struct {
 	CaPoolId string `protobuf:"bytes,2,opt,name=ca_pool_id,json=caPoolId,proto3" json:"ca_pool_id,omitempty"`
 	// Required. A [CaPool][google.cloud.security.privateca.v1.CaPool] with initial field values.
 	CaPool *CaPool `protobuf:"bytes,3,opt,name=ca_pool,json=caPool,proto3" json:"ca_pool,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -1517,18 +1517,18 @@ type UpdateCaPoolRequest struct {
 	CaPool *CaPool `protobuf:"bytes,1,opt,name=ca_pool,json=caPool,proto3" json:"ca_pool,omitempty"`
 	// Required. A list of fields to be updated in this request.
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -1596,18 +1596,18 @@ type DeleteCaPoolRequest struct {
 	// Required. The resource name for this [CaPool][google.cloud.security.privateca.v1.CaPool] in the
 	// format `projects/*/locations/*/caPools/*`.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -1668,18 +1668,18 @@ type FetchCaCertsRequest struct {
 	// Required. The resource name for the [CaPool][google.cloud.security.privateca.v1.CaPool] in the
 	// format `projects/*/locations/*/caPools/*`.
 	CaPool string `protobuf:"bytes,1,opt,name=ca_pool,json=caPool,proto3" json:"ca_pool,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -2221,18 +2221,18 @@ type UpdateCertificateRevocationListRequest struct {
 	CertificateRevocationList *CertificateRevocationList `protobuf:"bytes,1,opt,name=certificate_revocation_list,json=certificateRevocationList,proto3" json:"certificate_revocation_list,omitempty"`
 	// Required. A list of fields to be updated in this request.
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -2306,18 +2306,18 @@ type CreateCertificateTemplateRequest struct {
 	CertificateTemplateId string `protobuf:"bytes,2,opt,name=certificate_template_id,json=certificateTemplateId,proto3" json:"certificate_template_id,omitempty"`
 	// Required. A [CertificateTemplate][google.cloud.security.privateca.v1.CertificateTemplate] with initial field values.
 	CertificateTemplate *CertificateTemplate `protobuf:"bytes,3,opt,name=certificate_template,json=certificateTemplate,proto3" json:"certificate_template,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -2392,18 +2392,18 @@ type DeleteCertificateTemplateRequest struct {
 	// Required. The resource name for this [CertificateTemplate][google.cloud.security.privateca.v1.CertificateTemplate] in the format
 	// `projects/*/locations/*/certificateTemplates/*`.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }
@@ -2680,18 +2680,18 @@ type UpdateCertificateTemplateRequest struct {
 	CertificateTemplate *CertificateTemplate `protobuf:"bytes,1,opt,name=certificate_template,json=certificateTemplate,proto3" json:"certificate_template,omitempty"`
 	// Required. A list of fields to be updated in this request.
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// Optional. An ID to identify requests. Specify a unique request ID so that if you must
+	// Optional. An WorkloadID to identify requests. Specify a unique request WorkloadID so that if you must
 	// retry your request, the server will know to ignore the request if it has
 	// already been completed. The server will guarantee that for at least 60
 	// minutes since the first request.
 	//
 	// For example, consider a situation where you make an initial request and t
 	// he request times out. If you make the request again with the same request
-	// ID, the server can check if original operation with the same request ID
+	// WorkloadID, the server can check if original operation with the same request WorkloadID
 	// was received, and if so, will ignore the second request. This prevents
 	// clients from accidentally creating duplicate commitments.
 	//
-	// The request ID must be a valid UUID with the exception that zero UUID is
+	// The request WorkloadID must be a valid UUID with the exception that zero UUID is
 	// not supported (00000000-0000-0000-0000-000000000000).
 	RequestId string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 }

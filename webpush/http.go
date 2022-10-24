@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/costinm/meshauth"
-	"github.com/costinm/ugate/auth"
 )
 
 type Backoff interface {
@@ -78,7 +77,8 @@ var SharedWPAuth = []byte{1}
 // Auth: VAPID or client cert - results in VIP of sender
 func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 	// VAPID or client cert already authenticated.
-	rctx := auth.AuthContext(r.Context())
+	from := r.Context().Value("from").(string)
+	roles := r.Context().Value("roles").([]string)
 
 	parts := strings.Split(r.RequestURI, "/")
 	if len(parts) < 3 {
@@ -115,7 +115,7 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 		ev := NewMessage("."+strings.Join(parts[3:], "/"), params).SetDataJSON(msgb)
 
 		//ev := mux.ProcessMessage(msgb, rctx)
-		log.Println("GOT WEBPUSH: ", rctx.ID(), string(msgb), ev)
+		log.Println("GOT WEBPUSH: ", from, string(msgb), ev)
 
 		if ev == nil {
 			if err != nil {
@@ -125,14 +125,14 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		role := rctx.Role
+		role := roles[0]
 		if role == "" || role == "guest" {
 			log.Println("Unauthorized ")
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte("Unauthorized"))
 			return
 		}
-		ev.From = rctx.ID()
+		ev.From = from
 
 		mux.HandleMessageForNode(ev)
 	} else {
@@ -147,7 +147,7 @@ func (mux *Mux) HTTPHandlerWebpush(w http.ResponseWriter, r *http.Request) {
 //
 // base is used for forwarding.
 //
-//func (w *Mux) MonitorEvents(node Backoff, idhex string, path []string) {
+//func (w *Transport) MonitorEvents(node Backoff, idhex string, path []string) {
 //	hc := transport.NewSocksHttpClient("")
 //	hc.Timeout = 1 * time.Hour
 //

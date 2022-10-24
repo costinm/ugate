@@ -9,11 +9,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/costinm/hbone/nio"
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
-//
 func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
 	nl, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -42,7 +42,7 @@ func IptablesCapture(ug *ugatesvc.UGate, addr string, in bool) error {
 		}
 
 		go func() {
-			str := ugate.GetStream(remoteConn, remoteConn)
+			str := nio.GetStream(remoteConn, remoteConn)
 			ug.OnStream(str)
 			defer ug.OnStreamDone(str)
 
@@ -65,7 +65,7 @@ type IptablesIn struct {
 	Gate *ugatesvc.UGate
 }
 
-func (ipo *IptablesOut) Handle(str *ugate.Stream) error {
+func (ipo *IptablesOut) Handle(str *nio.Stream) error {
 	str.Dest, str.ReadErr = SniffIptables(str)
 	if str.ReadErr != nil {
 		return str.ReadErr
@@ -79,8 +79,8 @@ func (ipo *IptablesOut) Handle(str *ugate.Stream) error {
 	}
 
 	str.Route = cfg
-	str.Type = cfg.Protocol
-	str.Direction = ugate.StreamTypeOut
+	str.Type = "ipto"
+	str.Direction = nio.StreamTypeOut
 
 	str.ReadErr = ipo.Gate.HandleStream(str)
 	return str.ReadErr
@@ -88,7 +88,7 @@ func (ipo *IptablesOut) Handle(str *ugate.Stream) error {
 
 // Similar with Istio ingress capture. Original DST is the intended
 // addr and port.
-func (ipo *IptablesIn) Handle(str *ugate.Stream) error {
+func (ipo *IptablesIn) Handle(str *nio.Stream) error {
 
 	//case ugate.ProtoIPTablesIn:
 	//	// iptables is replacing the conn - process before creating the buffer
@@ -104,8 +104,8 @@ func (ipo *IptablesIn) Handle(str *ugate.Stream) error {
 		str.Dest = cfg.ForwardTo
 	}
 	str.Route = cfg
-	str.Type = cfg.Protocol
-	str.Direction = ugate.StreamTypeIn
+	//str.Type = cfg.Protocol
+	str.Direction = nio.StreamTypeIn
 
 	str.ReadErr = ipo.Gate.HandleStream(str)
 	return str.ReadErr
@@ -126,7 +126,7 @@ func (ipo *IptablesIn) Handle(str *ugate.Stream) error {
 // https://github.com/ryanchapman/go-any-proxy/blob/master/any_proxy.go,
 // and other examples.
 // Based on REDIRECT.
-func SniffIptables(str *ugate.Stream) (string, error) {
+func SniffIptables(str *nio.Stream) (string, error) {
 	if _, ok := str.Out.(*net.TCPConn); !ok {
 		return "", errors.New("invalid connection for iptbles")
 	}

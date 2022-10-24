@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/costinm/ugate"
+	"github.com/costinm/hbone/nio"
 	"golang.org/x/net/http2"
 )
 
@@ -21,13 +21,13 @@ import (
 // Port 443 (if root or redirected), or BASE + 7
 //
 // curl https://$NAME/ --connect-to $NAME:443:127.0.0.1:15007
-func (ug *UGate) acceptedHbone(rawStream *ugate.Stream) error {
+func (ug *UGate) acceptedHbone(rawStream *nio.Stream) error {
 
 	tlsCfg := ug.TLSConfig
-	tc, err := ug.NewTLSConnIn(rawStream.Context(), rawStream.Listener, rawStream, tlsCfg)
+	tc, err := ug.NewTLSConnIn(rawStream.Context(), rawStream.Listener, nil, rawStream, tlsCfg)
 	if err != nil {
 		rawStream.ReadErr = err
-		log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, rawStream.Route, err)
+		log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, err)
 		return nil
 	}
 
@@ -49,7 +49,7 @@ func (ug *UGate) acceptedHbone(rawStream *ugate.Stream) error {
 
 // Handles an accepted connection with plain text h2, intended for
 // hbone protocol.
-func (ug *UGate) acceptedHboneC(tc *ugate.Stream) error {
+func (ug *UGate) acceptedHboneC(tc *nio.Stream) error {
 	tc.PostDial(tc, nil)
 	ug.H2Handler.h2Server.ServeConn(
 		tc,
@@ -92,8 +92,8 @@ func (l *H2Transport) httpHandleHboneC(w http.ResponseWriter, r *http.Request) {
 
 	// TODO: parse Envoy / hbone headers.
 
-	if ugate.DebugClose {
-		log.Println("Hbone-Start ", r.Method, r.URL, r.Proto, r.Header, RemoteID, "", r.RemoteAddr)
+	if nio.DebugClose {
+		log.Println("Hbone-RoundTripStart ", r.Method, r.URL, r.Proto, r.Header, RemoteID, "", r.RemoteAddr)
 	}
 
 	// TCP proxy for SSH
@@ -104,16 +104,13 @@ func (l *H2Transport) httpHandleHboneC(w http.ResponseWriter, r *http.Request) {
 	tlsCfg := l.ug.TLSConfig
 
 	// Create a stream, used for proxy with caching.
-	rawStream := ugate.NewStreamRequest(r, w, nil)
-	rawStream.Listener = &ugate.Listener{
-		ALPN: []string{"h2"},
-	}
+	rawStream := nio.NewStreamRequest(r, w, nil)
 
-	tc, err := l.ug.NewTLSConnIn(rawStream.Context(), rawStream.Listener, rawStream,
+	tc, err := l.ug.NewTLSConnIn(rawStream.Context(), rawStream.Listener, []string{"h2"}, rawStream,
 		tlsCfg)
 	if err != nil {
 		rawStream.ReadErr = err
-		log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, rawStream.Route, err)
+		log.Println("TLS: ", rawStream.RemoteAddr(), rawStream.Dest, err)
 		return
 	}
 
@@ -159,16 +156,16 @@ func HboneCat(ug *UGate, urlOrHost string, tls bool, stdin io.ReadCloser,
 		return err
 	}
 
-	var nc *ugate.Stream
+	var nc *nio.Stream
 	if tls {
-		plain := ugate.NewStreamRequestOut(r, o, res, nil)
+		plain := nio.NewStreamRequestOut(r, o, res, nil)
 		nc, err = ug.NewTLSConnOut(context.Background(), plain, ug.TLSConfig,
 			"", []string{"h2"})
 		if err != nil {
 			return err
 		}
 	} else {
-		nc = ugate.NewStreamRequestOut(r, o, res, nil)
+		nc = nio.NewStreamRequestOut(r, o, res, nil)
 	}
 	go func() {
 		b1 := make([]byte, 1024)

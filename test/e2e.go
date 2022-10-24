@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 
+	"github.com/costinm/hbone"
 	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/cfgfs"
 	"github.com/costinm/ugate/pkg/ugatesvc"
@@ -46,12 +47,12 @@ var (
 
 func InitEcho(port int) *ugatesvc.UGate {
 	cs := cfgfs.NewConf()
-	ug := ugatesvc.NewGate(&net.Dialer{}, nil, &ugate.GateCfg{
+	ug := ugatesvc.NewGate(&net.Dialer{}, nil, &ugate.MeshSettings{
 		BasePort: port,
 	}, cs)
 
 	// Echo - TCP
-	ug.StartListener(&ugate.Listener{
+	ug.StartListener(&hbone.Listener{
 		Address: fmt.Sprintf("0.0.0.0:%d", port+12),
 		Handler: &ugatesvc.EchoHandler{},
 	})
@@ -60,7 +61,7 @@ func InitEcho(port int) *ugatesvc.UGate {
 }
 
 // InitTestServer creates a node with the given config.
-func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate)) *ugatesvc.UGate {
+func InitTestServer(kubecfg string, cfg *ugate.MeshSettings, ext func(*ugatesvc.UGate)) *ugatesvc.UGate {
 	basePort := cfg.BasePort
 	cfg.Domain = "test.cluster.local"
 	cs := cfgfs.NewConf()
@@ -74,12 +75,12 @@ func InitTestServer(kubecfg string, cfg *ugate.GateCfg, ext func(*ugatesvc.UGate
 	}
 
 	// Echo - TCP
-	ug.StartListener(&ugate.Listener{
+	ug.StartListener(&hbone.Listener{
 		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+11),
 		Protocol: "tls",
 		Handler:  &ugatesvc.EchoHandler{},
 	})
-	ug.StartListener(&ugate.Listener{
+	ug.StartListener(&hbone.Listener{
 		Address: fmt.Sprintf("0.0.0.0:%d", basePort+12),
 		Handler: &ugatesvc.EchoHandler{},
 	})
@@ -97,7 +98,7 @@ var chunk2 = []byte("chunk2")
 func CheckEcho(in io.Reader, out io.Writer) (string, error) {
 
 	d := make([]byte, 2048)
-	// Start with a write - client send first (echo will wait, to verify that body is not cached)
+	// RoundTripStart with a write - client send first (echo will wait, to verify that body is not cached)
 	_, err := out.Write(chunk1)
 	if err != nil {
 		return "", err
@@ -271,11 +272,11 @@ const CAROL_KEYS = `
 
 func BasicGate() *ugatesvc.UGate {
 	config := ugatesvc.NewConf(".", "./var/lib/dmesh")
-	cfg := &ugate.GateCfg{
+	cfg := &ugate.MeshSettings{
 		BasePort: 12000,
 		Domain:   "h.webinf.info",
 	}
-	// Start a Gate. Basic H2 and H2R services enabled.
+	// RoundTripStart a Gate. Basic H2 and H2R services enabled.
 	ug := ugatesvc.NewGate(&net.Dialer{}, nil, cfg, config)
 
 	return ug

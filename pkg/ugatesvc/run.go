@@ -6,8 +6,8 @@ import (
 	"github.com/costinm/ugate"
 )
 
-func Run(config ugate.ConfStore, g *ugate.GateCfg) (*UGate, error){
-	// Start a Gate. Basic H2 and H2R services enabled.
+func Run(config ugate.ConfStore, g *ugate.MeshSettings) (*UGate, error) {
+	// RoundTripStart a Gate. Basic H2 and H2R services enabled.
 	ug := New(config, nil, g)
 
 	sf := []StartFunc{}
@@ -27,4 +27,3 @@ func Run(config ugate.ConfStore, g *ugate.GateCfg) (*UGate, error){
 	log.Println("Started: ", ug.Auth.ID)
 	return ug, nil
 }
-

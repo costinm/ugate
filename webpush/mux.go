@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/costinm/ugate/auth"
+	"github.com/costinm/meshauth"
 )
 
 //Old: go:generate protoc --gogofaster_out=$GOPATH/src webpush.proto
@@ -55,7 +55,7 @@ type Mux struct {
 	ServeMux *http.ServeMux
 
 	// Auth holds the private key and Id of this node. Used to encrypt and decrypt.
-	Auth *auth.Auth
+	Auth *meshauth.MeshAuth
 }
 
 func NewMux() *Mux {
@@ -76,10 +76,10 @@ func nextId() string {
 	return fmt.Sprintf("%d", id)
 }
 
-// Init a mux with a http.Mux
+// Init a mux with a http.Transport
 // Normlly there is a single mux in a server - multiple mux
 // are used for testing.
-func InitMux(mux *Mux, hmux *http.ServeMux, auth *auth.Auth) {
+func InitMux(mux *Mux, hmux *http.ServeMux, auth *meshauth.MeshAuth) {
 	mux.Auth = auth
 	hmux.HandleFunc("/push/", mux.HTTPHandlerWebpush)
 	hmux.HandleFunc("/subscribe", mux.SubscribeHandler)
@@ -173,7 +173,7 @@ func (mux *Mux) SendMessage(ev *Message) error {
 func (ms *MsgConnection) maybeSend(parts []string, ev *Message, k string) {
 	// TODO: check the path !
 	if parts[0] != "" {
-		// TODO: send if the peer ID matches, or if peer has sent a (signed) event message that the node
+		// TODO: send if the peer WorkloadID matches, or if peer has sent a (signed) event message that the node
 		// is connected
 	}
 
@@ -204,7 +204,6 @@ func (ms *MsgConnection) maybeSend(parts []string, ev *Message, k string) {
 // the final destination is the current node.
 //
 // Message will be passed to one or more of the local handlers, based on type.
-//
 func (mux *Mux) HandleMessageForNode(ev *Message) error {
 	if ev.Time == 0 {
 		ev.Time = time.Now().Unix()
