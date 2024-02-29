@@ -23,19 +23,18 @@
 package udp
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/costinm/hbone"
+	"github.com/costinm/meshauth"
+	"github.com/costinm/ssh-mesh/nio"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 // TODO: For TUN capture, we can process the UDP packet directly, without going through the stack.
@@ -113,14 +112,14 @@ var (
 // This should be sufficient for local capture and small p2p nets.
 // In the mesh, UDP should be encapsulated in WebRTC or quic.
 type UdpNat struct {
-	ugate.Stats
+	nio.Stats
 
 	// External address - string
 	Dest string
 	// External address
 	DestAddr *net.UDPAddr
 
-	//nio.Stream
+	//util.Stream
 	// bound to a local port (on the real network).
 	UDP *net.UDPConn
 
@@ -139,14 +138,14 @@ type UdpNat struct {
 // This is typically a netstack or TProxy
 var TransparentUDPWriter ugate.UdpWriter
 
-type UDPGate struct {
-	cfg *ugatesvc.UGate
+type UDPListener struct {
+	cfg *ugate.UGate
 
 	// NAT
 	udpLock   sync.RWMutex
 	ActiveUdp map[string]*UdpNat
 
-	AllUdpCon map[string]*ugate.HostStats
+	//AllUdpCon map[string]*ugatesvc.HostStats
 
 	// UDP
 	// Capture return - sends packets back to client app.
@@ -155,49 +154,37 @@ type UDPGate struct {
 
 	// Timeout for UDP sockets. Default 60 sec.
 	ConnTimeout time.Duration
+	l           *meshauth.PortListener
 }
 
-func New(ug *ugatesvc.UGate) *UDPGate {
-	udpg := &UDPGate{
-		cfg:         ug,
-		ConnTimeout: 60 * time.Second,
-		ActiveUdp:   map[string]*UdpNat{},
-		AllUdpCon:   map[string]*ugate.HostStats{},
-	}
-	if ug.Mux != nil {
-		udpg.InitMux(ug.Mux)
-	}
-	ug.UDPHandler = udpg
-	for k, l := range ug.Config.Listeners {
-		if strings.HasPrefix(k, "udp://") {
-			l.Address = k
-			udpg.Listener(l)
-			log.Println("uGate: listen UDP ", l.Address, l.ForwardTo)
+func New(ug *ugate.UGate, l *meshauth.PortListener) *UDPListener {
+	if ug.UDPHandler == nil {
+		udpg := &UDPListener{
+			cfg:         ug,
+			ConnTimeout: 60 * time.Second,
+			ActiveUdp:   map[string]*UdpNat{},
+			//AllUdpCon:   map[string]*ugatesvc.HostStats{},
 		}
+		udpg.l = l
+		udpg.InitMux(ug.Mux)
+		ug.UDPHandler = udpg
+		udpg.periodic()
 	}
-	udpg.periodic()
-	return udpg
+	return ug.UDPHandler.(*UDPListener)
 }
 
-func (udpg *UDPGate) periodic() {
+func (udpg *UDPListener) periodic() {
 	FreeIdleSockets(udpg)
 	time.AfterFunc(60*time.Second, udpg.periodic)
 }
 
-// http debug/ui
+// http debug/metrics
 
-func (udpg *UDPGate) InitMux(mux *http.ServeMux) {
-	mux.HandleFunc("/dmesh/udpa", udpg.HttpUDPNat)
-	mux.HandleFunc("/dmesh/udp", udpg.HttpAllUDP)
+func (udpg *UDPListener) InitMux(mux *http.ServeMux) {
+	mux.HandleFunc("/dmesh/udpa/"+udpg.l.Address, udpg.HttpUDPNat)
 }
 
-func (udpg *UDPGate) HttpAllUDP(w http.ResponseWriter, r *http.Request) {
-	udpg.udpLock.RLock()
-	defer udpg.udpLock.RUnlock()
-	json.NewEncoder(w).Encode(udpg.AllUdpCon)
-}
-
-func (udpg *UDPGate) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
+func (udpg *UDPListener) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
 	udpg.udpLock.RLock()
 	defer udpg.udpLock.RUnlock()
 	json.NewEncoder(w).Encode(udpg.ActiveUdp)
@@ -225,7 +212,7 @@ func (udpg *UDPGate) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
 //	the client will see the local address of this node, and the same port that is used with the remote.
 //
 // udpN is the 'dialed connection' -
-func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *net.UDPConn, udpN *UdpNat, writer ugate.UdpWriter) {
+func remoteConnectionReadLoop(gw *UDPListener, localAddr *net.UDPAddr, acceptConn *net.UDPConn, udpN *UdpNat, writer ugate.UdpWriter) {
 	if DumpUdp {
 		log.Println("Starting remote loop for ", localAddr, udpN.ReverseSrcAddr, udpN.DestAddr, udpN.Dest)
 	}
@@ -234,7 +221,7 @@ func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *n
 
 	for {
 		// TODO: reuse, detect MTU. Need to account for netstack buffer ownership
-		// upstreamConn is a UDP Listener bound to a random port, receiving messages
+		// upstreamConn is a UDP PortListener bound to a random port, receiving messages
 		// from the remote app (or any other app in case of STUN)
 		size, srcAddr, err := udpN.UDP.ReadFromUDP(buffer[0:cap(buffer)])
 		if err != nil {
@@ -275,7 +262,7 @@ func remoteConnectionReadLoop(gw *UDPGate, localAddr *net.UDPAddr, acceptConn *n
 	}
 }
 
-func forwardReadLoop(gw *UDPGate, l *hbone.Listener, udpL *net.UDPConn) {
+func forwardReadLoop(gw *UDPListener, l *meshauth.PortListener, udpL *net.UDPConn) {
 	remoteA, err := net.ResolveUDPAddr("udp", l.ForwardTo)
 	if err != nil {
 		log.Println("Invalid forward address ", l.ForwardTo, err)
@@ -288,7 +275,7 @@ func forwardReadLoop(gw *UDPGate, l *hbone.Listener, udpL *net.UDPConn) {
 	defer bufferPoolUdp.Put(buffer)
 	for {
 		// TODO: reuse, detect MTU. Need to account for netstack buffer ownership
-		// upstreamConn is a UDP Listener bound to a random port, receiving messages
+		// upstreamConn is a UDP PortListener bound to a random port, receiving messages
 		// from the remote app (or any other app in case of STUN)
 		size, srcAddr, err := udpL.ReadFromUDP(buffer[0:cap(buffer)])
 		if err != nil {
@@ -309,7 +296,7 @@ func forwardReadLoop(gw *UDPGate, l *hbone.Listener, udpL *net.UDPConn) {
 			udpCon, err := net.ListenUDP("udp", &net.UDPAddr{
 				Port: 0,
 			})
-			setReceiveBuffer(udpCon, bufferSize)
+			SetReceiveBuffer(udpCon, bufferSize)
 
 			if err != nil {
 				log.Println("udp proxy failed to listen", err)
@@ -354,17 +341,15 @@ func forwardReadLoop(gw *UDPGate, l *hbone.Listener, udpL *net.UDPConn) {
 //	}
 //}
 
-func (udpg *UDPGate) Listener(lc *hbone.Listener) {
+// Listener creates a regular UDP listener port
+func (udpg *UDPListener) Listener(lc *meshauth.PortListener) {
 	log.Println("Adding UDP ", lc)
-	// port 0
-	// TODO: attempt to use the localPort first
-	ua, _ := url.Parse(lc.Address)
-	_, p, _ := net.SplitHostPort(ua.Host)
+	_, p, _ := net.SplitHostPort(lc.Address)
 	pp, _ := strconv.Atoi(p)
 	udpCon, err := net.ListenUDP("udp", &net.UDPAddr{
 		Port: pp,
 	})
-	setReceiveBuffer(udpCon, bufferSize)
+	SetReceiveBuffer(udpCon, bufferSize)
 
 	if err != nil {
 		log.Println("udp proxy failed to listen", err)
@@ -377,7 +362,7 @@ func (udpg *UDPGate) Listener(lc *hbone.Listener) {
 // HandleUDP is processing a captured UDP packet. It can be captured by iptables TPROXY or
 // netstack TUN.
 // Will create a NAT, using a local port as source and translating back.
-func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte) {
+func (udpg *UDPListener) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte) {
 	if dstPort == 1900 {
 		return
 	}
@@ -414,17 +399,17 @@ func (udpg *UDPGate) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP,
 			return
 		}
 
-		setReceiveBuffer(udpCon, bufferSize)
+		SetReceiveBuffer(udpCon, bufferSize)
 
 		udpN = &UdpNat{
 			UDP: udpCon,
 		}
 
-		l := udpg.cfg.FindRoutePrefix(dstAddr, dstPort, "udp://")
-		if l.ForwardTo != "" {
-			udpN.DestAddr, err = net.ResolveUDPAddr("udp", l.ForwardTo)
+		l, _ := udpg.cfg.Cluster(context.Background(), net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(dstPort)))) //FindRoutePrefix(dstAddr, dstPort, "udp://")
+		if l != nil {
+			udpN.DestAddr, err = net.ResolveUDPAddr("udp", l.Addr)
 			if err != nil {
-				log.Println("Failed to resolve ", l.ForwardTo, err)
+				log.Println("Failed to resolve ", l.Addr, err)
 				return
 			}
 			udpN.ReverseSrcAddr = &net.UDPAddr{IP: dstAddr, Port: int(dstPort)}
@@ -470,7 +455,7 @@ const bufferSize = (1 << 20) * 2
 
 // Called on the periodic cleanup thread (~60sec), or if too many sockets open.
 // Will update udp stats. Default UDP timeout to 60 sec.
-func FreeIdleSockets(gw *UDPGate) {
+func FreeIdleSockets(gw *UDPListener) {
 
 	var clientsToTimeout []string
 
@@ -488,18 +473,18 @@ func FreeIdleSockets(gw *UDPGate) {
 			remote.Closed = true
 			clientsToTimeout = append(clientsToTimeout, client)
 
-			hs, f := gw.AllUdpCon[remote.Dest]
-			if !f {
-				hs = &ugate.HostStats{Open: time.Now()}
-				gw.AllUdpCon[remote.Dest] = hs
-			}
-			hs.Last = remote.LastRead
-			hs.SentPackets += remote.SentPackets
-			hs.SentBytes += remote.SentBytes
-			hs.RcvdPackets += remote.RcvdPackets
-			hs.RcvdBytes += remote.RcvdBytes
-
-			hs.Count++
+			//hs, f := gw.AllUdpCon[remote.MeshCluster]
+			//if !f {
+			//	hs = &ugatesvc.HostStats{Open: time.Now()}
+			//	gw.AllUdpCon[remote.MeshCluster] = hs
+			//}
+			//hs.Last = remote.LastRead
+			//hs.SentPackets += remote.SentPackets
+			//hs.SentBytes += remote.SentBytes
+			//hs.RcvdPackets += remote.RcvdPackets
+			//hs.RcvdBytes += remote.RcvdBytes
+			//
+			//hs.Count++
 		} else {
 			//log.Printf("UDPC: active %v", remote)
 			active++
@@ -520,7 +505,7 @@ func FreeIdleSockets(gw *UDPGate) {
 	gw.udpLock.Unlock()
 }
 
-func (gw *UDPGate) Close() error {
+func (gw *UDPListener) Close() error {
 	gw.udpLock.Lock()
 	//gw.closed = true
 	for _, conn := range gw.ActiveUdp {

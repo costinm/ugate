@@ -3,30 +3,35 @@ package ugated
 import (
 	"net/http"
 
-	"github.com/costinm/ugate/pkg/ugatesvc"
+	"github.com/costinm/ugate"
+
 	"github.com/gorilla/websocket"
 )
 
 func init() {
-	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
+	ugate.Modules["ws"] = func(ug *ugate.UGate) {
 		w := &ws{ug: ug}
 
 		ug.Mux.Handle("/ws/", w)
-
-		return nil
-	})
+	}
 }
 
 type ws struct {
-	ug *ugatesvc.UGate
+	ug *ugate.UGate
 }
 
 // Integrate with Websocket as a server, equvalent with a connect.
 // This can also be used for SSH over WS instead of HTTPS over WS.
 func (ws *ws) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u := websocket.Upgrader{}
-	u.Upgrade(w, r, http.Header{})
-
+	nc, err := u.Upgrade(w, r, http.Header{})
+	if err != nil {
+		w.WriteHeader(500)
+		return
+	}
+	// nc is a raw connection - we still have access to headers.
+	// For now - just start a SSH connection over ws
+	nc.Close()
 }
 
 // "golang.org/x/net/websocket" - not supported. RoundTripStart only text frames.

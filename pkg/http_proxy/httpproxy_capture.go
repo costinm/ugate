@@ -1,37 +1,65 @@
 package http_proxy
 
 import (
+	"context"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"strings"
 
-	"github.com/costinm/hbone/nio"
-	"github.com/costinm/ugate/pkg/ugatesvc"
+	"github.com/costinm/ssh-mesh/nio"
+
+	"github.com/costinm/ugate"
+
 )
 
-// Used for HTTP_PROXY=localhost:port, to intercept outbound traffic using http proxy protocol.
-// CONNECT too.
+// Used for HTTP_PROXY=localhost:port, to intercept outbound traffic using http
+// proxy protocol.
+//
+// It also handles CONNECT and 'transparent' proxy.
+//
+//
 
 // Android allows using HTTP_PROXY, and is used by browser - more efficient than TUN.
 
-// HTTPGate handles HTTP requests
-type HTTPGate struct {
-	//Auth *auth.Auth
-	gw *ugatesvc.UGate
+// HttpProxy handles HTTP PROXY and plain text HTTP requests (primarily on port 80)
+// for egress side.
+//
+// A DNAT or explicit proxy are sufficient - no need for TPROXY or REDIRECT, host
+// is extracted from request and sessions should use cookies.
+type HttpProxy struct {
+	gw *ugate.UGate
 }
 
-func NewHTTPProxy(gw *ugatesvc.UGate) *HTTPGate {
-	return &HTTPGate{
+func NewHTTPProxy(gw *ugate.UGate) *HttpProxy {
+	return &HttpProxy{
 		gw: gw,
 	}
+}
+
+func ForwardHTTP(c *ugate.MeshCluster, w http.ResponseWriter, r *http.Request, pathH string) error {
+
+	r.Host = pathH
+	r1 := nio.CreateUpstreamRequest(w, r)
+
+	r1.URL.Scheme = "http"
+
+	// will be used by RoundTrip.
+	r1.URL.Host = pathH
+
+	res, err := c.RoundTrip(r1)
+	if err != nil {
+		return err
+	}
+	nio.SendBackResponse(w, r, res, err)
+	return nil
 }
 
 // RoundTripStart listening on the addr, as a HTTP_PROXY
 // Handles CONNECT and PROXY requests using the gateway
 // for streams.
-func (gw *HTTPGate) HttpProxyCapture(addr string) error {
+func (gw *HttpProxy) HttpProxyCapture(addr string) error {
 	// For http proxy we need a dedicated plain HTTP port
 	nl, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -49,28 +77,29 @@ func (gw *HTTPGate) HttpProxyCapture(addr string) error {
 			gw.captureHttpProxyAbsURL(w, r)
 			return
 		}
+		gw.captureHttpProxyAbsURL(w, r)
 	}))
 	return nil
 }
 
 // Http proxy to a configured HTTP host. Hostname to HTTP address explicitly
 // configured. Also hostnmae to file serving.
-func (gw *HTTPGate) proxy(w http.ResponseWriter, r *http.Request) bool {
+func (gw *HttpProxy) proxy(w http.ResponseWriter, r *http.Request) bool {
 	// TODO: if host is XXXX.m.SUFFIX -> forward to node.
 
-	host, found := gw.gw.Config.Clusters[r.Host]
+	host, found := gw.gw.Clusters[r.Host]
 	if !found {
 		return false
 	}
 	if len(host.Addr) > 0 {
 		log.Println("FWDHTTP: ", r.Method, r.Host, r.RemoteAddr, r.URL)
-		gw.gw.H2Handler.ForwardHTTP(w, r, host.Addr)
+		ForwardHTTP(host, w, r, host.Addr)
 	}
 	return true
 }
 
 // WIP: HTTP proxy with absolute address, to a QUIC server (or sidecar)`
-func (gw *HTTPGate) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Request) {
+func (gw *HttpProxy) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Request) {
 	// HTTP proxy mode - uses the QUIC client to connect to the node
 	// TODO: redirect via VPN, only root VPN can do plaintext requests
 
@@ -81,6 +110,7 @@ func (gw *HTTPGate) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Reques
 	// User-Agent, Acept, Proxy-Connection:Keep-Alive
 
 	if gw.proxy(w, r) {
+		// found the host in clusters - it is an internal/mesh request
 		return
 	}
 
@@ -99,7 +129,7 @@ func (gw *HTTPGate) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Reques
 	}
 	origBody := resp.Body
 	defer origBody.Close()
-	ugatesvc.CopyResponseHeaders(w.Header(), resp.Header)
+	nio.CopyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 
@@ -111,7 +141,7 @@ func (gw *HTTPGate) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Reques
 // a TCP UdpNat to a mesh node, from localhost or from a net node.
 // Only used to capture local traffic - should be bound to localhost only, like socks.
 // It speaks HTTP/1.1, no QUIC
-func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
+func (gw *HttpProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hij, ok := w.(http.Hijacker)
 	if !ok {
 		w.WriteHeader(503)
@@ -125,7 +155,7 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: second param may contain unprocessed data.
-	proxyClient, _, e := hij.Hijack()
+	proxyClient, clientBuffer, e := hij.Hijack()
 	if e != nil {
 		w.WriteHeader(503)
 		w.Write([]byte("Error - no hijack support"))
@@ -133,21 +163,29 @@ func (gw *HTTPGate) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//ra := proxyClient.RemoteAddr().(*net.TCPAddr)
+
 	str := nio.GetStream(proxyClient, proxyClient)
-	defer gw.gw.OnStreamDone(str)
+	if clientBuffer.Reader.Size() > 0 {
+
+	}
 	gw.gw.OnStream(str)
+	defer gw.gw.OnStreamDone(str)
 
 	str.Dest = host
 	str.Direction = nio.StreamTypeOut
-	str.PostDialHandler = func(conn net.Conn, err error) {
-		if err != nil {
-			w.WriteHeader(503)
-			w.Write([]byte("RoundTripStart error" + err.Error()))
-			return
-		}
-		proxyClient.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
-	}
-	// TODO: add sniffing on the outbound
 
-	gw.gw.DialAndProxy(str)
+	nc, err := gw.gw.DialContext(context.Background(), "tcp", str.Dest)
+
+	if err != nil {
+		w.WriteHeader(503)
+		w.Write([]byte("RoundTripStart error" + err.Error()))
+		return
+	}
+	proxyClient.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
+
+	nio.Proxy(nc, str, str, str.Dest)
+
+	//defer nc.Close()
+	//
+	//str.ProxyTo(nc)
 }

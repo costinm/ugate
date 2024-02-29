@@ -66,6 +66,7 @@ func (gw *LLDiscovery) RefreshNetworks() {
 
 	t0 := time.Now()
 	newAct, err := ActiveNetworks(gw)
+	MetricActiveNetworks.Set(int64(len(newAct)))
 
 	if err != nil {
 		// In android ActiveNetworks doesn't work, permission denied.
@@ -114,12 +115,6 @@ func (gw *LLDiscovery) RefreshNetworks() {
 		if existing.unicastUdpServer4 != nil {
 			existing.unicastUdpServer4.Close()
 		}
-		//if existing.tcpListener != nil {
-		//	existing.tcpListener.Close()
-		//}
-		//if existing.multicastUdpServer != nil {
-		//	existing.multicastUdpServer.Close()
-		//}
 		if existing.multicastRegisterConn != nil {
 			existing.multicastRegisterConn.Close()
 		}
@@ -260,7 +255,7 @@ func (gw *LLDiscovery) RefreshNetworks() {
 	// (at least on the same zone that changed)
 	if changed {
 		go gw.AnnounceMulticast()
-
+		MetricChangedNetworks.Add(1)
 		log.Println("MCDirect: RefreshNetworks", time.Since(t0), time.Since(t1), names)
 	}
 
@@ -325,10 +320,10 @@ func ActiveNetworks(gw *LLDiscovery) (map[string]*ActiveInterface, error) {
 		}
 
 		a := &ActiveInterface{
-				Name:  ifi.Name,
-				IP6LL: ip,
-				IP4:   ip4,
-				IPPub: ippub,
+			Name:  ifi.Name,
+			IP6LL: ip,
+			IP4:   ip4,
+			IPPub: ippub,
 			iface: &ifi,
 		}
 		anets[ifi.Name] = a

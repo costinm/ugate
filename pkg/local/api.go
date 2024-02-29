@@ -1,15 +1,69 @@
 package local
 
 import (
+	"expvar"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/costinm/meshauth"
-	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
+
+var (
+	MetricActiveNetworks  = expvar.NewInt("net_active_interfaces")
+	MetricChangedNetworks = expvar.NewInt("net_changed_interfaces_total")
+	MetricLLReceived      = expvar.NewInt("ll_receive_total")
+	MetricLLReceivedAck   = expvar.NewInt("ll_receive_ack_total")
+	MetricLLReceiveErr    = expvar.NewInt("ll_receive_err_total")
+	MetricLLTotal         = expvar.NewInt("ll_peers")
+)
+
+// Information about a node.
+// Sent periodically, signed by the origin - for example as a JWT, or UDP
+// proto.
+// TODO: map it to Pod, IPFS announce
+// TODO: move Wifi discovery to separate package.
+type NodeAnnounce struct {
+	UA string `json:"UA,omitempty"`
+
+	// Non-link local IPs from all interfaces. Includes public internet addresses
+	// and Wifi IP4 address. Used to determine if a node is directly connected.
+	IPs []*net.UDPAddr `json:"addrs,omitempty"`
+
+	// Set if the node is an active Android AP.
+	SSID string `json:"ssid,omitempty"`
+
+	// True if the node is an active Android AP on the interface sending the message.
+	// Will trigger special handling in link-local - if the receiving interface is also
+	// an android client.
+	AP bool `json:"AP,omitempty"`
+
+	Ack bool `json:"ACK,omitempty"`
+
+	// VIP of the direct parent, if this node is connected.
+	// Used to determine the mesh topology.
+	Vpn string `json:"Vpn,omitempty"`
+}
+
+type Node struct {
+	ID       string
+	LastSeen time.Time
+
+	// In seconds since first seen, last 100
+	Seen []int `json:"-"`
+	// Information from the node - from an announce or message.
+	// Not trusted, self-signed.
+	NodeAnnounce *NodeAnnounce `json:"info,omitempty"`
+	LastSeen4    time.Time
+	Last4        *net.UDPAddr
+	LastSeen6    time.Time
+	Last6        *net.UDPAddr
+}
 
 // link local announcements,discovery and messaging
 type LLDiscovery struct {
+	m sync.RWMutex
+	Nodes map[string]*Node
 
 	// Will be updated with the list of active interfaces
 	// by Refresh() calls or provided by Android.
@@ -44,8 +98,6 @@ type LLDiscovery struct {
 
 	// Defaults to 6970
 	baseListenPort int
-
-	gw *ug.UGate
 
 	// Listening on * for signed messages
 	// Source for sent messages and multicasts

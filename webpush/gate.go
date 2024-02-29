@@ -196,8 +196,8 @@ func (mc *MsgConnection) Close() {
 //	if ev.Time == 0 {
 //		ev.Time = time.Now().Unix()
 //	}
-//	if ev.Id == "" {
-//		ev.Id = mux.Id()
+//	if ev.muxID == "" {
+//		ev.muxID = mux.muxID()
 //	}
 //	parts := strings.Split(ev.To, "/")
 //

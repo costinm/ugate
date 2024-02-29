@@ -1,3 +1,8 @@
+# Other similar solutions
+
+https://github.com/anderspitman/awesome-tunneling
+
+
 
 # MASQUE and QUIC
 
@@ -143,3 +148,66 @@ uses unsafe for string/slice
 
 - for websocket
 - nb tls 
+
+# FRP
+
+- golang
+- v0 - 
+- v1 - over complex, envoy/istio like
+
+Deps:
+- socks5 (armon), oidc, beego, kcp-go
+- gorilla ws and mux
+- pion/stun
+- k8s
+- quic
+- https://github.com/pires/go-proxyproto - ha proxy
+
+# Boringproxy
+
+- ssh 
+- golang
+
+# pyjam.as
+
+https://tunnel.pyjam.as/
+- requires wg-quic
+
+- wireguard based
+- caddy on server side, UDP to the host
+- uses 'caddy load' API to dynamically add a route to the local caddy
+- single host (good for self-hosting, moderately small VPCs - not high QPS)
+- interesting example to automate wg
+
+#  Chisel
+
+- https://github.com/jpillora/chisel
+- ssh over ws
+
+# Bore
+
+- rust
+- not HTTP proxy - just TCP ports
+- may be used with a HTTP proxy like caddy or envoy (with dynamic API)
+- control port and ACCEPT 
+- single host
+
+# Rathole 
+
+- support TLS, TCP and Noise with keypairs (like wireguard)
+- uses control channel
+- single host
+- faster than frp
+- "Use ngix for http forwarding, with rathole as upstream"
+
+# zrok
+
+- based on openziti
+- net foundry FE or self-hosted
+- Openziti:
+  - tunnels for multiple platforms (incl android)
+  - mTLS and JWT and other authn
+  - no L7 AFAIK
+  - Dial and Bind policy - who can provide or use a service
+- libsodium based - wasm included, ed25519
+- java, c, .net, swift

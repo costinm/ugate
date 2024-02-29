@@ -16,10 +16,15 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/costinm/ssh-mesh/nio"
 	"golang.org/x/sys/unix"
 )
 
-// If the PacketConn passed to RoundTripStart or Listen satisfies this interface, quic-go will read the ECN bits from the IP header.
+const MaxPacketBufferSize = 9000
+
+// If the PacketConn passed to RoundTripStart or Listen satisfies this interface, quic-go will read the
+// ECN bits from the IP header.
+//
 // In this case, ReadMsgUDP() will be used instead of ReadFrom() to read packets.
 type OOBCapablePacketConn interface {
 	net.PacketConn
@@ -33,7 +38,7 @@ type packetInfo struct {
 }
 
 type receivedPacket struct {
-	buffer *packetBuffer
+	buffer *nio.Buffer
 
 	remoteAddr net.Addr
 	rcvTime    time.Time
@@ -58,11 +63,12 @@ const (
 
 const ecnMask uint8 = 0x3
 
-func setReceiveBuffer(c net.PacketConn, minSize int) error {
+func SetReceiveBuffer(c net.PacketConn, minSize int) error {
 	conn, ok := c.(interface{ SetReadBuffer(int) error })
 	if !ok {
 		return errors.New("connection doesn't allow setting of receive buffer size. Not a *net.UDPConn?")
 	}
+
 	size, err := inspectReadBuffer(c)
 	if err != nil {
 		return fmt.Errorf("failed to determine receive buffer size: %w", err)
@@ -70,6 +76,7 @@ func setReceiveBuffer(c net.PacketConn, minSize int) error {
 	if size >= minSize {
 		return nil
 	}
+
 	if err := conn.SetReadBuffer(minSize); err != nil {
 		return fmt.Errorf("failed to increase receive buffer size: %w", err)
 	}
@@ -84,6 +91,7 @@ func setReceiveBuffer(c net.PacketConn, minSize int) error {
 	if newSize < minSize {
 		return fmt.Errorf("failed to sufficiently increase receive buffer size (was: %d kiB, wanted: %d kiB, got: %d kiB)", size/1024, minSize/1024, newSize/1024)
 	}
+
 	log.Printf("Increased receive buffer size to %d kiB", newSize/1024)
 	return nil
 }
@@ -167,12 +175,13 @@ func newConn(c OOBCapablePacketConn) (*oobConn, error) {
 }
 
 func (c *oobConn) ReadPacket() (*receivedPacket, error) {
-	buffer := getPacketBuffer()
+	buffer := nio.GetBuffer(0, MaxPacketBufferSize)
 	// The packet size should not exceed protocol.MaxPacketBufferSize bytes
 	// If it does, we only read a truncated packet, which will then end up undecryptable
-	buffer.Data = buffer.Data[:MaxPacketBufferSize]
+	//buffer = buffer[:MaxPacketBufferSize]
 	c.oobBuffer = c.oobBuffer[:cap(c.oobBuffer)]
-	n, oobn, _, addr, err := c.OOBCapablePacketConn.ReadMsgUDP(buffer.Data, c.oobBuffer)
+	data := buffer.Buffer()
+	n, oobn, _, addr, err := c.OOBCapablePacketConn.ReadMsgUDP(data[0:cap(data)], c.oobBuffer)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +240,7 @@ func (c *oobConn) ReadPacket() (*receivedPacket, error) {
 	return &receivedPacket{
 		remoteAddr: addr,
 		rcvTime:    time.Now(),
-		data:       buffer.Data[:n],
+		data:       data[:n],
 		ecn:        ecn,
 		info:       info,
 		buffer:     buffer,

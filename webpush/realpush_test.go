@@ -30,16 +30,16 @@ func xTestFirefox(t *testing.T) {
 
 func send(t *testing.T, epjson string) {
 	ep := []byte(epjson)
-	sub, err := SubscriptionFromJSON(ep)
+	sub, err := meshauth.SubscriptionFromJSON(ep)
 	if err != nil {
 		t.Error(err)
 	}
 
 	message := "I am the testing walrus"
 
-	vapid := meshauth.NewMeshAuth()
-	vapid.SetVapid(vapidPub, vapidPriv)
+	vapid := meshauth.NewMeshAuth(&meshauth.MeshCfg{EC256Pub: vapidPub, EC256Key: vapidPriv})
 	vapid.Name = "test@example.com"
+
 	req, err := NewRequest(sub.Endpoint, sub.Key, sub.Auth, message, 0, vapid)
 	res, err := http.DefaultClient.Do(req)
 

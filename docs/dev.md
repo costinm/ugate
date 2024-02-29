@@ -2,6 +2,10 @@
 
 Few tools that accelerate and simplify the development, and their impact on projects.
 
+```shell
+curl https://$NAME/ --connect-to $NAME:443:127.0.0.1:15007
+```
+
 
 ## Ko
 
@@ -28,68 +32,6 @@ kind.local == use local kind
 
 Can also cross-build, with "--platform=linux/amd64,linux/arm64"
 
-# Skaffold 
-
-It will also check if any file has changed, and in 'dev' mode
-watch for changed files and re-deploy automatically.
-It can also start a debugger and forward ports.
-
-Without certificates and for faster time: deploy in-cluster registry, 
-forward registry port to 5001. In-cluster registry runs on localhost:5001
-
-- use shell script to build - most flexible, easy to plug in ko or other targets
-- schema rewrite/refactoring removes comments.
-
-
-```yaml
-apiVersion: skaffold/v2beta14
-kind: Config
-metadata:
-  name:    istiod
-...
-
-
-build:
-  insecureRegistries:
-    - localhost:5001
-
-...
-
-    # Building real istiod
-    # Due to KO, which uses the image == last component of the go package
-    - image: pilot-discovery
-      context: /ws/istio-stable/src/istio.io/istio
-      custom:
-        buildCommand: /ws/dmesh-src/wpgate/bin/build-istiod.sh
-        dependencies:
-          paths:
-            - "pilot/**"
-
-      context: .
-      custom:
-        buildCommand: ../../bin/build-istiod.sh
-        dependencies:
-          paths:
-            - "../../../istio/pilot/**"
-
-deploy:
-  kubectl:
-    manifests:
-      - ns.yaml
-      - ../helm/istiod/charts/*.yaml
-
-```
-
-Env variables in the build command:
-
-```shell
-PUSH_IMAGE=true
-IMAGE=gcr.io/dmeshgate/istiod:t-2021-05-15_11-23
-IMAGE_REPO=gcr.io/dmeshgate/istiod
-IMAGE_TAG=t-2021-05-15_11-23
-SKAFFOLD_UPDATE_CHECK=false
-
-```
 
 
 ## Okteto

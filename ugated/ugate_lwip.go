@@ -1,4 +1,5 @@
-// x+build lwip
+//go:build !nolwip
+// +build !nolwip
 
 package ugated
 
@@ -7,9 +8,9 @@ import (
 	"log"
 	"os"
 
+	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/pkg/ext/lwip"
 	"github.com/costinm/ugate/pkg/udp"
-	"github.com/costinm/ugate/pkg/ugatesvc"
-	tun "github.com/costinm/ugate/ugated/pkg/lwip"
 	"github.com/songgao/water"
 )
 
@@ -29,24 +30,25 @@ func openTunLWIP(ifn string) (io.ReadWriteCloser, error) {
 	return ifce.ReadWriteCloser, nil
 }
 
+// init() will load LWIP if dmesh0 is present
+//
+//	sudo   ip tuntap add dev dmesh0 mode tun user build
 func init() {
-	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
+	ugate.Modules["lwip"] = func(ug *ugate.UGate) {
 		dev := os.Getenv("LWIP")
 		if dev == "" {
-			return nil
+			dev = "dmesh0"
+			//return nil
 		}
 		fd, err := openTunLWIP(dev)
 		if err != nil {
-			return nil
+			return
 		}
 
 		log.Println("Using LWIP tun", dev)
 
-		return func(ug *ugatesvc.UGate) {
-			t := tun.NewTUNFD(fd, ug, ug.UDPHandler)
-			udp.TransparentUDPWriter = t
-		}
-		return func(ug *ugatesvc.UGate) {
-		}
-	})
+		t := lwip.NewTUNFD(fd, ug, ug)
+		// Use the TUN for transparent UDP write ?
+		udp.TransparentUDPWriter = t
+	}
 }

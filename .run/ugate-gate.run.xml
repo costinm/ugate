@@ -1,6 +1,5 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="ugate-gate" type="GoApplicationRunConfiguration" factoryName="Go Application">
-    <module name="dmesh" />
     <working_directory value="$PROJECT_DIR$/../ugate/cmd/ugate/testdata/gate" />
     <envs>
       <env name="xGODEBUG" value="http2debug=2" />

@@ -1,15 +1,15 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="ugate-alice" type="GoApplicationRunConfiguration" factoryName="Go Application">
-    <module name="dmesh" />
-    <working_directory value="$PROJECT_DIR$/../ugate/cmd/ugate/testdata/alice" />
-    <go_parameters value="-tags gvisor" />
+    <module name="ugate-ws" />
+    <working_directory value="$PROJECT_DIR$/ugate/testdata/alice" />
+    <go_parameters value="-tags lwip" />
     <envs>
       <env name="xGODEBUG" value="http2debug=2" />
-      <env name="GVISOR" value="dmesh0" />
+      <env name="GVISOR" value="tuntest" />
     </envs>
-    <kind value="DIRECTORY" />
-    <package value="github.com/costinm/ugate/cmd/ugate" />
-    <directory value="$PROJECT_DIR$/../ugate/cmd/ugate/" />
+    <kind value="PACKAGE" />
+    <package value="github.com/costinm/ugate/cmd/ugated" />
+    <directory value="github.com/costinm/ugate/cmd/ugated" />
     <filePath value="$PROJECT_DIR$/../ugate/cmd/ugate/ugate.go" />
     <method v="2" />
   </configuration>

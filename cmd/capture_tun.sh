@@ -12,7 +12,7 @@
 function tunRoute() {
 
     # Find default GW
-    # 'default via 192.168.0.254 dev wlp2s0 proto dhcp metric 600 '
+    # 'default via 192.168.0.254 dev wlp2s0 proto dhcp metrics 600 '
     GW=$(/sbin/ip route | awk '/default/ { print $3 }')
     echo $GW > /tmp/DEFAULT_GW
 

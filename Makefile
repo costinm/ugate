@@ -1,5 +1,5 @@
 ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-OUT=${ROOT_DIR}/out
+OUT=${ROOT_DIR}/../out/ugate
 
 #IMAGE ?= gcr.io/dmeshgate/ugate
 REPO ?= ghcr.io/costinm/ugate
@@ -14,20 +14,42 @@ deploy: deploy/cloudrun deploy/helm
 
 deploy/cloudrun: docker push/ugate run/cloudrun
 
+
 deploy/helm: docker push/ugate run/helm
 
 docker:
 	docker build -t ${IMAGE}:latest .
 
 docker/dev:
-	#docker pull golang:latest
-	docker build -t ${IMAGE}-dev:latest -f tools/dev/Dockerfile tools/dev
+	docker build -t ${IMAGE}-dev:latest -f tools/dev/Dockerfile.devbase \
+		tools/dev
+
+docker/dev-istio:
+	#docker pull gcr.io/istio-testing/build-tools:master-latest
+	docker build -t ${IMAGE}-dev-istio:latest -f tools/dev/Dockerfile.istio-dev \
+		tools/dev
+	docker push ${IMAGE}-dev-istio:latest
 
 push/dev:
 	docker push ${IMAGE}-dev:latest
 
 run/dev:
 	 docker run -it --entrypoint /bin/bash gcr.io/dmeshgate/ugate-dev:latest
+
+docker/devui:
+	#docker pull golang:latest
+	docker build -t ${IMAGE}-dev:cinamon-latest -f tools/dev/Dockerfile.cinamon tools/dev
+
+push/devui:
+	docker push ${IMAGE}-dev:cinamon-latest
+
+run/devui:
+	 docker run -it \
+ 		--entrypoint /bin/bash \
+ 		--rm --name dev \
+             -p 18080:8080 -p 32000:22000 -p 8444:8444 \
+             -v /x/sync/dmesh-src/ugate-ws:/work \
+ 		${IMAGE}-dev:cinamon-latest
 
 run/docker-image:
 	docker run -P -v /ws/dmesh-src/work/s1:/var/lib/istio \
@@ -74,11 +96,11 @@ fw/kiali:
 # Build with docker: 26 sec
 # Both use skaffold
 # Faster than docker.
-push/ko:
-	(cd  cmd/ugate && ko publish . --bare)
-
-deps/ko:
-	go install github.com/google/ko@latest
+#push/ko:
+#	(cd  cmd/ugate && ko publish . --bare)
+#
+#deps/ko:
+#	go install github.com/google/ko@latest
 
 # Run ugate in cloudrun.
 # Storage: Env variables, GCP resources (buckets,secrets,k8s)
@@ -138,10 +160,6 @@ test/iptables:
 	iptables-save |grep ISTIO > ${OUT}/iptables_443_5201.out
 	diff ${OUT}/iptables_443_5201.out cmd/ugate/testdata/iptables/iptables_443_5201.out
 
-okteto:
-	# curl https://get.okteto.com -sSfL | sh
-	okteto up
-
 HOSTS=c1 home
 
 ## For debug
@@ -166,15 +184,32 @@ update:
 
 deps:
 	go install github.com/bufbuild/buf/cmd/buf@latest
+	go install istio.io/tools/cmd/protoc-gen-docs@latest
+	go install istio.io/tools/cmd/protoc-gen-crds@latest
+
 	go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install github.com/bufbuild/connect-go/cmd/protoc-gen-connect-go@latest
+	go install github.com/mikefarah/yq/v4@latest
 
 	# debug tool for std grpc - need http/tcp equivalent
 	go install -v github.com/grpc-ecosystem/grpcdebug@latest
 	# Test tool
 	go install github.com/bojand/ghz/cmd/ghz@latest
+	curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+	chmod +x ./kubectl
+	mv ./kubectl /usr/local/bin
+
+	go install github.com/knusbaum/go9p/cmd/mount9p@latest
+	go install github.com/knusbaum/go9p/cmd/export9p@latest
+	go install github.com/knusbaum/go9p/cmd/import9p@latest
+
+
 
 proto-gen: PATH:=${HOME}/go/bin:${PATH}
 proto-gen:
 	cd proto && buf generate
+
+
+# Other options:
+# GOEXPERIMENT=boringcrypto and "-tags boringcrypto"

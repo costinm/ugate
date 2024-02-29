@@ -3,12 +3,10 @@ package webpush
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/costinm/meshauth"
 )
@@ -79,7 +77,7 @@ func NewRequest(dest string, key, authK []byte,
 
 	// If there is no payload then we don't actually need encryption
 	if message != "" {
-		ec := meshauth.NewContextSend(key, authK)
+		ec := meshauth.NewWebpushEncryption(key, authK)
 		payload, err := ec.Encrypt([]byte(message))
 		if err != nil {
 			return nil, err
@@ -96,37 +94,6 @@ func NewRequest(dest string, key, authK []byte,
 	return req, nil
 }
 
-// SubscriptionFromJSON is a convenience function that takes a JSON encoded
-// PushSubscription object acquired from the browser and returns a pointer to a
-// node.
-func SubscriptionFromJSON(b []byte) (*Subscription, error) {
-	var sub struct {
-		Endpoint string
-		Keys     struct {
-			P256dh string
-			Auth   string
-		}
-	}
-	if err := json.Unmarshal(b, &sub); err != nil {
-		return nil, err
-	}
-
-	b64 := base64.URLEncoding.WithPadding(base64.NoPadding)
-
-	// Chrome < 52 incorrectly adds padding when Base64 encoding the values, so
-	// we need to strip that out
-	key, err := b64.DecodeString(strings.TrimRight(sub.Keys.P256dh, "="))
-	if err != nil {
-		return nil, err
-	}
-
-	auth, err := b64.DecodeString(strings.TrimRight(sub.Keys.Auth, "="))
-	if err != nil {
-		return nil, err
-	}
-
-	return &Subscription{sub.Endpoint, key, auth, ""}, nil
-}
 
 //// Send a message using the Web Push protocol to the recipient identified by the
 //// given subscription object. If the client is nil then the default HTTP client

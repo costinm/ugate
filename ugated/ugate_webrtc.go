@@ -1,18 +1,13 @@
 package ugated
 
 import (
-	"os"
+	"github.com/costinm/ugate"
 
-	"github.com/costinm/ugate/pkg/ugatesvc"
-	"github.com/costinm/ugate/ugated/pkg/webrtc"
+	"github.com/costinm/ugate/pkg/webrtc"
 )
 
 func init() {
-	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
-		if os.Getenv("UGATE_RTC") == "" {
-			return nil
-		}
+	ugate.Modules["webrtc"] = func(ug *ugate.UGate) {
 		go webrtc.InitWebRTCS(ug, ug.Auth)
-		return nil
-	})
+	}
 }

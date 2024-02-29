@@ -2,76 +2,60 @@ package ugate
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"expvar"
+	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"runtime/debug"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/costinm/hbone"
-	"github.com/costinm/hbone/nio"
+	"log/slog"
+
+	"github.com/costinm/meshauth"
+	sshd "github.com/costinm/ssh-mesh"
+	"github.com/costinm/ssh-mesh/nio"
+	"github.com/costinm/ugate/pkg/httpwrapper"
+	msgs "github.com/costinm/ugate/webpush"
+
+	"github.com/costinm/ssh-mesh/nio/syscall"
 )
 
-var (
-	StreamId = uint32(0)
-)
+// Debug for dev support, will log verbose info.
+// Avoiding dependency on logging - eventually a trace interface will be provided
+// so any logger can be used.
+var Debug = false
 
-var (
-	VarzAccepted  = expvar.NewInt("ugate.accepted")
-	VarzAcceptErr = expvar.NewInt("ugate.acceptErr")
-
-	// Proxy behavior
-	VarzReadFrom  = expvar.NewInt("ugate.sReadFrom")
-	VarzReadFromC = expvar.NewInt("ugate.cReadFrom")
-
-	VarzSErrRead  = expvar.NewInt("ugate.sErrRead")
-	VarzSErrWrite = expvar.NewInt("ugate.sErrWrite")
-	VarzCErrRead  = expvar.NewInt("ugate.cErrRead")
-	VarzCErrWrite = expvar.NewInt("ugate.cErrWrite")
-
-	VarzMaxRead = expvar.NewInt("ugate.maxRead")
-
-	// Managed by 'NewTCPProxy' - before dial.
-	TcpConTotal = expvar.NewInt("gate:tcp:total")
-
-	// Managed by updateStatsOnClose - including error cases.
-	TcpConActive = expvar.NewInt("gate:tcp:active")
-)
-
-// Configuration for the micro Gateway.
+// MeshSettings holds the settings for a mesh node.
 type MeshSettings struct {
-	hbone.MeshSettings
-
-	// BasePort is the first port used for the virtual/control ports.
-	// For Istio interop, it defaults to 15000 and uses same offsets.
-	// Primarily used for testing, or if Istio is also used.
-	BasePort int `json:"basePort,omitempty"`
-
-	// Name of the node, defaults to hostname or POD_NAME
-	Name string `json:"name,omitempty"`
-
-	// Domain name, also default control plane and gateway.
-	// If not set, the test/open domain is used, expect poor behavior
-	// (c1.webinf.info). If set to "-", no parent control plane.
-	// This also acts as 'trust domain' and 'mesh id'.
-	Domain string `json:"domain,omitempty"`
-
-	// TODO: other trusted domains/meshes (federation, migration, etc)
-	DomainAliases []string `json:"domainAliases,omitempty"`
-
-	// Additional port listeners.
-	// Routes: listen on 127.0.0.1:port
-	// Ingress: listen on 0.0.0.0:port (or actual IP)
+	// SSHConfig includes MeshCfg - which defines the authentication.
 	//
-	// Port proxies: will register a listener for each port, forwarding to the
-	// given address.
-	Listeners map[string]*hbone.Listener `json:"listeners,omitempty"`
+	// Current ugate mesh 'core' protocol is SSH, other protocols are bridged/gateway-ed
+	// The config is shared with the ssh-mesh project.
+	sshd.SSHConfig `json:inline`
 
-	//Local map[string]*Route `json:"local,omitempty"`
 
-	Routes map[string]*nio.Route `json:"routes,omitempty"`
+	// Most settings should go to 'mesh' and are common.
+	// 'Dest' and identities configs are in MeshCfg.
+
+	// Additional defaults for outgoing connections.
+	// Probably belong to Dest.
+	ConnectTimeout Duration `json:"connect_timeout,omitempty"`
+
+	TCPUserTimeout time.Duration
+
+	// Timeout used for TLS or SSH handshakes. If not set, 3 seconds is used.
+	HandsahakeTimeout time.Duration
 
 	// Configured hosts, key is a domain name without port.
 	// This includes public keys, active addresses. Discovery and on-demand
@@ -79,299 +63,254 @@ type MeshSettings struct {
 	// [namespace]/Node/[WorkloadID]
 	// WorkloadID can be 32B SHA256(cert), 16 or 8B (VIP6) or 'trusted' IP (if infra is
 	// secure - Wireguard or IPsec equivalent).
-	Clusters map[string]*Cluster `json:"hosts,omitempty"`
 
-	// Routes gateways for reverse H2 - key is the domain name, value is the
-	// pubkey or root CA. If IsEmpty, public certificates are required.
-	H2R map[string]string `json:"remoteAccept,omitempty"`
+	// Clusters by hostname. The key is primarily a hostname:port, matching Istio/K8S Service name and ports.
+	// TODO: do we need the port ? With ztunnel all endpoins can be reached, and the service selector applies
+	// to all ports.
+	//
+	// Generally MeshClusters have different public keys/certs.
+	// Includes Nodes, Pods and Services - the key can be the hash of the public key.
+	Clusters map[string]*MeshCluster `json:clusters,omitempty"`
 
-	// NoAccessLog enables logging HTTP and stream close stats (sort of access log)
-	NoAccessLog bool `json:"noAccessLog,omitempty"`
+
+	// Internal ports
+
+	// BasePort is the first port used for the virtual/control ports.
+	// For Istio interop, it defaults to 15000 and uses same offsets.
+	// This port is used for admin/debug/local MDS, bound to localhost, http protocol
+	// Deprecated - use listeners
+	BasePort int `json:"basePort,omitempty"`
+
 }
 
-const (
-	// Offsets from BasePort for the default ports.
-
-	PORT_IPTABLES    = 1
-	PORT_IPTABLES_IN = 6
-	PORT_SOCKS       = 5
-	// SNI and HTTP could share the same port - would also
-	// reduce missconfig risks
-	PORT_HTTP_PROXY = 2
-
-	// TLS/SNI, HTTPS (no client certs)
-	PORT_HTTPS = 4
-
-	// H2, HTTPS, H2R
-	PORT_BTS = 7
-
-	// H2C
-	PORT_BTSC = 8
-)
-
-// Statistics for streams and hosts
-type Stats struct {
-	Open time.Time
-
-	// last receive from local (and send to remote)
-	LastWrite time.Time
-
-	// last receive from remote (and send to local)
-	LastRead time.Time
-
-	// Sent from client to server ( client is initiator of the proxy )
-	SentBytes   int
-	SentPackets int
-
-	// Received from server to client
-	RcvdBytes   int
-	RcvdPackets int
+type Duration struct {
+	time.Duration
 }
 
-// Keyed by Hostname:port (if found in dns tables) or IP:port
-type HostStats struct {
-	// First open
-	Open time.Time
-
-	// Last usage
-	Last time.Time
-
-	SentBytes   int
-	RcvdBytes   int
-	SentPackets int
-	RcvdPackets int
-
-	Count int
+func (ms Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ms.String())
 }
 
-// Node information, based on registration info or discovery.
+func (ms *Duration) UnmarshalJSON(data []byte) error {
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	switch value := v.(type) {
+	case float64:
+		*ms = Duration{Duration: time.Duration(value)}
+		return nil
+	case string:
+		var err error
+		s, err := time.ParseDuration(value)
+		if err != nil {
+			return err
+		}
+		*ms = Duration{Duration: s}
+		return nil
+	default:
+		return errors.New("invalid duration")
+	}
+}
+
+// UGate represents a node using a HTTP/2 or HTTP/3 based overlay network environment.
+// This can act as a minimal REST client and server - or can be used as a RoundTripper, Dialer and PortListener
+// compatible with HBONE protocol and mesh security.
 //
-// Used for 'mesh' nodes, where we have a public key and other info, as well
-// as non-mesh nodes.
+// UGate by default uses mTLS, using spiffee identities encoding K8S namespace, KSA and a trust
+// domain. Other forms of authentication can be supported - auth is handled via configurable
+// interface, not part of the core package.
 //
-// This struct includes statistics about the node and current active association/mux
-// connections.
-type Cluster struct {
-	// ID is the (best) primary id known for the node. Format is:
-	//    base32(SHA256(EC_256_pub)) - 32 bytes binary, 52 bytes encoded
-	//    base32(ED_pub) - same size, for nodes with ED keys.
+// UGate can be used as a client, server or proxy/gateway.
+type UGate struct {
+	*MeshSettings
+
+	// Auth plugs-in mTLS support. The generated configs should perform basic mesh
+	// authentication.
+	// Typically a *meshauth.MeshAuth
+	Auth *meshauth.MeshAuth `json:"-"`
+
+	// AuthProviders - matching kubeconfig user.authProvider.name
+	// It is expected to return tokens with the given audience - in case of GCP
+	// returns access tokens. If not set the cluster can't be created.
 	//
-	// For non-mesh nodes, it is a (real) domain name or IP if unknown.
-	// It may include port, or even be a URL - the external destinations may
-	// have different public keys on different ports.
+	// A number of pre-defined token sources are used:
+	// - gcp - returns GCP access tokens using MDS or default credentials. Used for example by GKE clusters.
+	// - k8s - return K8S WorkloadID tokens with the given audience for default K8S cluster.
+	// - istio-ca - returns K8S tokens with istio-ca audience - used by Citadel and default Istiod
+	// - sts - federated google access tokens associated with GCP identity pools.
+	AuthProviders map[string]func(context.Context, string) (string, error)
+
+	// ReverseProxy is used when UGate is used to proxy to a local http/1.1 server.
+	ReverseProxy *httputil.ReverseProxy
+
+	// h2Server is the server used for accepting HBONE connections
+	//h2Server *http2.Server
+	// h2t is the transport used for all h2 connections used.
+	// UGate is the connection pool, gets notified when con is closed.
+	//h2t *http2.H2Transport
+
+	// Main HTTP handler - will perform auth, dispatch, etc
+	H2Handler http.Handler
+
+	// Mux is used for HTTP and gRPC handler exposed externally.
 	//
-	// The node may be a virtual IP ( ex. K8S/Istio service ) or name
-	// of a virtual service.
+	// It is the handler for "hbone" and "hbonec" protocol handlers.
 	//
-	// If IPs are used, they must be either truncated SHA or included
-	// in the node cert or the control plane must return metadata and
-	// secure low-level network is used (like wireguard)
+	// The HTTP server on localhost:15000 uses http.DefaultMux - which is used by pprof
+	// and others by default.
+	Mux *http.ServeMux
+
+	// MuxDialers are used to create an association with a peer and multiplex connections.
+	// HBone, SSH, etc can act as mux dialers.
+	MuxDialers map[string]meshauth.ContextDialer
+
+	ListenerProto map[string]func(gate *UGate, l *meshauth.PortListener) error
+
+	// EndpointResolver hooks into the Dial process and return the configured
+	// EndpointCon object. This integrates with the XDS/config plane, with
+	// additional local configs.
+	//EndpointResolver func(sni string) *EndpointCon
+
+	m sync.RWMutex
+
+	Client *http.Client
+
+	http1SChan chan net.Conn
+	http1CChan chan net.Conn
+
+	Http11Transport *http.Transport
+
+	// Default dialer used to connect to host:port extracted from metadata.
+	// Defaults to net.Dialer, making real connections.
 	//
-	// Required for secure communication.
-	//
-	// Examples:
-	//  -  [B32_SHA]
-	//  -  [B32_SHA].reviews.bookinfo.svc.example.com
-	//  -  IP6 (based on SHA or 'trusted' IP)
-	//  -  IP4 ('trusted' IP)
-	//
-	ID string `json:"id,omitempty"`
+	// Can be replaced with a mux or egress dialer or router for
+	// integration.
+	NetDialer meshauth.ContextDialer
 
-	// IDAlias is a list of alternate identities associated with the
-	// node.
-	//
-	// TODO: implement
-	//IDAlias []string `json:"alias,omitempty"`
+	// Used for udp proxy, when a captured packet is received.
+	DNS        UDPHandler
+	UDPHandler UDPHandler
 
-	// Groups is a list of groups and roles the node is associated with.
-	//
-	//Groups []string `json:"groups,omitempty"`
+	// Active connection by stream tuple, for MDS and debug.
+	// This is primarily used for proxied connection, to allow the receiver to get metadata
+	// (certs, real caller, etc)
+	ActiveTcp map[string]nio.Stream
 
-	// TODO: rename to node WorkloadID - use truncated or full form.
+	TcpConActive *expvar.Int
+	TcpConTotal  expvar.Int
 
-	// TODO: print Hex form as well, make sure the 8 bytes of the VIP are visible
+	// template, used for TLS connections and the host WorkloadID
+	TLSConfig *tls.Config
 
-	// Primary/main address and port of the BTS endpoint.
-	Addr string `json:"addr,omitempty"`
-
-	// Alternate addresses, list of URLs
-	//URLs []string `json:"urls,omitempty"`
-
-	// Primary public key of the node.
-	// EC256: 65 bytes, uncompressed format
-	// RSA: DER
-	// ED25519: 32B
-	// Used for sending encryted webpush message
-	// If not known, will be populated after the connection.
-	PublicKey []byte `json:"pub,omitempty"`
-
-	// Auth for webpush. A shared secret known by uGate and remote
-	// node.
-	//Auth []byte `json:"auth,omitempty"`
-
-	// Information from the node - from an announce or message.
-	// Not trusted, self-signed.
-	NodeAnnounce *NodeAnnounce `json:"info,omitempty"`
-
-	Labels map[string]string `json:"l,omitempty"`
-
-	// Will be set if there are problems connecting to the node
-	// (or if connection duration is too short)
-	Backoff time.Duration `json:"-"`
-
-	// IP4 address of last announce (link local) or connection
-	Last4 *net.UDPAddr `json:"-"`
-	// LastSeen in a multicast announce
-	LastSeen4 time.Time
-
-	// IP6 address of last announce or connection.
-	Last6 *net.UDPAddr `json:"-"`
-	// LastSeen in a multicast announce
-	LastSeen6 time.Time `json:"-"`
-
-	FirstSeen time.Time
-
-	// Last packet or registration from the peer.
-	LastSeen time.Time `json:"t"`
-
-	// In seconds since first seen, last 100
-	Seen []int `json:"-"`
-
-	Stats *HostStats
-
-	// Muxer is a HTTP2-like connection to the node.
-	// Implements RoundTrip, with the semantics of CONNECT (no buffering)
-	// May be a direct or reverse connection.
-	Muxer Muxer `json:"-"`
+	StartFunctions []func(ug *UGate)
 }
 
-const ProtoTLS = "tls"
-const ProtoSNI = "sni"
+// Modules are used with conditional compiled modules, to reduce deps and binary size.
+// The function will be called when the Gate is created - they may initialize.
+// gate.StartFunctions will be called during Start().
+var Modules = map[string]func(gate *UGate){}
 
-// autodetected for TLS.
-const ProtoH2 = "h2"
-const ProtoHTTP = "http"               // 1.1
-const ProtoHTTPTrusted = "httpTrusted" // behind envoy or trusted gateway
-const ProtoBTS = "bts"
-const ProtoBTSC = "btsc"
+// New creates a new UGate node. It requires a workload identity, including mTLS certificates.
+func New(auth *meshauth.MeshAuth, ms *MeshSettings) *UGate {
+	// For tests - main() and libraries should initialize the 3 configs.
+	if ms == nil {
+		ms = &MeshSettings{}
+	}
 
-const ProtoTCPOut = "tcpOut"
-const ProtoTCPIn = "tcpIn"
+	ug := &UGate{
+		Auth: auth,
+		MeshSettings:  ms,
+		ListenerProto: map[string]func(gate *UGate, l *meshauth.PortListener) error{},
+		Mux:           http.NewServeMux(),
 
-const ProtoHAProxy = "haproxy"
+		Client:       http.DefaultClient,
+		NetDialer:    &net.Dialer{},
+		MuxDialers:   map[string]meshauth.ContextDialer{},
+		ActiveTcp:    map[string]nio.Stream{},
+		TcpConActive: &expvar.Int{},
+	}
 
-// Egress capture - for dedicated listeners
-const ProtoSocks = "socks5"
-const ProtoIPTables = "iptables"
-const ProtoIPTablesIn = "iptables-in"
+	// Init default HTTP handler
+	ug.H2Handler = &httpwrapper.HttpHandler{
+		Handler: ug.Mux,
+		Logger:  slog.With("id", ms.Name),
+	}
 
-// Mapping to Istio:
-// - gateway port -> listener conf
-// - Remote -> shortcut for a TCP listener with  single deset.
-// - SNI/Socks -> host extracted from protocol.
-//
-//
+	ug.Http11Transport = &http.Transport{
+		DialContext: ug.DialContext,
+		// If not set, DialContext and TLSClientConfig are used
+		DialTLSContext:        ug.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		Proxy:                 http.ProxyFromEnvironment,
+	}
+	if ug.Auth == nil {
+		ug.Auth = meshauth.NewMeshAuth(&ms.MeshCfg)
+		if ug.Priv == "" {
+			ug.Auth.InitSelfSigned("")
+		}
+	}
 
-// -------------------- Used by upgate
+	if ms.Listeners == nil {
+		ms.Listeners = map[string]*meshauth.PortListener{}
+	}
 
-// TODO: use net.Dialer (timeout, keep alive, resolver, etc)
+	if ms.HandsahakeTimeout == 0 {
+		ms.HandsahakeTimeout = 5 * time.Second
+	}
 
-// TODO: use net.Dialer.DialContext(ctx context.Context, network, address string) (Stream, error)
-// Dialer also uses nettrace in context, calls resolver,
-// can do parallel or serial calls. Supports TCP, UDP, Unix, IP
+	if ms.Clusters == nil {
+		ms.Clusters = map[string]*MeshCluster{}
+	//} else {
+	//	for _, c := range ms.Clusters {
+	//		c.UGate = ug
+	//	}
+	}
 
-// nettrace: internal, uses TraceKey in context used for httptrace,
-// but not exposed. Net has hooks into it.
-// RoundTripStart, lookup keep track of DNSStart, DNSDone, ConnectStart, ConnectDone
+	if ms.ConnectTimeout.Duration == 0 {
+		ms.ConnectTimeout.Duration = 5 * time.Second
+	}
 
-// httptrace:
-// WithClientTrace(ctx, trace) Context
-// ContextClientTrace(ctx) -> *ClientTrace
+	// Init the HTTP reverse proxy, for apps listening for HTTP/1.1 on 8080
+	// This is used for serverless but also support regular pods.
+	// TODO: customize the port.
+	// TODO: add a h2 reverse proxy as well on 8082, and grpc on 8081
+	u, _ := url.Parse("http://127.0.0.1:8080")
+	ug.ReverseProxy = httputil.NewSingleHostReverseProxy(u)
 
-// ContextDialer is same with x.net.proxy.ContextDialer
-// Used to create the actual connection to an address using the mesh.
-// The result may have metadata, and be an instance of nio.Stream.
-//
-// A uGate implements this interface, it is the primary interface
-// for creating streams where the caller does not want to pass custom
-// metadata. Based on net and addr and handshake, if destination is
-// capable we will upgrade to BTS and pass metadata. This may also
-// be sent via an egress gateway.
-//
-// For compatibility, 'net' can be "tcp" and addr a mangled hostname:port
-// Mesh addresses can be identified by the hostname or IP6 address.
-// External addresses will create direct connections if possible, or
-// use egress server.
-//
-// TODO: also support 'url' scheme
-type ContextDialer interface {
-	DialContext(ctx context.Context, net, addr string) (net.Conn, error)
+	msgs.InitMux(msgs.DefaultMux, ug.Mux, ug.Auth)
+
+	ug.Mux.Handle("/debug/", http.DefaultServeMux)
+
+	for _, m := range Modules {
+		m(ug)
+	}
+
+	return ug
 }
 
-// Deprecated - use ContextDialer. Implemented only by Quic
-// StreamDialer is used to open a stream by address, optionally passing
-// metadata and starting to forward ( possibly as early data ) an input
-// stream. Generally implemented by multiplexer protocols that support
-// metadata, like H2, H3 or raw multiplexers using a startup header.
-type StreamDialer interface {
-	// DialStream is open the connection to the stream.
-	// addr is host:port format
-	// host can be a 32-byte base32 encoded string, or other IP or DNS name
-	//
-	// inStream.In, if not nil, will be automatically forwarded to new dialed stream.
-	// inStream in headers, if set, will be forwarded to the remote host.
-	//
-	DialStream(ctx context.Context, addr string, inStream *nio.Stream) (*nio.Stream, error)
-}
 
-// Muxer is the interface implemented by a multiplexed connection with metadata
-type Muxer interface {
-	http.RoundTripper
-
-	io.Closer
-
-	//Ping(ctx context.Context) error
-}
-
-type MuxDialer interface {
-	// DialMux creates a bi-directional multiplexed association with the node.
-	// The node must support a multiplexing protocol - the fallback is H2.
-	//
-	// Fallback:
-	// For non-mesh nodes the H2 connection may not allow incoming streams or
-	// messages. Mesh nodes emulate incoming streams using /h2r/ and send/receive
-	// messages using /.dm/msg/
-	DialMux(ctx context.Context, node *Cluster, meta http.Header, ev func(t string, stream *nio.Stream)) (Muxer, error)
-}
-
-// HeaderEncoder abstracts the encoding of metadata.
-// Standard HTTP/2 or QUIC, proto, other formats may be used.
+//// Handler is a handler for net.Conn with metadata.
+//// Lighter alternative to http.Handler - used for TCP listeners.
+//type Handler interface {
+//	// HandleConn will process a received connection.
+//	// TODO: add a ctx as soon as accept is called, including meta.
+//	HandleConn(net.Conn) error
+//}
 //
-// This interface uses the Stream buffer and encodes/decodes the
-// metadata associated with the stream.
-type HeaderEncoder interface {
-	// Marshall will encode the headers into the wBuffer.
-	// Flush will need to be called to send to s.Out
-	Marshal(s *nio.Stream) error
+//// Wrap a function as a stream handler.
+//type HandlerFunc func(conn net.Conn) error
+//
+//func (c HandlerFunc) HandleConn(conn net.Conn) error {
+//	return c(conn)
+//}
 
-	// AddHeader directly to the stream buffer - without adding it to the meta.
-	AddHeader(s *nio.Stream, k, v []byte)
-
-	// Unmarshall will decode from s.rBuffer. s.Fill() may be called to get
-	// additional data. The decoded headers will be set on the stream.
-	Unmarshal(s *nio.Stream) (done bool, err error)
-}
-
-// IPResolver uses DNS cache or lookups to return the name
-// associated with an IP, for metrics/stats/logs
-type IPResolver interface {
-	IPResolve(ip string) string
-}
-
-// For integration with TUN
-// TODO: use same interfaces.
-
-// Used by the TUN interface
+// UDPHandler is used to abstract the handling of incoming UDP packets on a UDP
+// listener or TUN.
 type UDPHandler interface {
 	HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte)
 }
@@ -384,131 +323,417 @@ type UdpWriter interface {
 	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
 }
 
-// IPFS:
-// http://<gateway host>/ipfs/CID/path
-// http://<cid>.ipfs.<gateway host>/<path>
-// http://gateway/ipns/IPNDS_ID/path
-// ipfs://<CID>/<path>, ipns://<peer WorkloadID>/<path>, and dweb://<IPFS address>
+
+// All streams must call this method once a connection is made, and defer OnStreamDone
+func (ug *UGate) OnStream(s nio.Stream) {
+	ug.TcpConActive.Add(1)
+	ug.TcpConTotal.Add(1)
+}
+
+// Called at the end of the connection handling. After this point
+// nothing should use or refer to the connection, both proxy directions
+// should already be closed for write or fully closed.
+func (ug *UGate) OnStreamDone(str nio.Stream) {
+
+	ug.m.Lock()
+	delete(ug.ActiveTcp, str.State().StreamId)
+	ug.m.Unlock()
+	ug.TcpConActive.Add(-1)
+	// TODO: track multiplexed streams separately.
+	//if str.ReadErr != nil {
+	//	VarzSErrRead.Add(1)
+	//}
+	//if str.WriteErr != nil {
+	//	VarzSErrWrite.Add(1)
+	//}
+	//if str.ProxyReadErr != nil {
+	//	VarzCErrRead.Add(1)
+	//}
+	//if str.ProxyWriteErr != nil {
+	//	VarzCErrWrite.Add(1)
+	//}
+
+	if r := recover(); r != nil {
+
+		debug.PrintStack()
+
+		// find out exactly what the error was and set err
+		var err error
+
+		switch x := r.(type) {
+		case string:
+			err = errors.New(x)
+		case error:
+			err = x
+		default:
+			err = errors.New("Unknown panic")
+		}
+		log.Println("AC: Recovered in f", r, err)
+	}
+
+	//if NoEOF(str.ReadErr) != nil || str.WriteErr != nil {
+	//	log.Println(str.StreamId, "AE:", "Err in:", str.ReadErr, str.WriteErr)
+	//}
+	//if NoEOF(str.ProxyReadErr) != nil || str.ProxyWriteErr != nil {
+	//	log.Println(str.StreamId, "AE:", "Err out:", str.ProxyReadErr, str.ProxyWriteErr)
+	//}
+	//if !str.Closed {
+	//	str.Close()
+	//}
+
+	ug.OnSClose(str, str.RemoteAddr())
+}
+
+func (gw *UGate) OnMuxClose(dm *MeshCluster) {
+
+}
+
+func (gw *UGate) OnSClose(s nio.Stream, addr net.Addr) {
+	//str := s.State()
+	//if str.ReadErr != nil || str.WriteErr != nil {
+	//	log.Printf("%d AC: src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v %v %v",
+	//		str.StreamId,
+	//		str.Type, addr,
+	//		str.Dest,
+	//		str.RcvdPackets, str.RcvdBytes,
+	//		str.SentPackets, str.SentBytes,
+	//		time.Since(str.LastWrite),
+	//		time.Since(str.LastRead),
+	//		int64(time.Since(str.Open).Seconds()),
+	//		str.ReadErr, str.WriteErr)
+	//	return
+	//}
+	//log.Printf("AC: %d src=%s://%v dst=%s rcv=%d/%d snd=%d/%d la=%v ra=%v op=%v",
+	//	str.StreamId,
+	//	str.Type, addr,
+	//	str.Dest,
+	//	str.RcvdPackets, str.RcvdBytes,
+	//	str.SentPackets, str.SentBytes,
+	//	time.Since(str.LastWrite),
+	//	time.Since(str.LastRead),
+	//	int64(time.Since(str.Open).Seconds()))
+}
+
+func (ug *UGate) RegisterProxyStream(s nio.Stream) {
+	// TODO: compute StreamId based on meta ( tuple )
+	ug.m.Lock()
+	ug.ActiveTcp[s.State().StreamId] = s
+	ug.m.Unlock()
+}
+
+// RemoteID returns the node WorkloadID based on authentication.
+func (gw *UGate) RemoteID(s nio.Stream) string {
+	tls := s.TLSConnectionState()
+	if tls != nil {
+		if len(tls.PeerCertificates) == 0 {
+			return ""
+		}
+		pk, err := meshauth.VerifySelfSigned(tls.PeerCertificates)
+		if err != nil {
+			return ""
+		}
+
+		return meshauth.PublicKeyBase32SHA(pk)
+	}
+	return ""
+}
+
+// StartBHoneD will listen on addr as H2C (typically :15009)
 //
-// Multiaddr: TLV
-
-// CloseWriter is one of possible interfaces implemented by Out to send a FIN, without closing
-// the input. Some writers only do this when Close is called.
-type CloseWriter interface {
-	CloseWrite() error
-}
-
-// Interface for very simple configuration and key loading.
-// Can have a simple in-memory, fs implementation, as well
-// as K8S, XDS or database backends.
 //
-// The name is hierachical, in case of K8S or Istio corresponds
-// to the type, including namespace.
-type ConfStore interface {
-	// Get a config blob by name
-	Get(name string) ([]byte, error)
+// Incoming streams for /_hbone/mtls will be treated as a mTLS connection,
+// using the Istio certificates and root. After handling mTLS, the clear text
+// connection will be forwarded to localhost:8080 ( TODO: custom port ).
+//
+// TODO: setting for app protocol=h2, http, tcp - initial impl uses tcp
+//
+// Incoming requests for /_hbone/22 will be forwarded to localhost:22, for
+// debugging with ssh.
+//
 
-	// Save a config blob
-	Set(conf string, data []byte) error
 
-	// List the configs starting with a prefix, of a given type
-	List(name string, tp string) ([]string, error)
-}
-
-// ConfInt returns an string setting, with default value, from the ConfStore.
-func ConfStr(cs ConfStore, name, def string) string {
-	if cs == nil {
-		return def
-	}
-	b, _ := cs.Get(name)
-	if b == nil {
-		return def
-	}
-	return string(b)
-}
-
-// ConfInt returns an int setting, with default value, from the ConfStore.
-func ConfInt(cs ConfStore, name string, def int) int {
-	if cs == nil {
-		return def
-	}
-	b, _ := cs.Get(name)
-	if b == nil {
-		return def
-	}
-	v, err := strconv.Atoi(string(b))
+// HandleTCPProxy connects and forwards r/w to the hostPort
+func (hb *UGate) HandleTCPProxy(w io.Writer, r io.Reader, hostPort string) error {
+	log.Println("net.RoundTripStart", hostPort)
+	nc, err := net.Dial("tcp", hostPort)
 	if err != nil {
-		return def
+		log.Println("Error dialing ", hostPort, err)
+		return err
 	}
-	return v
+
+	return nio.Proxy(nc, r, w, hostPort)
 }
 
-// Information about a node.
-// Sent periodically, signed by the origin - for example as a JWT, or UDP
-// proto.
-// TODO: map it to Pod, IPFS announce
-// TODO: move Wifi discovery to separate package.
-type NodeAnnounce struct {
-	UA string `json:"UA,omitempty"`
+// HttpClient returns a http.Client configured with the specified root CA, and reasonable settings.
+// The URest wrapper is added, for telemetry or other interceptors.
+func (hb *UGate) HttpClient(caCert []byte) *http.Client {
+	// The 'max idle conns, idle con timeout, etc are shorter - this is meant for
+	// fast initial config, not as a general purpose client.
+	tr := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 
-	// Non-link local IPs from all interfaces. Includes public internet addresses
-	// and Wifi IP4 address. Used to determine if a node is directly connected.
-	IPs []*net.UDPAddr `json:"addrs,omitempty"`
-
-	// Set if the node is an active Android AP.
-	SSID string `json:"ssid,omitempty"`
-
-	// True if the node is an active Android AP on the interface sending the message.
-	// Will trigger special handling in link-local - if the receiving interface is also
-	// an android client.
-	AP bool `json:"AP,omitempty"`
-
-	Ack bool `json:"ACK,omitempty"`
-
-	// VIP of the direct parent, if this node is connected.
-	// Used to determine the mesh topology.
-	Vpn string `json:"Vpn,omitempty"`
-}
-
-// Textual representation of the node registration data.
-func (n *Cluster) String() string {
-	b, _ := json.Marshal(n)
-	return string(b)
-}
-
-// Return the list of gateways for the node, starting with the link local if any.
-func (n *Cluster) GWs() []*net.UDPAddr {
-	res := []*net.UDPAddr{}
-
-	if n.Last4 != nil {
-		res = append(res, n.Last4)
+		MaxIdleConns:    10,
+		IdleConnTimeout: 30 * time.Second,
 	}
-	if n.Last6 != nil {
-		res = append(res, n.Last6)
-	}
-	return res
-}
 
-func (n *Cluster) BackoffReset() {
-	n.Backoff = 0
-}
-
-func (n *Cluster) BackoffSleep() {
-	if n.Backoff == 0 {
-		n.Backoff = 5 * time.Second
+	if caCert != nil && len(caCert) > 0 {
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(caCert) {
+			log.Println("Failed to decode PEM")
+		}
+		tr.TLSClientConfig = &tls.Config{
+			RootCAs: roots,
+		}
 	}
-	time.Sleep(n.Backoff)
-	if n.Backoff < 5*time.Minute {
-		n.Backoff = n.Backoff * 2
+
+	return &http.Client{
+		Transport: tr,
 	}
 }
 
-// === Messaging
-// The former messaging interface is mapped to HTTP:
-// - incoming messages are treated as HTTP requests. CloudEvents/Pubub/etc are ok.
-// - polling results in posting same HTTP requests, internally
-// - sending events: using a special HttpClient.
+
+// Dealing with capture
+
+// HanldeTUN is called when a TCP egress connection is intercepted via TProxy or TUN (gVisor or lwip)
+// target is the destination address, la is the local address (the connection will have it reversed).
+func (hb *UGate) HandleTUN(nc net.Conn, target *net.TCPAddr, la *net.TCPAddr) {
+	log.Println("TUN TCP ", target, la)
+	dest := target.String()
+
+	rc, err := hb.Dial("tcp", dest)
+	if err != nil {
+		nc.Close()
+		return
+	}
+	nio.Proxy(rc, nc, nc, dest)
+	return
+}
+
+// HandleUdp is the common entry point for UDP capture.
+// - tproxy
+// - gvisor/lwIP
+// WIP
+func (hb *UGate) HandleUdp(dstAddr net.IP, dstPort uint16,
+	localAddr net.IP, localPort uint16,
+	data []byte) {
+	log.Println("TProxy UDP ", dstAddr, dstPort, localAddr, localPort, len(data))
+}
+
+type Route struct {
+	// Addr (ex :8080). This is the requested address.
+	//
+	// BTS, SOCKS, HTTP_PROXY and IPTABLES have default ports and bindings, don't
+	// need to be configured here.
+	//Addr string `json:"address,omitempty"`
+
+	// How to connect. Default: original dst
+	//Protocol string `json:"proto,omitempty"`
+}
+
+
+
+// Start listening on all configured ports.
+// This doesn't have to be called if ugate is used in client mode.
+func (ug *UGate) Start() error {
+	// Explicit TCP forwarders.
+	for k, t := range ug.Listeners {
+		if t.Name == "" {
+			t.Name = k
+		}
+		err := ug.StartListener(t)
+		if err != nil {
+			slog.Warn("Failed to start listener", "name", t.Port, "err", err)
+		} else {
+			slog.Info("listener", "addr", t.Address, "proto", t.Protocol)
+		}
+	}
+
+	return nil
+}
+
+func (ug *UGate) Close() error {
+	var err error
+	for _, p := range ug.Listeners {
+		if p.NetListener != nil {
+			e := p.NetListener.Close()
+			if e != nil {
+				err = err
+			}
+			p.NetListener = nil
+		}
+	}
+	return err
+}
+
+// OnHClose called on http close
+func (gw *UGate) OnHClose(s string, id string, san string, r *http.Request, since time.Duration) {
+	slog.Info("HTTP", "method", r.Method,
+		"url", r.URL, "proto", r.Proto, "header", r.Header, "id", id,
+		"san", san, "remote", r.RemoteAddr, "d", since)
+}
+
+var LogClose = true
+
+// StartListener and Start a real port listener on a port.
+// Virtual listeners can be added to ug.Conf or the mux.
+// Creates a raw (port) TCP listener. Accepts connections
+// on a local port, forwards to a remote destination.
+func (ug *UGate) StartListener(ll *meshauth.PortListener) error {
+	if ll.Protocol == "" {
+		parts := strings.Split(ll.Name, "-")
+		ll.Protocol = parts[0]
+		if ll.Address == "" && ll.Port == 0 {
+			if len(parts) == 2 {
+				p, _ := strconv.Atoi(parts[1])
+				ll.Port = int32(p)
+			} else if len(parts) > 2 {
+				ll.Address = net.JoinHostPort(parts[1], parts[2])
+			}
+		}
+	}
+
+	if ll.Address == "" && ll.Port != 0 {
+		ll.Address = fmt.Sprintf(":%d", ll.Port)
+	}
+
+
+	f := ug.ListenerProto[ll.Protocol]
+	if f != nil {
+		go func() {
+			err := f(ug, ll)
+			if err != nil {
+				slog.Info("Listener error", "err", err, "addr", ll.Address, "name", ll.Name, "proto", ll.Protocol)
+			}
+		}()
+		return nil
+	}
+
+	slog.Info("Listener error", "err", "missing protocol handler", "addr", ll.Address, "name", ll.Name, "proto", ll.Protocol)
+	return errors.New("Missing handler" + ll.Protocol)
+}
+
+
+// DialTLS dials a TLS connection to addr and does the handshake.
+// It opens a direct TLS connection using the dialer for TCP.
+// No peer verification - the returned stream will have the certs.
+// addr is a real internet address, not a mesh one.
 //
-// Main 'difference' between a message and a regular HTTP is the size of request is limited.
-// Webpush is also mapped in the same way - the glue code handles encryption/decryption.
-// PubSubMessage is the payload of a Pub/Sub event.
+// Used internally to create the raw TLS connections to both mesh
+// and non-mesh nodes.
+// Do a TLS handshake on the plain text nc.
+// Verify the server identity using a remotePeerID - based on public key.
+// TODO: add syncthing style hash of cert, spiffee, DNS as alternative identities.
+// TODO: add root CAs (including public) and SHA of root cert.
+func (*UGate) NewTLSConnOut(ctx context.Context, nc net.Conn,
+	cfg *meshauth.MeshAuth,
+	remotePeerID string, alpn []string) (nio.Stream, error) {
+
+	tlsc, err := cfg.TLSClient(ctx, nc, &meshauth.Dest{
+		Addr:          "",
+		CACertPEM:     nil,
+		TokenProvider: nil,
+		TokenSource:   "",
+		SNI:           remotePeerID,
+		ALPN:          alpn,
+	},   remotePeerID)
+	if err != nil {
+		return nil, err
+	}
+	tlsS := tlsc.ConnectionState()
+
+	s := nio.NewStreamConn(tlsc)
+	s.TLS = &tlsS
+	//s.State().PeerPublicKey = remotePubKey
+
+	return s, nil
+}
+
+// DialMUX creates an association with the node, using one of the supported
+// transports.
+//
+// The node should have at least the address or public key or hash populated.
+func (ug *UGate) DialMUX(ctx context.Context, net string, node *MeshCluster, ev func(t string, stream nio.Stream)) (http.RoundTripper, error) {
+	if node.RoundTripper != nil {
+		return node.RoundTripper, nil
+	}
+
+	return node.HttpClient().Transport, nil
+}
+
+// DialContext dials a destination address (host:port).
+// This can be used in applications as a TCP Dial replacement.
+//
+// It will first attempt to look up the host config, and if it supports 'mesh' will
+// use a secure, multiplexed connection.
+//
+func (hb *UGate) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	c := hb.GetCluster(addr)
+	if c == nil {
+		host, _, _ := net.SplitHostPort(addr)
+		c = hb.GetCluster(host)
+	}
+
+
+	if c!= nil {
+
+		if c.Dialer == nil && c.Proto != ""  {
+			// TODO: set proto based on labels
+			c.Dialer = hb.MuxDialers[c.Proto]
+		}
+
+		if c.Dialer != nil {
+			return c.Dialer.DialContext(ctx, network, addr)
+		} else {
+			log.Println("Invalid dialer")
+			return nil, errors.New("Missing dialer for protocol")
+		}
+
+
+		// TODO: routing, etc - based on endpoints and TcpRoutes
+	}
+
+	// TODO: if egress gateway is set, use it ( redirect all unknown to egress )
+	// TODO: CIDR range of Endpoints, Nodes, VIPs to use hbone
+	// TODO: if port, use SNI or match clusters
+	nc, err := hb.NetDialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// If net connection is cut, by default the socket may linger for up to 20 min without detecting this.
+	// Extracted from gRPC - needs to apply at TCP socket level
+	if c.TCPUserTimeout != 0 {
+		syscall.SetTCPUserTimeout(nc, c.TCPUserTimeout)
+	}
+
+	return nc, err
+}
+
+// RoundTrip makes a HTTP request (over some secure transport including ambient and tunnels), over
+// a multiplexed or direct connection.
+//func (ug *UGate) RoundTrip(req *http.Request) (*http.Response, error) {
+//	hostPort := req.Host
+//	if hostPort == "" {
+//		hostPort = req.URL.Host
+//	}
+//	c, err := ug.Cluster(req.Context(), hostPort)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	return c.RoundTrip(req)
+//}
+
+
+
+// Dial calls @See DialContext
+func (hb *UGate) Dial(n, a string) (net.Conn, error) {
+	return hb.DialContext(context.Background(), n, a)
+}
+

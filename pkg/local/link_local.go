@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"github.com/costinm/meshauth"
-	"github.com/costinm/ugate"
-	ug "github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 var (
@@ -27,24 +25,18 @@ var (
 
 var (
 	// Received MC announcements from other nodes (include invalid)
-	regDN = expvar.NewInt("RegD")
+	regDN = expvar.NewInt("linklocal_received_total")
 
 	// Error MC announcements from local nodes
-	regDNE = expvar.NewInt("RegDE")
-
-	// Client requests to check a peer.
-	regDNC = expvar.NewInt("RegDC")
-
-	// Errors Client requests to check a peer.
-	regDNCE = expvar.NewInt("RegDCE")
+	regDNE = expvar.NewInt("linklocal_received_err_total")
 )
 
-func NewLocal(gw *ug.UGate, auth *meshauth.MeshAuth) *LLDiscovery {
+func NewLocal(port int, auth *meshauth.MeshAuth) *LLDiscovery {
 	return &LLDiscovery{
 		mcPort:  5227,
-		udpPort: gw.Config.BasePort + 8,
-		gw:      gw,
+		udpPort: port,
 		auth:    auth,
+		Nodes:   map[string]*Node{},
 	}
 }
 
@@ -69,7 +61,7 @@ func ListenUDP(gw *LLDiscovery) {
 // Called after connection to the VPN has been created.
 //
 // Currently used only for Mesh AP chains.
-func (gw *LLDiscovery) OnLocalNetworkFunc(node *ugate.Cluster, addr *net.UDPAddr, fromMySTA bool) {
+func (gw *LLDiscovery) OnLocalNetworkFunc(node *Node, addr *net.UDPAddr, fromMySTA bool) {
 	//now := time.Now()
 	//add := &net.UDPAddr{IP: addr.IP, Zone: addr.Zone, Port: 5222}
 
@@ -116,7 +108,7 @@ func (gw *LLDiscovery) FixIp6ForHTTP(addr *net.UDPAddr) string {
 // or IP6 announce.
 //
 // Should be called after network changes and announce
-func (gw *LLDiscovery) ensureConnectedUp(laddr *net.UDPAddr, node *ugate.Cluster) error {
+func (gw *LLDiscovery) ensureConnectedUp(laddr *net.UDPAddr, node *Node) error {
 	//if gw.gw.SSHClientUp != nil {
 	//	return nil
 	//}
@@ -239,8 +231,8 @@ func mcMessage(gw *LLDiscovery, i *ActiveInterface, isAck bool) []byte {
 	// VPN VIP
 	// my client ssid
 	//
-	ann := &ugate.NodeAnnounce{
-		UA:  gw.gw.Auth.Name,
+	ann := &NodeAnnounce{
+		UA:  gw.auth.Name,
 		IPs: ips(gw.ActiveInterfaces),
 		//SSID: gw.auth.Config.Conf(gw.auth.Config, "ssid", ""),
 		Ack: isAck,
@@ -492,11 +484,13 @@ func unicastReaderThread(gw *LLDiscovery, c net.PacketConn, iface *ActiveInterfa
 
 		directNode, ann, err := gw.processMCAnnounce(rcv, addr, iface)
 		if err != nil {
+			MetricLLReceiveErr.Add(1)
 			if err != selfRegister && err != dup {
-				log.Println("MCDirect: Invalid multicast  ", err, addr, n, string(rcv[0:len(rcv)-128]))
+				log.Println("MCDirect: Invalid multicast  ", err, addr, n)
 			}
 			continue
 		}
+		MetricLLReceived.Add(1)
 
 		if addr.IP.To4() != nil {
 			if time.Now().Sub(directNode.LastSeen4) < 10*time.Second {
@@ -517,8 +511,10 @@ func unicastReaderThread(gw *LLDiscovery, c net.PacketConn, iface *ActiveInterfa
 			}
 		}
 
-		log.Println("LL: ACK Received:", directNode.ID, c.LocalAddr(), addr, ann)
+		MetricLLTotal.Set(int64(len(gw.Nodes)))
 
+		log.Println("LL: ACK Received:", directNode.ID, c.LocalAddr(), addr, ann)
+		MetricLLReceivedAck.Add(1)
 	}
 }
 
@@ -554,8 +550,9 @@ func (gw *LLDiscovery) multicastReaderThread(c net.PacketConn, iface *ActiveInte
 
 		directNode, ann, err := gw.processMCAnnounce(rcv, addr, iface)
 		if err != nil {
+			regDNE.Add(1)
 			if err != selfRegister && err != dup {
-				log.Println("MCDirect: Invalid multicast  ", err, addr, n, string(rcv[0:len(rcv)-128]))
+				log.Println("MCDirect: ann err ", err, addr, n)
 			}
 			continue
 		}
@@ -660,7 +657,7 @@ func (gw *LLDiscovery) HttpGetLLIf(w http.ResponseWriter, r *http.Request) {
 //
 // Currently the info is only for debugging - all registration happens in the /register handshake,
 // using mtls.
-func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *ActiveInterface) (*ugate.Cluster, *ugate.NodeAnnounce, error) {
+func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *ActiveInterface) (*Node, *NodeAnnounce, error) {
 
 	dl := len(data)
 
@@ -679,7 +676,6 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 	// Check signature. Verified Public key is the identity
 	err := meshauth.Verify(data[0:dl-64], pub, sig)
 	if err != nil {
-		log.Println("MCDirect: Signature ", err)
 		return nil, nil, err
 	}
 
@@ -689,15 +685,26 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 	}
 
 	// Parse the message
-	ann := &ugate.NodeAnnounce{}
+	ann := &NodeAnnounce{}
 	err = json.Unmarshal(jsonData, ann)
 	if err != nil {
 		log.Println("MCDirect: Failed to parse ann", err, string(data[0:dl-128]))
 	}
 
 	now := time.Now()
+	id := meshauth.PublicKeyBase32SHA(pub)
 
-	node := gw.gw.GetOrAddNode(meshauth.IDFromPublicKey(pub))
+	gw.activeMutex.RLock()
+	node := gw.Nodes[id]
+	gw.activeMutex.RUnlock()
+	if node == nil {
+		node = &Node{
+			ID: id,
+		}
+		gw.activeMutex.Lock()
+		gw.Nodes[id] = node
+		gw.activeMutex.Unlock()
+	}
 
 	since := int(now.Sub(node.LastSeen) / time.Second)
 	if since > 2 {
@@ -709,17 +716,8 @@ func (gw *LLDiscovery) processMCAnnounce(data []byte, addr *net.UDPAddr, iface *
 	}
 
 	node.NodeAnnounce = ann
-	// ???
 
-	//node.Announces++
-	//if strings.Contains(addr.Zone, "p2p") {
-	//	node.AnnouncesOnP2P++
-	//}
-	//if ann.AP {
-	//	node.AnnouncesFromP2P++
-	//}
-
-	// IP4 addresses don't include zone for some reason...
+	// IP4 addresses don't include zone
 	if addr.Zone != "" && iface != nil && iface.Name != addr.Zone {
 		log.Println("MCDirect: Missmatch iface and GW ", addr, iface)
 	}
@@ -792,14 +790,3 @@ func ip4(addrs []net.Addr) net.IP {
 	}
 	return nil
 }
-
-//func (lm *LinkLocalRegistry) getIf(zone string) *ActiveInterface {
-//	lm.activeMutex.Lock()
-//	defer lm.activeMutex.Unlock()
-//	a, found := lm.ActiveInterfaces[zone]
-//	if !found {
-//		log.Println("Node no longer ActiveInterface ", zone)
-//		return nil
-//	}
-//	return a
-//}

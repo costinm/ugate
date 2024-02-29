@@ -1,7 +1,0 @@
-apiVersion: v1
-name: ugate-all
-version: 0.1.1
-description: Install all ugate charts and probers
-keywords:
-  - ugate
-engine: gotpl

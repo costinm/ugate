@@ -15,11 +15,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/costinm/meshauth"
 	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/ugatesvc"
+
+	"github.com/costinm/meshauth"
 	msgs "github.com/costinm/ugate/webpush"
 )
+
+// TODO: rewrite using K8s API style
 
 var (
 	addr = flag.String("addr", "127.0.0.1:15007", "address:port for the node")
@@ -45,10 +47,10 @@ var hc *http.Client
 func main() {
 	flag.Parse()
 
-	config := ugatesvc.NewConf("./", "./var/lib/dmesh/")
-	authz := meshauth.NewAuth("", "")
+	//config := meshauth.NewConf("./", "./var/lib/dmesh/")
+	authz := meshauth.NewMeshAuth(nil).InitSelfSigned("")
 
-	ug := ugatesvc.New(config, authz, nil)
+	ug := ugate.New(authz, nil)
 
 	hc = &http.Client{
 		Transport: ug,
@@ -62,7 +64,7 @@ var watchers = map[uint64]*watcher{}
 
 // Track a single node
 type watcher struct {
-	Node *ugate.Cluster
+	Node *ugate.MeshCluster
 
 	Path []string
 
@@ -80,7 +82,7 @@ type watcher struct {
 // Connect to all known nodes and watch them.
 // Uses the internal debug endpoint for getting connected nodes,
 // and crawls the mesh.
-func watchNodes(ug *ugatesvc.UGate) {
+func watchNodes(ug *ugate.UGate) {
 	ctx := context.Background()
 
 	if *recurse {
@@ -115,15 +117,17 @@ func watchNodes(ug *ugatesvc.UGate) {
 		return
 	}
 
-	n0 := &ugate.Cluster{
-		Addr: *addr,
+	n0 := &ugate.MeshCluster{
+		Dest: meshauth.Dest{
+			Addr: *addr,
+		},
 	}
 
 	ug.DialMUX(ctx, "quic", n0, nil)
 }
 
 // Get neighbors from a node. Side effect: updates the watchers table.
-func neighbors(url string, path []string) map[uint64]*ugate.Cluster {
+func neighbors(url string, path []string) map[uint64]*ugate.MeshCluster {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.Print("HTTP_ERROR1", url, err)
@@ -143,7 +147,7 @@ func neighbors(url string, path []string) map[uint64]*ugate.Cluster {
 	}
 
 	cnodes, _ := ioutil.ReadAll(res.Body)
-	connectedNodes := map[uint64]*ugate.Cluster{}
+	connectedNodes := map[uint64]*ugate.MeshCluster{}
 	err = json.Unmarshal(cnodes, &connectedNodes)
 	if err != nil {
 		log.Println("HTTP_ERROR_RES", url, err, string(cnodes))
@@ -221,7 +225,7 @@ func crawl() {
 
 	for _, v := range watchers {
 		if v.New {
-			log.Println("Node", v.idhex, v.Path, v.Node.NodeAnnounce.UA, v.Node.GWs())
+			log.Println("Node", v.idhex, v.Path, v.Node.Hosts)
 		}
 	}
 }
@@ -261,7 +265,7 @@ func toIP6(k uint64) *net.IPAddr {
 	return ip6
 }
 
-func (w *watcher) monitor(ug *ugatesvc.UGate, addr *net.IPAddr) {
+func (w *watcher) monitor(ug *ugate.UGate, addr *net.IPAddr) {
 
 	req, err := http.NewRequest("GET", "http://["+addr.String()+"]:5227/debug/events", nil)
 	if err != nil {

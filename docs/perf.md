@@ -5,6 +5,11 @@ sysctl -w net.core.rmem_max=10000000
 
 ip link set lo mtu 9000
 
+# Getting flame
+
+docker run uber/go-torch -u http://192.168.3.16:15400/debug/pprof -p -t=30 > torch.svg
+docker run uber/go-torch -u http://192.168.3.16:15200/debug/pprof -p -t=30 > torchbob.svg
+
 # Links
 
 https://blog.cloudflare.com/how-to-receive-a-million-packets/
@@ -63,7 +68,7 @@ TCP also has offloading and other optimizations.
 
 pprof & iperf3 -c localhost -p 15201
 go tool pprof pprof http://127.0.0.1:15400/debug/pprof/heap
-pprof -http=:8080 /home/costin/pprof/pprof.___3hbone.alloc_objects.alloc_space.inuse_objects.inuse_space.005.pb.gz
+pprof -http=:8080 /home/costin/pprof/pprof.___3ugate.alloc_objects.alloc_space.inuse_objects.inuse_space.005.pb.gz
 
 
 docker run uber/go-torch -u http://192.168.3.16:15400/debug/pprof -p -t=30 > torch.svg

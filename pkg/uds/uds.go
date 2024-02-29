@@ -15,8 +15,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/costinm/hbone/nio"
 	msgs "github.com/costinm/ugate/webpush"
+	"golang.org/x/exp/slog"
 )
 
 // uds provides helpers for passing credentials and files over UDS streams, and basic
@@ -83,6 +83,8 @@ type UdsServer struct {
 
 var (
 	Debug = false
+
+	logger = slog.With("name", "uds")
 )
 
 // Create a UDS server listening on 'name'.
@@ -95,11 +97,11 @@ func NewServer(name string, mux *msgs.Mux) (*UdsServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &UdsServer{Name: name,
+	return &UdsServer{
+		Name:     name,
 		listener: us,
 		Gid:      -1,
 		mux:      mux,
-		//Handlers: map[string]MessageHandler{},
 	}, nil
 }
 
@@ -112,6 +114,7 @@ func Dial(ifname string, mux *msgs.Mux, initial map[string]string) (*UdsConn, er
 		initial: initial,
 		mux:     mux,
 	}
+
 	uds.SendMessageToRemote = uds.SendMessage
 	err := uds.Redial()
 
@@ -139,12 +142,11 @@ func (uds *UdsServer) Close() {
 func (uds *UdsServer) accept() (*UdsConn, error) {
 	inS, err := uds.listener.AcceptUnix()
 	if err != nil {
-		fmt.Println("Error accepting ", uds.Name, err)
 		return nil, err
 	}
 	err = enableUnixCredentials(inS)
 	if err != nil {
-		log.Println("Error enabling unix creds ", err)
+		logger.Error("Error enabling unix creds ", "error", err)
 	}
 	uc := &UdsConn{
 		con:    inS,
@@ -159,11 +161,11 @@ func (uds *UdsServer) accept() (*UdsConn, error) {
 }
 
 func (uds *UdsServer) Start() error {
-	// TODO: stop and it's channel
+	// stop will happen when uds is closed.
 	for {
 		inS, err := uds.accept()
 		if err != nil {
-			fmt.Println("Error accepting ", uds.Name, err)
+			logger.Error("Error accepting", "udsname", uds.Name, "error", err)
 			return err
 		}
 		go uds.serverStream(inS)
@@ -173,7 +175,7 @@ func (uds *UdsServer) Start() error {
 
 var cnt = 0
 
-// Called after connecting to the remote UDS. Must send something, so credentials are passed.
+// Called after connecting to the remote UDS. Must send something, so user credentials are passed.
 func (conn *UdsConn) serverHandshake(uds *UdsServer) error {
 	//data := make([]byte, 4096)
 
@@ -182,7 +184,9 @@ func (conn *UdsConn) serverHandshake(uds *UdsServer) error {
 	// First message from client should include unix credentials
 	// Should also include the identity of the node !
 	_, data, err := conn.nextMessage()
+
 	//ndata, pid, uid, gid, err := conn.GetUnixCreds(data)
+
 	if err != nil {
 		return errors.New(fmt.Sprint("Failed to read unix creds ", err))
 	}
@@ -194,6 +198,7 @@ func (conn *UdsConn) serverHandshake(uds *UdsServer) error {
 	conn.Name = fmt.Sprintf("udss:%d:%d:%d", conn.Uid, conn.Pid, cnt)
 	cnt++
 
+	// Respond so client can get server identity.
 	conn.SendMessageDirect("ok", nil, nil)
 
 	// First message: :open
@@ -480,16 +485,6 @@ func (uds *UdsConn) File() *os.File {
 	nf := []*os.File{}
 	uds.Files = append(nf, uds.Files[1:]...)
 	return fd
-}
-
-func processUnixConn(bc *nio.Stream) error {
-	uc, ok := bc.Out.(*net.UnixConn)
-	if !ok {
-		return errors.New("Unexpected con")
-	}
-	enableUnixCredentials(uc)
-
-	return nil
 }
 
 // Enable reception of PID/UID/GID

@@ -20,14 +20,15 @@ _do_start() {
 }
 
 prepare_root() {
-  sudo TUNDEV=0  ./setup.sh setup
-  sudo TUNDEV=1  ./setup.sh setup
+  sudo ./capture.sh init_tun 0
+  sudo ./capture.sh init_tun 1
 }
 
 # setup test rig
 # Alice: 6400, gvisor=(10.11.0.x, 10.10.0.x),
 test_setup() {
   _do_start iperf3 ${TOP} iperf3 -s
+
   _do_start gate ${TOP}/cmd/ugate/testdata/gate ${TOP}/build/ugate
   _do_start alice ${TOP}/cmd/ugate/testdata/alice ${TOP}/build/ugate
   _do_start bob ${TOP}/cmd/ugate/testdata/bob ${TOP}/build/ugate
@@ -69,7 +70,3 @@ test_run() {
   #
 }
 
-test_cleanup() {
-  TUNDEV=0 sudo setup.sh clean
-  TUNDEV=1 sudo setup.sh clean
-}

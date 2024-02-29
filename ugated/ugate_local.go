@@ -4,22 +4,21 @@
 package ugated
 
 import (
-	"os"
-
+	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/local"
-	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
+// Multicast discovery of local nodes.
+//
 func init() {
-	ugatesvc.InitHooks = append(ugatesvc.InitHooks, func(ug *ugatesvc.UGate) ugatesvc.StartFunc {
-		if os.Getenv("UGATE_LOCAL") == "" {
-			return nil
-		}
+	ugate.Modules["local"] = func(ug *ugate.UGate) {
 		// Discover local nodes using multicast UDP
-		localgw := local.NewLocal(ug, ug.Auth)
+		if len(ug.Auth.PublicKey) != 65 {
+			// Only works for EC256 keys
+			return
+		}
+		localgw := local.NewLocal(ug.BasePort+8, ug.Auth)
 		local.ListenUDP(localgw)
-		go localgw.PeriodicThread()
 		ug.Mux.HandleFunc("/dmesh/ll/if", localgw.HttpGetLLIf)
-		return nil
-	})
+	}
 }

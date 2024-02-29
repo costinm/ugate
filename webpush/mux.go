@@ -54,7 +54,7 @@ type Mux struct {
 	// http request can be mapped to a Send (not supported yet).
 	ServeMux *http.ServeMux
 
-	// Auth holds the private key and Id of this node. Used to encrypt and decrypt.
+	// Auth holds the private key and muxID of this node. Used to encrypt and decrypt.
 	Auth *meshauth.MeshAuth
 }
 

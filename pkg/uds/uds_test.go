@@ -12,6 +12,8 @@ import (
 )
 
 func TestUDS(t *testing.T) {
+	//utel.InitDefaultHandler(nil)
+
 	fn := "testUDS"
 	us, err := NewServer(fn, msgs.DefaultMux)
 	defer os.Remove(fn)
@@ -20,6 +22,7 @@ func TestUDS(t *testing.T) {
 		return
 	}
 	go us.Start()
+
 	msgs.DefaultMux.AddHandler("srv", msgs.HandlerCallbackFunc(func(ctx context.Context, cmdS string, meta map[string]string, data []byte) {
 		log.Println(cmdS, meta, data)
 	}))

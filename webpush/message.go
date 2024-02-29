@@ -19,8 +19,6 @@ import (
 // On Android side - this is a set of Messages.
 // Similar: k8s events - rich interface.
 
-// TODO: use grpc library to push, maybe to istio mixer access log
-
 // logrus
 // glog
 // zapcore:
@@ -60,7 +58,7 @@ type Message struct {
 	//Time int64 `json:"time,omitempty"`
 	//
 	//// WorkloadID of event, to dedup. Included as meta 'id'
-	//Id string `json:"id,omitempty"`
+	//muxID string `json:"id,omitempty"`
 	//
 	//// Original destination - can be a group/topic or individual URL
 	//// Called 'type' in cloud events, 'topic' in pubsub.
