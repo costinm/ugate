@@ -8,31 +8,43 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
-	"github.com/costinm/meshauth"
-	"github.com/costinm/ssh-mesh/nio"
-	"github.com/costinm/ugate"
+	"github.com/costinm/meshauth/pkg/certs"
 
+	"github.com/costinm/ugate/nio"
 	"github.com/quic-go/quic-go"
 
 	"github.com/quic-go/webtransport-go"
-
 )
 
 // Quic is the adapter to QUIC/H3/MASQUE for uGate.
 type Quic struct {
-	Auth *meshauth.MeshAuth
+	Auth *certs.Cert
 
 	// Incoming streams are mapped to HTTP
 	//HTTPHandler http.Handler
 	//server      *http3.Server
 
-	// UgateSVC - for node tracking
-	UG              *ugate.UGate
 	tlsServerConfig *tls.Config
 
-	l               *meshauth.PortListener
+	Mux *http.ServeMux
+
+	Dialer    ContextDialer
+	Address   string
+
+	MeshTrust *certs.MeshTrust
+
+	Peers map[string]*Peer
+}
+
+type ContextDialer interface {
+	DialContext(ctx context.Context, net, addr string) (net.Conn, error)
+}
+
+
+type Peer struct {
 }
 
 // DataSreamer is implemented by response writer on server side to take over the stream.
@@ -40,42 +52,32 @@ type DataStreamer interface {
 	DataStream() quic.Stream
 }
 
-// Not in init
-func InitQuic(gate *ugate.UGate) {
-	//ugate.Modules["quic"] = func(gate *ugate.UGate) {
-		gate.ListenerProto["quic"] = func(gate *ugate.UGate, ll *meshauth.PortListener) error {
-			qa := New(gate, ll)
 
-			gate.StartFunctions = append(gate.StartFunctions, func(ug *ugate.UGate) {
-				qa.Start()
-			})
-			return nil
-		}
-
-		// Only for H3 server !
-	gate.ListenerProto["webtransport"] = func(gate *ugate.UGate, ll *meshauth.PortListener) error {
-		wts := webtransport.Server{}
-		gate.Mux.HandleFunc("/.well-known/webtransport", func(writer http.ResponseWriter, request *http.Request) {
-			// expects CONNECT - can't be handled by Mux
-			wts.Upgrade(writer, request)
-		})
-		return nil
+func New() *Quic {
+	return &Quic{
+		Address: ":4443",
 	}
-
 }
 
-func New(ug *ugate.UGate, ll *meshauth.PortListener) *Quic {
+func (qa *Quic) Provision(ctx context.Context) error {
 	os.Setenv("QUIC_GO_LOG_LEVEL", "DEBUG")
 
-
-	qa := &Quic{
-		l: ll,
-		Auth:        ug.Auth,
-		//HTTPHandler: ug.H2Handler,
-		UG:          ug,
+	if qa.Mux == nil {
+		qa.Mux = http.NewServeMux()
 	}
 
-	mtlsServerConfig := qa.Auth.GenerateTLSConfigServer(true)
+	if qa.Dialer == nil {
+		qa.Dialer = &net.Dialer{}
+	}
+
+	wts := webtransport.Server{}
+	qa.Mux.HandleFunc("/.well-known/webtransport", func(writer http.ResponseWriter, request *http.Request) {
+		// expects CONNECT - can't be handled by muxConn
+		wts.Upgrade(writer, request)
+	})
+
+
+	mtlsServerConfig := qa.Auth.GenerateTLSConfigServer(qa.MeshTrust)
 
 	// Overrides
 	mtlsServerConfig.NextProtos = []string{"h3r", "h3-34"}
@@ -120,7 +122,7 @@ func New(ug *ugate.UGate, ll *meshauth.PortListener) *Quic {
 	//qa.server = quicServer
 	//quicServer.Init()
 
-	return qa
+	return nil
 }
 
 
@@ -128,7 +130,7 @@ func New(ug *ugate.UGate, ll *meshauth.PortListener) *Quic {
 // Format is: i(type) i(len) payload[len]
 // Type: data(0), header(1),
 func (q *Quic) handleRaw(qs quic.Stream) {
-	str := nio.GetStream(qs, qs)
+	str := nio2.GetStream(qs, qs)
 
 	err := str.ReadHeader(qs)
 	if err != nil {
@@ -145,14 +147,14 @@ func (q *Quic) handleRaw(qs quic.Stream) {
 		log.Println("QUIC stream IN rcv", str.StreamId, str.InHeader)
 	}
 
-	nc, err := q.UG.Dial("tcp", str.Dest)
+	nc, err := q.Dialer.DialContext(qs.Context(), "tcp", str.Dest)
 	if err != nil {
 		str.PostDialHandler(nil, err)
 		return
 	}
 	str.PostDialHandler(nil, nil)
 
-	nio.Proxy(nc, str, str, str.Dest)
+	nio2.Proxy(nc, str, str, str.Dest)
 
 }
 
@@ -185,34 +187,45 @@ func (q *Quic) quicConfig() *quic.Config {
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 	}
 }
+func (qd *Quic) DialContext(ctx context.Context, net, addr string) (net.Conn, error) {
 
+	// Quic maintains 'associations' and mux connections.
+	ugc := &QuicMUX{Addr: addr , client: true}
 
+	err := qd.DialMux(ctx, ugc)
+	if err != nil {
+		return nil, err
+	}
+	return ugc.DialContext(ctx, net, addr)
+}
 
-func (qd *Quic) DialMux(ctx context.Context, node *ugate.MeshCluster) (*QuicMUX, error) {
+func (qd *Quic) DialMux(ctx context.Context, ugc *QuicMUX) (error) {
 	tlsConf := &tls.Config{
 		// VerifyPeerCertificate used instead
 		InsecureSkipVerify: true,
 
-		Certificates: []tls.Certificate{*qd.Auth.Cert},
+		Certificates: []tls.Certificate{*qd.Auth.Certificate},
 
 		NextProtos: []string{"h3r", "h3-29"},
 	}
 
-	addr := node.Addr
+	addr := ugc.Addr
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// session.Context() is canceled when the session is closed.
 	session, err := quic.DialEarly(ctx, udpConn, udpAddr, tlsConf, qd.quicConfig())
 	if err != nil {
-		return nil, err
+		return err
 	}
+
+	ugc.s = session
 
 	//var rt http.RoundTripper
 	// TODO: use node.WorkloadID if available - Addr is a temp address and may
@@ -223,10 +236,9 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.MeshCluster) (*QuicMUX,
 
 	go func() {
 		<-session.Context().Done()
-		log.Println("H3: stop on ", qd.Auth.ID, "for", node.ID, session.RemoteAddr())
+		log.Println("H3: stop on ", qd.Auth.PubB32(), "for", ugc.Addr, session.RemoteAddr())
 	}()
 
-	ugc := &QuicMUX{s: session, n: node, client: true}
 	//decoder := qpack.NewDecoder(nil)
 
 	go func() {
@@ -241,13 +253,27 @@ func (qd *Quic) DialMux(ctx context.Context, node *ugate.MeshCluster) (*QuicMUX,
 	}()
 
 	go qd.handleMessages(ugc)
-	node.Dialer = ugc
-	return ugc, nil
+	return  nil
 }
 
-func (qd *Quic) Start() error {
+func GetPort(a string, dp int32) int32 {
+	if a == "" {
+		return dp
+	}
+	_, p, err := net.SplitHostPort(a)
+	if err != nil {
+		return dp
+	}
+	pp, err := strconv.Atoi(p)
+	if err != nil {
+		return dp
+	}
+	return int32(pp)
+}
+
+func (qd *Quic) Start(ctx context.Context) error {
 	c, err := net.ListenUDP("udp", &net.UDPAddr{
-		Port: int(qd.l.GetPort()),
+		Port: int(GetPort(qd.Address, 8443)),
 	})
 	if err != nil {
 		log.Println("H3: Failed to listen quic ", err)

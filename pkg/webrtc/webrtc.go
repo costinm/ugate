@@ -1,16 +1,15 @@
 package webrtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/costinm/ugate"
-
-	"github.com/costinm/meshauth"
 	"github.com/pion/sctp"
 	"github.com/pion/webrtc/v3"
 )
@@ -18,16 +17,25 @@ import (
 // WIP: experiments with webRTC for data channels.
 // WebRTC is bi-directional, like SSH - both ends can initiate connections.
 
-type RTC struct {
-	Conn map[string]sctp.Association
+type WebRTC struct {
+	Mux    *http.ServeMux
+	Name   string
 
-	UGate *ugate.UGate
+}
+
+type RTConn struct {
+	// Peers
+	Conn   map[string]sctp.Association
+	pc1    *webrtc.PeerConnection
+	offer  *webrtc.SessionDescription
+	Name   string
+	Client bool
 }
 
 // Returns a json with an offer for connecting this host, to allow a web or dmesh client
 // to initiate a data channel.
-// To reduce RT, the client acts as WebRTC server, includes an offer.
-func (rtc *RTC) RTCDirectHandler(w http.ResponseWriter, r *http.Request) {
+// To reduce RT, the http client acts as WebRTC server, includes an offer.
+func (rtc *WebRTC) RTCDirectHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 
 	off, err := ioutil.ReadAll(r.Body)
@@ -45,7 +53,7 @@ func (rtc *RTC) RTCDirectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Println("IN: ", string(off))
-	ans, err := DialWebRTC(&offer)
+	ans, err := rtc.AcceptPeering(&offer)
 
 	if err != nil {
 		log.Println(err)
@@ -61,103 +69,21 @@ func (rtc *RTC) RTCDirectHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(ansb)
 }
 
-func DialWebRTC(inOffer *webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
-	config := webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{
-				URLs: []string{}, //"stun:stun.l.google.com:19302"},
-			},
-		},
+
+func (rtcg *WebRTC) Provision(i context.Context) error {
+	if rtcg.Mux == nil {
+		rtcg.Mux = http.NewServeMux()
 	}
-
-	// Create a new RTCPeerConnection
-	peerConnection, err := webrtc.NewPeerConnection(config)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set the handler for ICE connection state
-	// This will notify you when the peer has connected/disconnected
-	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("ICE Connection State has changed: %s\n", connectionState.String())
-	})
-
-	// Register data channel creation handling
-	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
-		fmt.Printf("New DataChannel %s %d\n", d.Label(), d.ID())
-
-		// Register channel opening handling
-		d.OnOpen(func() {
-			fmt.Printf("Data channel '%s'-'%d'", d.Label(), d.ID())
-
-			for range time.NewTicker(60 * time.Second).C {
-				message := "hi"
-				fmt.Printf("Sending '%s'\n", message)
-
-				// Send the message as text
-				sendErr := d.SendText(message)
-				if sendErr != nil {
-					log.Println("Send err", sendErr)
-				}
-			}
-		})
-
-		// Register text message handling
-		d.OnMessage(func(msg webrtc.DataChannelMessage) {
-			fmt.Printf("Message from DataChannel '%s': '%s'\n", d.Label(), string(msg.Data))
-		})
-	})
-
-	// Set the remote SessionDescription. Starts the transport already !
-	err = peerConnection.SetRemoteDescription(*inOffer)
-	if err != nil {
-		return nil, err
-	}
-
-	// After setRemoteDescription - we can use the remote IP as a candidate.
-	// It would only work if remote has a public address - for example
-	// IPv6.
-	// Alternatively, the request could include a known 'gateway'
-	//peerConnection.AddICECandidate(webrtc.ICECandidateInit{
-	//	Candidate: "candidate:1932572598 2 udp 2130706431 2601:647:6100:449c:b62e:99ff:fead:e42 55174 typ host",
+	//rtcg.Mux.HandleFunc("/.dm/webrtc/offer", func(w http.ResponseWriter, request *http.Request) {
+	//	w.Write([]byte(rtcg.offer.SDP))
+	//})
+	//rtcg.Mux.HandleFunc("/.dm/webrtc/local", func(w http.ResponseWriter, request *http.Request) {
+	//	w.Write([]byte(rtcg.pc1.LocalDescription().SDP))
 	//})
 
-	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Println("OnConnectionStateChange: ", state, peerConnection.SignalingState())
-		if state == webrtc.PeerConnectionStateConnected {
-			//log.Println(peerConnection.SCTP().H2Transport().GetRemoteCertificate())
-			log.Println(peerConnection.SCTP().Transport().GetLocalParameters())
-		}
-	})
+	rtcg.Mux.HandleFunc("/wrtc/direct/", rtcg.RTCDirectHandler)
 
-	// Create an answer
-	answer, err := peerConnection.CreateAnswer(nil)
-	if err != nil {
-		return nil, err
-	}
-
-	gatherComplete := make(chan string)
-	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		log.Println("ICE: ", candidate)
-		if candidate == nil {
-			gatherComplete <- "hi"
-		}
-	})
-	//// Create channel that is blocked until ICE Gathering is complete
-	//gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-
-	// Sets the LocalDescription, and starts our UDP listeners
-	err = peerConnection.SetLocalDescription(answer)
-	if err != nil {
-		return nil, err
-	}
-
-	// Block until ICE Gathering is complete, disabling trickle ICE
-	// we do this because we only can exchange one signaling message
-	// in a production application you should exchange ICE Candidates via OnICECandidate
-	<-gatherComplete
-
-	return peerConnection.LocalDescription(), nil
+	return nil
 }
 
 // Create a 'server' peer connection, return the address descriptor.
@@ -167,12 +93,27 @@ func DialWebRTC(inOffer *webrtc.SessionDescription) (*webrtc.SessionDescription,
 //
 // TODO:
 // - session.URI
-func InitWebRTCS(ug *ugate.UGate, auth *meshauth.MeshAuth) (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
-	rtcg := &RTC{
-		UGate: ug,
-	}
+func (rtcg *RTConn) Start() error {
 
-	ug.Mux.HandleFunc("/wrtc/direct/", rtcg.RTCDirectHandler)
+	config := webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+		BundlePolicy: webrtc.BundlePolicyMaxBundle,
+	}
+	// TODO: Certificates from the ugate EC256 key or core identity (ACME)
+	//
+
+	// Create a new RTCPeerConnection
+	// TODO: how do we handle multiple ( server style ?)
+	peerConnection, err := webrtc.NewPeerConnection(config)
+	if err != nil {
+		return err
+	}
+	rtcg.pc1 = peerConnection
+	slog0 := slog.With("name", rtcg.Name)
 
 	/* Example:
 	sessid, sessversion, sha,
@@ -193,89 +134,100 @@ func InitWebRTCS(ug *ugate.UGate, auth *meshauth.MeshAuth) (*webrtc.PeerConnecti
 	a=ice-ufrag:OifZfFtFkYbYlnpk
 	a=ice-pwd:dUyGOKIYUcKuLoHQWhxbZNVYALrsJbAT
 	*/
-	config := webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
-			},
-		},
-		BundlePolicy: webrtc.BundlePolicyMaxBundle,
-	}
-	// TODO: Certificates from the ugate EC256 key or core identity (ACME)
-	//
-
-	// Create a new RTCPeerConnection
-	peerConnection, err := webrtc.NewPeerConnection(config)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	ug.Mux.HandleFunc("/.dm/webrtc/local", func(w http.ResponseWriter, request *http.Request) {
-		w.Write([]byte(peerConnection.LocalDescription().SDP))
-	})
 
 	// Set the handler for ICE connection state
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("ICE Connection State has changed: %s\n", connectionState.String())
+		// "connecting stable"
+		slog0.Info("OnICEConnectionStateChange", "connectionState", connectionState.String())
 	})
-	//peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-	//	log.Println(candidate)
-	//	offer, _ := peerConnection.CreateOffer(nil)
-	//	log.Println(offer)
-	//})
+
+	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		slog0.Info("OnICECandidate", "candidate", candidate)
+		//offer, _ := peerConnection.CreateOffer(nil)
+		//log.Println(offer)
+	})
 
 	// Register data channel creation handling
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
-		fmt.Printf("New DataChannel %s %d\n", d.Label(), d.ID())
+		slog1 := slog0.With("label", d.Label(), "id", d.ID())
+		slog1.Info("OnDataChannel", )
 
 		// Register channel opening handling
 		d.OnOpen(func() {
-			fmt.Printf("Data channel '%s'-'%d' open. Random messages will now be sent to any connected DataChannels every 5 seconds\n", d.Label(), d.ID())
-
-			for range time.NewTicker(5 * time.Second).C {
-				message := "hi"
-				fmt.Printf("Sending '%s'\n", message)
-
-				// Send the message as text
-				sendErr := d.SendText(message)
-				if sendErr != nil {
-					panic(sendErr)
+			slog1.Info("OnOpen")
+			go func() {
+				for range time.NewTicker(5 * time.Second).C {
+					message := "hi"
+					// Send the message as text
+					sendErr := d.SendText(message)
+					if sendErr != nil {
+						panic(sendErr)
+					}
 				}
-			}
+			}()
 		})
 
 		// Register text message handling
 		d.OnMessage(func(msg webrtc.DataChannelMessage) {
-			fmt.Printf("Message from DataChannel '%s': '%s'\n", d.Label(), string(msg.Data))
+			slog1.Info("OnMessage", "data", string(msg.Data))
 		})
 	})
 
-	dc, err := peerConnection.CreateDataChannel("testdc", nil)
+
+	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		slog0.Info("OnConnectionStateChange", "state", state, "sstate", peerConnection.SignalingState())
+
+		if state == webrtc.PeerConnectionStateConnected {
+			//log.Println(peerConnection.SCTP().H2Transport().GetRemoteCertificate())
+			//lp, _ := peerConnection.SCTP().Transport().GetLocalParameters()
+			//
+			//slog0.Info("OnConnectionStateChange=Connected", "state", peerConnection.SCTP().Transport().GetRemoteCertificate(), "localp", lp )
+		}
+	})
+
+	return nil
+}
+
+func (rtcg *RTConn) DataChannel(n string) error {
+	dc, err := rtcg.pc1.CreateDataChannel(n, nil)
 	dc.OnOpen(func() {
+		log.Println("DC Open ")
+		dc.Send([]byte("Opened"))
+	})
+	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		log.Println("Got ", msg)
+	})
+	return err
+}
+
+func (rtcg *RTConn) Dial() error {
+	rtcg.Start()
+	dc, _ := rtcg.pc1.CreateDataChannel("dc0", nil)
+	dc.OnOpen(func() {
+		log.Println("DC Open ")
 		dc.Send([]byte("Opened"))
 	})
 	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 		log.Println("Got ", msg)
 	})
 
-	offer, err := peerConnection.CreateOffer(nil)
-	ug.Mux.HandleFunc("/.dm/webrtc/offer", func(w http.ResponseWriter, request *http.Request) {
-		w.Write([]byte(offer.SDP))
-	})
 
-	// Sets the LocalDescription, and starts our UDP listeners
-	if err = peerConnection.SetLocalDescription(offer); err != nil {
-		panic(err)
-	}
+	offer, _ := rtcg.pc1.CreateOffer(nil)
+	rtcg.offer = &offer
 
-	// Create channel that is blocked until ICE Gathering is complete
-	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+	peerConnection := rtcg.pc1
+		// Sets the LocalDescription, and starts our UDP listeners
+		if err := peerConnection.SetLocalDescription(offer); err != nil {
+			return err
+		}
+		// Create channel that is blocked until ICE Gathering is complete
+		gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 
-	// Block until ICE Gathering is complete, disabling trickle ICE
-	// we do this because we only can exchange one signaling message
-	// in a production application you should exchange ICE Candidates via OnICECandidate
-	<-gatherComplete
+		// Block until ICE Gathering is complete, disabling trickle ICE
+		// we do this because we only can exchange one signaling message
+		// in a production application you should exchange ICE Candidates via OnICECandidate
+		<-gatherComplete
 
 	//log.Println("Offer gather complete", offer)
 	// {offer v=0
@@ -295,5 +247,60 @@ func InitWebRTCS(ug *ugate.UGate, auth *meshauth.MeshAuth) (*webrtc.PeerConnecti
 	//a=ice-pwd:ggGigrcnoGALEkMDmBuWVNfAFwdicCnN
 	// 0xc0000d6240}
 
-	return peerConnection, &offer, nil
+	return nil
+}
+
+// Given an offer from a server (which needs to be started first, and send the offer via another transport ),
+// dial the connection, returning a response that needs to be sent back the the 'server'.
+func (wrtc *WebRTC) AcceptPeering(inOffer *webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
+
+	slog0 := slog.With("name", wrtc.Name)
+
+	rtcg := &RTConn{Name: "accepted", Client: false}
+	rtcg.Start()
+
+	// Set the remote SessionDescription. Starts the transport already !
+	err := rtcg.pc1.SetRemoteDescription(*inOffer)
+	if err != nil {
+		slog0.Error("SetRemoteDescription", "err", err)
+		return nil, err
+	}
+
+	// After setRemoteDescription - we can use the remote IP as a candidate.
+	// It would only work if remote has a public address - for example
+	// IPv6.
+	// Alternatively, the request could include a known 'gateway'
+	//peerConnection.AddICECandidate(webrtc.ICECandidateInit{
+	//	Candidate: "candidate:1932572598 2 udp 2130706431 2601:647:6100:449c:b62e:99ff:fead:e42 55174 typ host",
+	//})
+
+
+	// Create an answer
+	answer, err := rtcg.pc1.CreateAnswer(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	gatherComplete := make(chan string)
+	rtcg.pc1.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		log.Println("ICE: ", candidate)
+		if candidate == nil {
+			gatherComplete <- "hi"
+		}
+	})
+	//// Create channel that is blocked until ICE Gathering is complete
+	//gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+
+	// Sets the LocalDescription, and starts our UDP listeners
+	err = rtcg.pc1.SetLocalDescription(answer)
+	if err != nil {
+		return nil, err
+	}
+
+	// Block until ICE Gathering is complete, disabling trickle ICE
+	// we do this because we only can exchange one signaling message
+	// in a production application you should exchange ICE Candidates via OnICECandidate
+	<-gatherComplete
+
+	return rtcg.pc1.LocalDescription(), nil
 }

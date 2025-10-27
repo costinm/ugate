@@ -1,11 +1,23 @@
 # Minimal settings, for a client - has one cluster for bob
+# Range: 120xx
+name: a
 
-name: alice
+# deprecated - in domain.
+namespace: alice
 domain: test.m.internal
 
+# Global settings
+connecttimeout: 5s
+
+# deprecated - in MDS
+#"gsa":         "k8s-default@csm-pp-bug-bash-5.iam.gserviceaccount.com"
+#"project_id":   "csm-pp-bug-bash-5"
+# Replaced by ID
+serviceaccount: default
+projectid: dmeshgate
+location: us-central1
+
 id:
-  # Derived from the public key
-  # id: GYDMH5NWKZNCBWLR73D5E5Q7SBM4YUSHHMRBOKUDSPC2H3FG4S4Q
   namespace: test
   serviceaccount: default
   location: us-central1
@@ -14,112 +26,84 @@ id:
     projectid: dmeshgate
 
 
-# Replaced by ID
-namespace: test
-serviceaccount: default
-projectid: dmeshgate
-location: us-central1
-
-
+########################### Static listeners ############
+# Default range is 15000...15099 (100 ports)
+#
+# A better assignment would be to have ranges of 100 (or 128) ports for each prot
 listeners:
-  15108:
-    protocol: hbone
-  15120:
-    protocol: metrics
-  15109:
-    protocol: hbonec
-  15103:
-    protocol: sni
-  15106:
-    protocol: tproxy
-  "127.0.0.1:15100":
-    protocol: admin
-  1180:
-    protocol: socks
-  6113:
-    protocol: tcp-echo
-  6114:
-    protocol: grpc-echo
-  "@hbonec-alice":
-    protocol: hbonec
-  "/tmp/hbonec-alice":
-    protocol: hbonec
+  # Local discovery module
+  local: {}
 
-# localforward are ports on localhost, forwarded to clusters or addresses.
-# For convenience, egress defines localhost listeners ( not intercepted by tproxy !)
-# The value is a URL or hostOrService:port.
-# egress:
-localforward:
-  # proxy to Istiod, similar to agent
-  19999: istiod.istio-system.svc:15012
+  ssh:
+    port: 2202
 
-  # mTLS iperf3
-  15201: bob.bob.svc:5201
+  # TLS - H2 or H1, main Mux.
+  h2:
+    port: 12108
 
-  # Plain text iperf3
-  15202: bob.bob.svc:5202
+  quic:
+    port: 12108
 
-  6411: GJU4ACOW36Q3IBL45T2TRQ63M6FNQYEJMLPJNDJETIOVIEFD7MGQ:5201
-
-  6415: echo://
-
-# ---------------- Networks ----------------------
-
-# Network CIDR ranges
-networks:
-  vpc:
-    - 10.1.10.0/24
-    - "fd::/8"
-  gateways:
-    - 10.1.12.0/24
-  mesh:
-    - 10.0.0.0/8
-    - 192.168.0.0/16
-  # Remaining is egress (internet)
-
-# -------------------- Egress -------------------------
-
-connecttimeout: 5s
+  ipfs:
+    port: 12103
+    protocol: ipfs
 
 
-# discovery:
-# clusters:
-# egeress:
-# out:
-# mesh:
-clusters:
-  GJU4ACOW36Q3IBL45T2TRQ63M6FNQYEJMLPJNDJETIOVIEFD7MGQ:
-    addr: 127.0.0.1:6007
-    labels:
-      h2r: 1
-  bob.bob.svc:5201:
-    addr: 127.0.0.1:5201
-    endpoints:
-      - address: 127.0.0.1:5201
-        hboneaddress: 127.0.0.1:15208
+  # ======== Egress
+  # Local traffic, will send to original dst or secure depending on dst.
 
-  bob.bob.svc:5202:
-    addr: 127.0.0.1:5202
+  # Only if root
+  tpudp:
+    port: 12102
+    protocol: tproxy_udp
+
+  tproxy:
+    port: 12106
+
+  socks:
+    port: 12104
+
+  httpproxy:
+    port: 12105
+    protocol: http_proxy
+
+  # ======= HBone / multiplexed ingress
+
+  # Plain text HTTP/2
+  h2c:
+    port: 12109
+
+  # Should be on same port with H2
+  sni:
+    port: 12111
+
+  # ======= Admin/debug port
+
+  admin:
+    port: 12100
+
+  metrics:
+    port: 12120
+
+  mqtt:
+    port: 12101
+    protocol: mqtt
+
+  # ======== Regular listeners
+  udp:
+    port: 12109
+
+  echo:
+    port: 12113
+
+
+########################### Static destinations ############
+
+dst:
+  b.bob.test.mesh.internal:
+    addr: 127.0.0.3
+    id: NF2UGZAZTEH2K4WQDJCSJBTKTAUMZDZP4P3664TK2SKZ3NSAOD3Q
     endpoints:
       - address: 127.0.0.1:5201
         hboneaddress: 127.0.0.1:15209
         secure: true
-
-  istiod.istio-system.svc:15012:
-    addr: "-"
-
-  # If not set, will be loaded from mesh-env in default k8s cluster
-  # The addr should be a gateway address with SNI routing support or hbone
-  xistiod.istio-system.svc:15012:
-    #addr: "-"
-    addr: 34.69.72.163:15012
-    SNI: istiod.istio-system.svc
-
-  h2r:
-    addr: 127.0.0.1:15441
-
-  example.test.svc:8080:
-    id: example.test.svc:8080
-    addr: 1.2.3.4:8080
-
-

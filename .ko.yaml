@@ -1,0 +1,16 @@
+defaultBaseImage:  nicolaka/netshoot
+builds:
+  - id: ugated
+    dir: ./cmd/ugated
+    main: .
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -v
+    ldflags:
+      - -s
+      - -w
+  - id: uagent
+    dir: ./cmd/uagent
+    main: .
+

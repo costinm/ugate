@@ -3,32 +3,28 @@ package h2r
 import (
 	"context"
 	"log"
-	"strconv"
 	"testing"
-
-	"github.com/costinm/ugate"
 
 	"github.com/costinm/ugate/pkg/test"
 )
 
 func BenchmarkUGateH2R(b *testing.B) {
 	// Fixed key, config from filesystem. Base is 14000
-	alice := test.NewTestNode(test.AliceMeshAuthCfg, &ugate.MeshSettings{
-		BasePort:    6300})
+	alice := test.NewTestNode("../../testdata/alice")
 	New(alice)
 
 	// In memory config store. All options
-	bob := test.NewTestNode(test.BobMeshAuthCfg, &ugate.MeshSettings{BasePort: 6400})
+	bob := test.NewTestNode("../../testdata/alice")
 	New(bob)
-	log.Println(bob.Auth.VIP6)
+	//log.Println(bob.Mesh.VIP6)
 
-	bobAddr := "localhost:" + strconv.Itoa(bob.BasePort+7)
+	bobAddr := "localhost:6407"
 
 	// A basic echo server - echo on 5012
 	test.InitEcho(6000)
 
 	// Alice dials a MUX to bob
-	bobNode, _ := alice.Cluster(nil,bob.Auth.ID)
+	bobNode, _ := alice.Discover(nil, bob.ID)
 	bobNode.Addr = bobAddr
 	_, err := alice.DialMUX(context.Background(), "h2r", bobNode, nil)
 	if err != nil {
@@ -37,7 +33,7 @@ func BenchmarkUGateH2R(b *testing.B) {
 
 	b.Run("forward", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			con, err := alice.DialContext(context.Background(), "tcp", bob.Auth.ID+":6012") // ":6412")
+			con, err := alice.DialContext(context.Background(), "tcp", bob.Mesh.ID+":6012") // ":6412")
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -49,7 +45,7 @@ func BenchmarkUGateH2R(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			//ctx, cf := context.WithTimeout(context.Background(), 5 * time.Second)
 			//defer cf()
-			con, err := bob.DialContext(context.Background(), "tcp", alice.Auth.ID+":6012")
+			con, err := bob.DialContext(context.Background(), "tcp", alice.Mesh.ID+":6012")
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -66,20 +62,19 @@ func TestH2R(t *testing.T) {
 	test.InitEcho(6000)
 
 	// Fixed key, config from filesystem. Base is 14000
-	alice := test.NewTestNode(test.AliceMeshAuthCfg, &ugate.MeshSettings{BasePort: 6300})
+	alice := test.NewTestNode(test.AliceMeshAuthCfg, 6300)
 	New(alice)
 
 	// In memory config store. All options
-	bob := test.NewTestNode(test.BobMeshAuthCfg, &ugate.MeshSettings{BasePort: 6400})
+	bob := test.NewTestNode(test.BobMeshAuthCfg, 6400)
 	New(bob)
-	log.Println(bob.Auth.VIP6)
+	log.Println(bob.Mesh.VIP6)
 
-	bobAddr := "localhost:" + strconv.Itoa(bob.BasePort+7)
+	bobAddr := "localhost:6407"
 
 	// Alice dials a MUX to bob
-	bobNode, _ := alice.Cluster(nil, bob.Auth.ID)
+	bobNode, _ := alice.Mesh.GetOrAddDest(nil, bob.Mesh.ID)
 	bobNode.Addr = bobAddr
-
 
 	_, err := alice.DialMUX(context.Background(), "h2r", bobNode, nil)
 	if err != nil {
@@ -89,7 +84,7 @@ func TestH2R(t *testing.T) {
 	// Alice -> QUIC -> Bob -> Echo
 	t.Run("egress", func(t *testing.T) {
 		// Using DialContext interface - mesh address will use the node.
-		con, err := alice.DialContext(context.Background(), "tcp", bob.Auth.ID+":6012") // 6412
+		con, err := alice.DialContext(context.Background(), "tcp", bob.Mesh.ID+":6012") // 6412
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +95,7 @@ func TestH2R(t *testing.T) {
 	// Bob did not dial Alice, doesn't have the address ( and alice didn't start server )
 	t.Run("reverse", func(t *testing.T) {
 		// Using DialContext interface - mesh address will use the node.
-		con, err := bob.DialContext(context.Background(), "tcp", alice.Auth.ID+":6012")
+		con, err := bob.DialContext(context.Background(), "tcp", alice.Mesh.ID+":6012")
 		if err != nil {
 			t.Fatal(err)
 		}

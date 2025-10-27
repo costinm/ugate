@@ -7,11 +7,10 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
-	"github.com/costinm/meshauth"
-	"github.com/costinm/ugate"
-	"github.com/libp2p/go-libp2p/core/network"
 	"log"
 	"net"
+	corecrypto "crypto"
+	"github.com/libp2p/go-libp2p/core/network"
 
 	"github.com/ipfs/boxo/routing/http/client"
 	"github.com/ipfs/boxo/routing/http/contentrouter"
@@ -27,21 +26,14 @@ import (
 // ConnectionGater, Server
 type IPFS struct {
 	Host host.Host
+
+	Port int
+	PrivateKey corecrypto.PrivateKey
 }
+
 
 func (ipfs *IPFS) FindPeer(ctx context.Context, id peer.ID) (peer.AddrInfo, error) {
 	return peer.AddrInfo{ID: id}, nil
-}
-
-func (ipfs *IPFS) DialContext(ctx context.Context, net string, addr string) (net.Conn, error) {
-	return nil, nil
-}
-
-func Init(ug *ugate.UGate) {
-	ug.ListenerProto["ipfs"] = func(gate *ugate.UGate, l *meshauth.PortListener) error {
-		InitIPFS(ug.Auth, l.GetPort())
-		return nil
-	}
 }
 
 // InitIPFS creates LibP2P compatible transport.
@@ -52,12 +44,12 @@ func Init(ug *ugate.UGate) {
 // Main purpose of this integration is to take advantage of public
 // auto-relay code and infra, for control/signaling channels.
 //
-func InitIPFS(auth *meshauth.MeshAuth, p2pport int32) *IPFS {
+func InitIPFS(auth corecrypto.PrivateKey, p2pport int32) *IPFS {
 	p2p := &IPFS{
 
 	}
 
-	sk, _, _ := crypto.ECDSAKeyPairFromKey(auth.Cert.PrivateKey.(*ecdsa.PrivateKey))
+	sk, _, _ := crypto.ECDSAKeyPairFromKey(auth.(*ecdsa.PrivateKey))
 
 	la := []multiaddr.Multiaddr{}
 	listen, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", p2pport))
@@ -110,4 +102,9 @@ func streamHandler(stream network.Stream) {
 
 	log.Println("NEW STREAM: ", stream.Conn().RemotePeer(), stream.Conn().RemotePublicKey())
 
+}
+
+
+func (ipfs *IPFS) DialContext(ctx context.Context, net string, addr string) (net.Conn, error) {
+	return nil, nil
 }

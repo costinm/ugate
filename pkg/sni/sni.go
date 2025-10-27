@@ -6,13 +6,14 @@ import (
 	"net"
 	"strings"
 
-	"github.com/costinm/ssh-mesh/nio"
-	"github.com/costinm/ugate"
+	"github.com/costinm/meshauth"
+	"github.com/costinm/ugate/nio"
 )
 
 type SNIHandler struct {
-	UGate *ugate.UGate
-	Dialer net.Dialer
+	UGate    *meshauth.Mesh
+	Dialer   net.Dialer
+	Listener net.Listener
 }
 
 // HandleSNIConn implements SNI based routing. This can be used for compat
@@ -23,11 +24,11 @@ type SNIHandler struct {
 func (snih *SNIHandler) HandleConn(conn net.Conn) error {
 	hb := snih.UGate
 
-	s := nio.NewBufferReader(conn)
+	s := nio2.NewBufferReader(conn)
 	defer conn.Close()
 	defer s.Buffer.Recycle()
 
-	cn, sni, err := nio.SniffClientHello(s)
+	cn, sni, err := nio2.SniffClientHello(s)
 	if err != nil {
 		return err
 	}
@@ -63,9 +64,10 @@ func (snih *SNIHandler) HandleConn(conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-	err = nio.Proxy(nc, s, conn, addr)
+	err = nio2.Proxy(nc, s, conn, addr)
 	if err != nil {
 		return err
 	}
 	return nil
 }
+

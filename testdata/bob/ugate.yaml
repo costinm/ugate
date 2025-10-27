@@ -1,181 +1,25 @@
-# Most settings enabled, for a server
-name: bob
+# Old style: top level elements, mapping to MeshConfig object
+
+name: b
+namespace: bob
 domain: test.m.internal
 
-priv: |
-  -----BEGIN EC PRIVATE KEY-----
-  MHcCAQEEIG0y/ACuY0grzpMCZRWs/mUCgXY/vaMFN5MZOY+X901IoAoGCCqGSM49
-  AwEHoUQDQgAE51wdYyA7nhXKgUzvruRo4ZchJLNgJTlSkKRLpNYHhLrBjHivC4A4
-  HgysDlU4frwsTSg6qPOiXkTkA8VZJzdHMg==
-  -----END EC PRIVATE KEY-----
+modules:
+  - name: otlp
+  - name: uk8s
 
-cert: |
-  -----BEGIN CERTIFICATE-----
-  MIIBejCCASCgAwIBAgIRAK9oRInSJbAZDLpCWQX/UN8wCgYIKoZIzj0EAwIwFzEJ
-  MAcGA1UEChMAMQowCAYDVQQDEwEuMB4XDTIyMTEwNDE0MjgxMFoXDTIzMTEwNDE0
-  MjgxMFowFzEJMAcGA1UEChMAMQowCAYDVQQDEwEuMFkwEwYHKoZIzj0CAQYIKoZI
-  zj0DAQcDQgAE51wdYyA7nhXKgUzvruRo4ZchJLNgJTlSkKRLpNYHhLrBjHivC4A4
-  HgysDlU4frwsTSg6qPOiXkTkA8VZJzdHMqNNMEswDgYDVR0PAQH/BAQDAgWgMB0G
-  A1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAMBgNVHRMBAf8EAjAAMAwGA1Ud
-  EQQFMAOCAS4wCgYIKoZIzj0EAwIDSAAwRQIhALQoenr80BTUkIeFKyqOJTQM75sx
-  31/cQyVaS0hZfTRsAiBPnuyNeeLFuQ7+2ogMB2FQsg8oIjFEcd781XFEjJWMDg==
-  -----END CERTIFICATE-----
-  
+  - name: mds
+    address: ":12223"
 
-basePort: 12200
+  - name: ssh
+    address: ":2203"
 
-## Port-based listeners.
-#
-# - 'whitebox' egress - listen on 127.0.0.1, forwardTo
-# - forward: listen on :port, forwardTo dest
-# - 'input': listen on :port, forwardTo localhost or empty
-listeners:
-  # ======= Admin/debug/pperf port - DefaultMux in http
-  admin:
-    port: 12200
-    protocol: admin
+  - name: h2c
+    address: ":4433"
 
-  debug:
-    port: 12204
-    protocol: http
+  - name: admin
 
-  # Health and prom
-  health:
-    port: 12221
-    protocol: http
-
-  mqtt:
-    port: 12205
-    protocol: mqtt
-
-  # ======= HBone / multiplexed ingress
-
-  # SSH-secured inbound connections
-  # Will forward to local ports just like HBone.
-  ssh:
-    port: 12222
-    protocol: ssh
-
-  # TLS - H2 or H1
-  hbone:
-    port: 12208
-    protocol: hbone
-
-  # Plain text HTTP/2 - admin commands support HTTP/1.1
-  hbonec:
-    port: 12209
-    protocol: hbonec
-
-  tproxy-inbound:
-    port: 12206
-    protocol: tproxy
-
-  # /ip4/127.0.0.1/tcp/12207
-  # PeerID: QmXpb6CSoNP6nMgq4kwY9Zd3Gysws1BzjXQd9cYN8CU3y9
-  #
-  # CID: bafzbeiem4fnfiqwrhlt7scybi6bdnmommmtsdfwb5mcvsssqgl43xbiuba
-  # https://cid.ipfs.tech/#bafzbeiem4fnfiqwrhlt7scybi6bdnmommmtsdfwb5mcvsssqgl43xbiuba
-  ipfs:
-    port: 12207
-    protocol: ipfs
+  - name: local
 
 
-  # ======== Egress capture and ports
-  # Local traffic, will send to original dst or secure depending on dst.
-
-  # Tproxy and REDIRECT capture 'egress outbound' in istio.
-  tproxy:
-    port: 12201
-    protocol: tproxy
-
-  tproxy_udp:
-    port: 12201
-    protocol: tproxy_udp
-
-  socks:
-    port: 12202
-    protocol: socks
-
-  http_proxy:
-    port: 12203
-    protocol: http_proxy
-
-
-  # ======== Regular listeners for http, udp
-
-  udp:
-    port: 12230
-    protocol: udp
-
-  http:
-    port: 12238
-    protocol: http
-
-  https:
-    port: 12233
-    protocol: https
-
-  echo:
-    port: 12240
-    protocol: echo
-
-  # ============ Forwarding ports ==========
-
-  # Control plane redirect
-  xds-h2:
-    port: 12210
-    protocol: https
-
-  xds-h2c:
-    port: 12212
-    protocol: http
-
-  # direct TCP connect to local iperf3 and fortio (or HTTP on default port)
-  tcp-12201:
-    #port: 12201
-    forwardTo: 127.0.0.1:5201
-
-  # Accept using TLS - client must use TLS as well
-  tls-12215:
-    port: 15102
-    forwardTo: localhost:5201
-
-  # The equivalent for 2 sidecars - out TLS, in TLS
-  tcp-12216:
-    # The TLS server forwarding to iperf3
-    forwardTo: localiperf
-
-  # Virtual ports, captured via iptables-in
-#  "-:443":
-#    proto: https
-#
-#  "-:8111":
-#    forwardTo: localhost:15007
-#
-#  "-:8112":
-#    proto: https
-
-# Hosts represents pre-configured nodes.
-# Key is the DNS name or VIP.
-# If a host is not found here, discovery will be used ( DNS, control plane)
-hosts:
-  localiperf:
-    addr: localhost:15102
-
-  # Live test server
-  h.webinf.info:
-    addr: h.webinf.info:443
-#    id: B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA
-#
-#  c1.webinf.info:
-#    addr: c1.webinf.info:15007
-
-# Remote accept request (reverse forward, "-R")
-# Will also include relays, stun, etc.
-# TODO: could also be part of the hosts: definition, include a list
-# of ports. This way we don't dup the public key.
-#remoteAccept:
-#  h.webinf.info: "B5B6KYYUBVKCX4PWPWSWAIHW2X2D3Q4HZPJYWZ6UECL2PAODHTFA"
-#
-#  c1.webinf.info: ""
-
+# New style (similar to caddy):

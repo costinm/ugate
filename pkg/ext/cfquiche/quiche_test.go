@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/costinm/ugate/pkg/ugatesvc"
 	"github.com/costinm/ugate/pkg/test"
+	"github.com/costinm/ugate/pkg/ugatesvc"
 )
 
 func BenchmarkUGateQUIC(b *testing.B) {
@@ -66,7 +66,7 @@ func TestQuic(t *testing.T) {
 	})
 
 	//// In memory config store. All options
-	//bob := 	test.NewTestNode(test.BOB_KEYS, &ugate.MeshSettings{BasePort: 6400, Name: "bob"}, func(bob *ugate.UGate) {
+	//bob := 	test.NewTestNode(test.BOB_KEYS, &ugate.MeshNode{BasePort: 6400, Name: "bob"}, func(bob *ugate.UGate) {
 	//	New(bob)
 	//})
 	//log.Println(bob.Auth.VIP6)

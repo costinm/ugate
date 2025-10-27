@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -33,8 +34,7 @@ import (
 	"time"
 
 	"github.com/costinm/meshauth"
-	"github.com/costinm/ssh-mesh/nio"
-	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/nio2"
 )
 
 // TODO: For TUN capture, we can process the UDP packet directly, without going through the stack.
@@ -112,7 +112,7 @@ var (
 // This should be sufficient for local capture and small p2p nets.
 // In the mesh, UDP should be encapsulated in WebRTC or quic.
 type UdpNat struct {
-	nio.Stats
+	nio2.Stats
 
 	// External address - string
 	Dest string
@@ -136,41 +136,78 @@ type UdpNat struct {
 
 // Capture return - sends packets back to client app.
 // This is typically a netstack or TProxy
-var TransparentUDPWriter ugate.UdpWriter
+var TransparentUDPWriter UdpWriter
+
+// UdpWriter is the interface implemented by the TunTransport, to send
+// packets back to the virtual interface. TUN or TProxy raw support this.
+// Required for 'transparent' capture of UDP - otherwise use STUN/TURN/etc.
+// A UDP NAT does not need this interface.
+type UdpWriter interface {
+	WriteTo(data []byte, dstAddr *net.UDPAddr, srcAddr *net.UDPAddr) (int, error)
+}
+
+// UDPHandler is used to abstract the handling of incoming UDP packets on a UDP
+// listener or TUN.
+type UDPHandler interface {
+	HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte)
+}
 
 type UDPListener struct {
-	cfg *ugate.UGate
+	// On demand Dest and configs
+	cfg *meshauth.Mesh
+
+	Address string
+
+	ForwardTo string
 
 	// NAT
 	udpLock   sync.RWMutex
 	ActiveUdp map[string]*UdpNat
 
+	DNSHandler UDPHandler
 	//AllUdpCon map[string]*ugatesvc.HostStats
 
 	// UDP
 	// Capture return - sends packets back to client app.
 	// This is typically a netstack or TProxy
-	TransparentUDPWriter ugate.UdpWriter
+	TransparentUDPWriter UdpWriter
 
 	// Timeout for UDP sockets. Default 60 sec.
 	ConnTimeout time.Duration
-	l           *meshauth.PortListener
+	//l           *meshauth.Module
+
+	Mux *http.ServeMux
 }
 
-func New(ug *ugate.UGate, l *meshauth.PortListener) *UDPListener {
-	if ug.UDPHandler == nil {
-		udpg := &UDPListener{
-			cfg:         ug,
-			ConnTimeout: 60 * time.Second,
-			ActiveUdp:   map[string]*UdpNat{},
-			//AllUdpCon:   map[string]*ugatesvc.HostStats{},
-		}
-		udpg.l = l
-		udpg.InitMux(ug.Mux)
-		ug.UDPHandler = udpg
-		udpg.periodic()
+type UDPTproxy struct {
+	UDPListener
+}
+
+func (ul *UDPTproxy) Start() {
+	utp, err := StartUDPTProxyListener6(15006)
+	if utp != nil {
+		go UDPAccept(utp, ul.HandleUdp)
 	}
-	return ug.UDPHandler.(*UDPListener)
+	if err != nil {
+		slog.Warn("listener/tproxy_udp", "err", err)
+	}
+
+}
+
+func New() *UDPListener {
+	udpg := &UDPListener{
+		//cfg:         ug,
+		ConnTimeout: 60 * time.Second,
+		ActiveUdp:   map[string]*UdpNat{},
+		//AllUdpCon:   map[string]*ugatesvc.HostStats{},
+	}
+	//udpg.l = l
+
+	//udpg.InitMux(ug.Mux)
+	//ug.UDPHandler = udpg
+
+	udpg.periodic()
+	return udpg
 }
 
 func (udpg *UDPListener) periodic() {
@@ -181,7 +218,7 @@ func (udpg *UDPListener) periodic() {
 // http debug/metrics
 
 func (udpg *UDPListener) InitMux(mux *http.ServeMux) {
-	mux.HandleFunc("/dmesh/udpa/"+udpg.l.Address, udpg.HttpUDPNat)
+	mux.HandleFunc("/dmesh/udpa/"+udpg.Address, udpg.HttpUDPNat)
 }
 
 func (udpg *UDPListener) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +249,7 @@ func (udpg *UDPListener) HttpUDPNat(w http.ResponseWriter, r *http.Request) {
 //	the client will see the local address of this node, and the same port that is used with the remote.
 //
 // udpN is the 'dialed connection' -
-func remoteConnectionReadLoop(gw *UDPListener, localAddr *net.UDPAddr, acceptConn *net.UDPConn, udpN *UdpNat, writer ugate.UdpWriter) {
+func remoteConnectionReadLoop(gw *UDPListener, localAddr *net.UDPAddr, acceptConn *net.UDPConn, udpN *UdpNat, writer UdpWriter) {
 	if DumpUdp {
 		log.Println("Starting remote loop for ", localAddr, udpN.ReverseSrcAddr, udpN.DestAddr, udpN.Dest)
 	}
@@ -262,14 +299,14 @@ func remoteConnectionReadLoop(gw *UDPListener, localAddr *net.UDPAddr, acceptCon
 	}
 }
 
-func forwardReadLoop(gw *UDPListener, l *meshauth.PortListener, udpL *net.UDPConn) {
-	remoteA, err := net.ResolveUDPAddr("udp", l.ForwardTo)
+func forwardReadLoop(gw *UDPListener, udpL *net.UDPConn) {
+	remoteA, err := net.ResolveUDPAddr("udp", gw.ForwardTo)
 	if err != nil {
-		log.Println("Invalid forward address ", l.ForwardTo, err)
+		log.Println("Invalid forward address ", gw.ForwardTo, err)
 		return
 	}
 	if DumpUdp {
-		log.Println("Starting forward read loop for ", udpL.LocalAddr(), l.ForwardTo, remoteA)
+		log.Println("Starting forward read loop for ", udpL.LocalAddr(), gw.ForwardTo, remoteA)
 	}
 	buffer := bufferPoolUdp.Get().([]byte)
 	defer bufferPoolUdp.Put(buffer)
@@ -342,9 +379,8 @@ func forwardReadLoop(gw *UDPListener, l *meshauth.PortListener, udpL *net.UDPCon
 //}
 
 // Listener creates a regular UDP listener port
-func (udpg *UDPListener) Listener(lc *meshauth.PortListener) {
-	log.Println("Adding UDP ", lc)
-	_, p, _ := net.SplitHostPort(lc.Address)
+func (udpg *UDPListener) Run(ctx context.Context) {
+	_, p, _ := net.SplitHostPort(udpg.Address)
 	pp, _ := strconv.Atoi(p)
 	udpCon, err := net.ListenUDP("udp", &net.UDPAddr{
 		Port: pp,
@@ -356,7 +392,7 @@ func (udpg *UDPListener) Listener(lc *meshauth.PortListener) {
 		return
 	}
 
-	go forwardReadLoop(udpg, lc, udpCon)
+	go forwardReadLoop(udpg, udpCon)
 }
 
 // HandleUDP is processing a captured UDP packet. It can be captured by iptables TPROXY or
@@ -376,8 +412,8 @@ func (udpg *UDPListener) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net
 		return
 	}
 
-	if dstPort == 53 && udpg.cfg.DNS != nil {
-		udpg.cfg.DNS.HandleUdp(dstAddr, dstPort, localAddr, localPort, data)
+	if dstPort == 53 && udpg.DNSHandler != nil {
+		udpg.DNSHandler.HandleUdp(dstAddr, dstPort, localAddr, localPort, data)
 		return
 	}
 
@@ -405,7 +441,7 @@ func (udpg *UDPListener) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net
 			UDP: udpCon,
 		}
 
-		l, _ := udpg.cfg.Cluster(context.Background(), net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(dstPort)))) //FindRoutePrefix(dstAddr, dstPort, "udp://")
+		l, _ := udpg.cfg.Discover(context.Background(), net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(dstPort)))) //FindRoutePrefix(dstAddr, dstPort, "udp://")
 		if l != nil {
 			udpN.DestAddr, err = net.ResolveUDPAddr("udp", l.Addr)
 			if err != nil {

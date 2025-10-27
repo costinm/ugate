@@ -8,10 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/costinm/ssh-mesh/nio"
-
-	"github.com/costinm/ugate"
-
+	"github.com/costinm/meshauth"
+	"github.com/costinm/ugate/nio2"
 )
 
 // Used for HTTP_PROXY=localhost:port, to intercept outbound traffic using http
@@ -29,44 +27,18 @@ import (
 // A DNAT or explicit proxy are sufficient - no need for TPROXY or REDIRECT, host
 // is extracted from request and sessions should use cookies.
 type HttpProxy struct {
-	gw *ugate.UGate
-}
+	gw *meshauth.Mesh
 
-func NewHTTPProxy(gw *ugate.UGate) *HttpProxy {
-	return &HttpProxy{
-		gw: gw,
-	}
-}
+	NetListener net.Listener
 
-func ForwardHTTP(c *ugate.MeshCluster, w http.ResponseWriter, r *http.Request, pathH string) error {
-
-	r.Host = pathH
-	r1 := nio.CreateUpstreamRequest(w, r)
-
-	r1.URL.Scheme = "http"
-
-	// will be used by RoundTrip.
-	r1.URL.Host = pathH
-
-	res, err := c.RoundTrip(r1)
-	if err != nil {
-		return err
-	}
-	nio.SendBackResponse(w, r, res, err)
-	return nil
+	Transport *http.Transport
 }
 
 // RoundTripStart listening on the addr, as a HTTP_PROXY
 // Handles CONNECT and PROXY requests using the gateway
 // for streams.
-func (gw *HttpProxy) HttpProxyCapture(addr string) error {
-	// For http proxy we need a dedicated plain HTTP port
-	nl, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Println("Failed to listen", err)
-		return err
-	}
-	go http.Serve(nl, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (gw *HttpProxy) Start(ctx context.Context) error {
+	go http.Serve(gw.NetListener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "CONNECT" {
 			gw.handleConnect(w, r)
 			return
@@ -82,13 +54,31 @@ func (gw *HttpProxy) HttpProxyCapture(addr string) error {
 	return nil
 }
 
+func ForwardHTTP(c *meshauth.Dest, w http.ResponseWriter, r *http.Request, pathH string) error {
+
+	r.Host = pathH
+	r1 := nio2.CreateUpstreamRequest(w, r)
+
+	r1.URL.Scheme = "http"
+
+	// will be used by RoundTrip.
+	r1.URL.Host = pathH
+
+	res, err := c.RoundTrip(r1)
+	if err != nil {
+		return err
+	}
+	nio2.SendBackResponse(w, r, res, err)
+	return nil
+}
+
 // Http proxy to a configured HTTP host. Hostname to HTTP address explicitly
 // configured. Also hostnmae to file serving.
 func (gw *HttpProxy) proxy(w http.ResponseWriter, r *http.Request) bool {
 	// TODO: if host is XXXX.m.SUFFIX -> forward to node.
 
-	host, found := gw.gw.Clusters[r.Host]
-	if !found {
+	host, err := gw.gw.Discover(r.Context(), r.Host)
+	if err != nil {
 		return false
 	}
 	if len(host.Addr) > 0 {
@@ -114,14 +104,9 @@ func (gw *HttpProxy) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ht := &http.Transport{
-		DialContext: gw.gw.DialContext,
-	}
-	hc := &http.Client{Transport: ht}
+	ht := gw.Transport
 
-	// TODO: use VPN to RoundTripStart !!!
-	//
-	resp, err := hc.Transport.RoundTrip(r)
+	resp, err := ht.RoundTrip(r)
 	if err != nil {
 		log.Println("XXX ", err)
 		http.Error(w, err.Error(), 500)
@@ -129,7 +114,7 @@ func (gw *HttpProxy) captureHttpProxyAbsURL(w http.ResponseWriter, r *http.Reque
 	}
 	origBody := resp.Body
 	defer origBody.Close()
-	nio.CopyResponseHeaders(w.Header(), resp.Header)
+	nio2.CopyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 
@@ -164,15 +149,15 @@ func (gw *HttpProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	//ra := proxyClient.RemoteAddr().(*net.TCPAddr)
 
-	str := nio.GetStream(proxyClient, proxyClient)
+	str := nio2.GetStream(proxyClient, proxyClient)
 	if clientBuffer.Reader.Size() > 0 {
 
 	}
-	gw.gw.OnStream(str)
-	defer gw.gw.OnStreamDone(str)
+	//gw.gw.OnStream(str)
+	//defer gw.gw.OnStreamDone(str)
 
 	str.Dest = host
-	str.Direction = nio.StreamTypeOut
+	str.Direction = nio2.StreamTypeOut
 
 	nc, err := gw.gw.DialContext(context.Background(), "tcp", str.Dest)
 
@@ -183,7 +168,7 @@ func (gw *HttpProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	proxyClient.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 
-	nio.Proxy(nc, str, str, str.Dest)
+	nio2.Proxy(nc, str, str, str.Dest)
 
 	//defer nc.Close()
 	//

@@ -2,24 +2,21 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"github.com/costinm/ugate/pkg/ipfs"
-	"log"
+	"log/slog"
 	_ "net/http/pprof"
 	"os"
 
-	"github.com/costinm/meshauth"
-	meshauth_util "github.com/costinm/meshauth/util"
-	sshd "github.com/costinm/ssh-mesh"
-	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/ugated"
-	"sigs.k8s.io/yaml"
+	"github.com/costinm/ugate/appinit"
 
-	_ "github.com/costinm/ugate/pkg/ext/gvisor"
+	"github.com/costinm/ssh-mesh/pkg/h2"
+	"github.com/costinm/ssh-mesh/pkg/ssh"
+
+	_ "github.com/costinm/ugate/cmd"
+
+	"github.com/go-json-experiment/json"
+	"github.com/goccy/go-yaml"
 	//_ "github.com/costinm/ugate/pkg/ext/ipfs"
-	_ "github.com/costinm/ugate/pkg/ext/lwip"
-
-	"golang.org/x/exp/slog"
+	//_ "github.com/costinm/ugate/pkg/ext/lwip"
 )
 
 // Multiprotocol mesh gateway
@@ -38,126 +35,61 @@ import (
 // JNI mode (without many of the extras).
 func main() {
 	ctx := context.Background()
-	// First step in a 'main' app is to bootstrap
-	// - identity - certs, JWTs, other sources - maybe self-signed if first boot
-	// - control plane and core config/discovery services - MDS, k8s, XDS
-	// - env variables and local files to locate the CP and overrides/defaults
 
-	// SetCert configs from the current dir and var/lib/dmesh, or env variables
-	// Writes to current dir.
-	// TODO: other config sources, based on env
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{})))
 
-	// Use the detected config storage to load mesh settings
-	meshCfg := &ugate.MeshSettings{}
-	basecfg := meshauth_util.FindConfig("ugate", ".yaml")
-	if basecfg != nil {
-		err := yaml.Unmarshal(basecfg, meshCfg)
-		if err != nil {
-			panic(err)
-		}
+	// Register all modules in ugate and main deps
+	appinit.Yaml2Json = Yaml2JSON
+	// Use fancy json and yaml parsers (to test them out)
+	appinit.Unmarshallers["json"] = func(bytes []byte, a any) error {
+		return json.Unmarshal(bytes, a)
 	}
 
-	// ===== SSH protocol config =================
-	//
-	sshCfg := &meshCfg.SSHConfig
+	// Allow creation of more and H2 SSH servers
+	appinit.RegisterN("sshd", ssh.New)
+	appinit.RegisterT("h2cd", &h2.H2{})
+	// A H2C RoundTripper.
+	appinit.RegisterT("h2c", &h2.H2C{})
 
-	// SetCert keys, certs, configs from ~/.ssh/ - unless ssh was configured in the base config
-	if sshCfg.Private == "" {
-		sshd.EnvSSH(sshCfg)
+	// End registration for available modules
+
+	// Set the config repository
+	b := os.DirFS(".")
+	cs := appinit.AppResourceStore()
+
+	err := cs.Load(ctx, b, ".")
+	if err != nil {
+		slog.Error("RecordError", "err", err)
+		panic(err)
 	}
 
-	// From sshm.go
-	authn := meshauth.NewAuthn(&sshCfg.AuthnConfig)
+	// Other manually registered objects.
+	// s := sshcmd.NewSSHM()
+	// s.SSH.FromEnv()
+	// cs.Set("/ssh/default", s.SSH)
+	// cs.Set("/h2/default", s.H2)
+	// err = s.Provision(ctx)
+	// if err != nil {
+	// 	log.Error("Error provisioning", err, cs)
+	// 	panic(err)
+	// }
 
-	if len(sshCfg.AuthnConfig.Issuers) > 0 {
-		err := authn.FetchAllKeys(ctx, sshCfg.AuthnConfig.Issuers)
-		if err != nil {
-			log.Println("Issuers", err)
-		}
-		sshCfg.TokenChecker = authn.CheckJwtMap
+	// Start all 'services' in the config
+	err = cs.Start()
+	if err != nil {
+		panic(err)
 	}
 
-	// ========== Mesh Auth ======================
-	// TODO: use SSH config to bootstrap
+	// s is registered to the app store - so will start along with the rest.
+	// s.Start(ctx)
+	appinit.WaitEnd()
+}
 
-	// init defaults for the rest
-	if meshCfg.BasePort == 0 {
-		meshCfg.BasePort = 14000
+func Yaml2JSON(bb []byte) ([]byte, error) {
+	raw := map[string]any{}
+	err := yaml.Unmarshal(bb, &raw)
+	if err != nil {
+		return nil, err
 	}
-
-	// Initialize the authentication and core config, using env
-	// variables, detection and local files.
-	meshAuth, _ := meshauth.FromEnv(&meshCfg.MeshCfg)
-	if meshAuth.Cert == nil {
-		// If no Cert was found - generate a self-signed for bootstrap.
-		// Additional mesh certs can be added later, if a control plane is found.
-		meshAuth.InitSelfSigned("")
-		// TODO: only if mesh control plane not set.
-		meshAuth.SaveCerts(".")
-	}
-
-	// ========= UGateHandlers routing and extensions ===========
-
-	ug := ugate.New(meshAuth, meshCfg)
-
-	if ug.Listeners["hbonec"] == nil {
-		// Set if running in a knative env, or if an Envoy/ambient runs as a sidecar to handle
-		// TLS, QUIC, H2. In this mode only standard H2/MASQUE are supported, with
-		// reverse connections over POST or websocket.
-		knativePort := os.Getenv("PORT")
-		haddr := ""
-		if knativePort != "" {
-			haddr = ":" + knativePort
-		} else {
-			haddr = fmt.Sprintf("0.0.0.0:%d", meshCfg.BasePort)
-		}
-		ug.Listeners["hbonec"] =
-			&meshauth.PortListener{
-			Address: haddr,
-			Protocol: "hbonec"}
-	}
-
-	if ug.Listeners["ssh"] == nil {
-		ug.Listeners["ssh"] = &meshauth.PortListener{
-			Address: fmt.Sprintf(":%d", meshCfg.BasePort + 22),
-			Protocol: "ssh"}
-	}
-	if ug.Listeners["socks"] == nil {
-		ug.Listeners["socks"] = &meshauth.PortListener{
-			Address: fmt.Sprintf("127.0.0.1:%d", meshCfg.BasePort + 8),
-			Protocol: "socks"}
-	}
-	if ug.Listeners["tproxy"] == nil {
-		ug.Listeners["tproxy"] = &meshauth.PortListener{
-			Address: fmt.Sprintf(":%d", meshCfg.BasePort + 6),
-			Protocol: "tproxy"}
-	}
-	if ug.Listeners["quic"] == nil {
-		ug.Listeners["quic"] = &meshauth.PortListener{
-			Address: fmt.Sprintf(":%d", meshCfg.BasePort + 9),
-			Protocol: "quic"}
-	}
-
-	// Register core protocols.
-	ugated.Init(ug)
-
-	ipfs.Init(ug)
-
-	ug.Start()
-	// Start a SSH mesh node. This allows other authorized local nodes to jump and a debug
-	// interface.
-
-	for _, h := range ug.StartFunctions {
-		go h(ug)
-	}
-
-	// Log - may be sent to otel.
-	slog.Info("ugate/start",
-		"meshEnv", ug.Auth.ID,
-		"name", ug.Auth.Name,
-		"basePort", ug.BasePort,
-		"pub", meshauth.PublicKeyBase32SHA(meshauth.PublicKey(ug.Auth.Cert.PrivateKey)),
-		"vip", ug.Auth.VIP6)
-
-	meshauth_util.MainEnd()
+	return json.Marshal(raw)
 }

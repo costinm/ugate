@@ -1,0 +1,175 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Passkey Auth</title>
+</head>
+<body>
+<h1>Passkey Auth</h1>
+
+<label>
+    User ID (used to lookup the record only - can be hash of pubkey):
+    <input
+            type="text"
+            id="userID"
+            placeholder="unique-user-id"
+            oninput="updateButtons()"
+    />
+</label>
+<br />
+<label>
+    Name:
+    <input type="text" id="name" placeholder="user@example.com" />
+</label>
+<br />
+
+<button id="registerBtn" onclick="register()">Register</button>
+<button id="loginBtn" onclick="login()">Login</button>
+
+<div id="output" style="margin-top: 1em; font-family: monospace"></div>
+
+<script>
+    function base64urlEncode(buf) {
+        const bin = String.fromCharCode(...buf);
+        return btoa(bin)
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/, "");
+    }
+
+    function base64urlDecode(str) {
+        str = str.replace(/-/g, "+").replace(/_/g, "/");
+        while (str.length % 4 !== 0) str += "=";
+        return Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
+    }
+
+    function getUserID() {
+        return (
+            document.getElementById("userID").value.trim() || "user-id"
+        );
+    }
+
+    function setOutput(text) {
+        document.getElementById("output").textContent = text;
+    }
+
+    function updateButtons() {
+    }
+
+    window.addEventListener("DOMContentLoaded", updateButtons);
+
+    async function getChallenge(userID) {
+        const res = await fetch(
+            "/webauthn/challenge?user_id=" + encodeURIComponent(userID),
+        );
+        const { challenge } = await res.json();
+        return base64urlDecode(challenge);
+    }
+
+    async function register() {
+        const userID = getUserID();
+        const name =
+            document.getElementById("name").value || "user@example.com";
+
+        const challenge = await getChallenge(userID);
+
+        const options = {
+            publicKey: {
+                challenge: challenge.buffer,
+                rp: { name: "Passkey", id: "localhost" },
+                user: {
+                    id: Uint8Array.from(userID, (c) => c.charCodeAt(0)),
+                    name: name,
+                    displayName: name,
+                },
+                pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+                authenticatorSelection: {
+                    userVerification: "preferred",
+                },
+                timeout: 60000,
+                attestation: "none",
+            },
+        };
+
+        try {
+            const cred = await navigator.credentials.create(options);
+            const attObj = new Uint8Array(
+                cred.response.attestationObject,
+            );
+
+            const payload = {
+                attestation: base64urlEncode(attObj),
+                user_id: userID,
+            };
+
+            const res = await fetch("/webauthn/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const text = await res.text();
+            setOutput("Register result: " + text);
+        } catch (err) {
+            setOutput("Register error: " + err.message);
+        }
+    }
+
+    async function login() {
+        const userID = getUserID();
+        const challenge = await getChallenge(userID);
+
+        const options = {
+            // "silent" is another option
+            //mediation: "optional", // default
+            
+            // password: retrieve a password for the site.
+            
+            publicKey: {
+                challenge: challenge.buffer, // will be signed !
+                allowCredentials: [], // any credentials accepted
+                timeout: 60000,
+                userVerification: "discouraged", // "preferred",
+                // transports: ble, hybrid, internal, nfc, usb
+            },
+        };
+
+        try {
+            const assertion = await navigator.credentials.get(options);
+            const authData = new Uint8Array(
+                assertion.response.authenticatorData,
+            );
+            const clientDataJSON = new Uint8Array(
+                assertion.response.clientDataJSON,
+            );
+            const signature = new Uint8Array(
+                assertion.response.signature,
+            );
+            const rawId = new Uint8Array(assertion.rawId);
+
+            const payload = {
+                id: assertion.id,
+                rawId: base64urlEncode(rawId),
+                type: assertion.type,
+                user_id: userID,
+                response: {
+                    authenticatorData: base64urlEncode(authData),
+                    clientDataJSON: base64urlEncode(clientDataJSON),
+                    signature: base64urlEncode(signature),
+                    userHandle: null,
+                },
+            };
+
+            const res = await fetch("/webauthn/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const text = await res.text();
+            setOutput("Login result: " + text);
+        } catch (err) {
+            setOutput("Login error: " + err.message);
+        }
+    }
+</script>
+</body>
+</html>

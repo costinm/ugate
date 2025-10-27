@@ -3,17 +3,20 @@ package test
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"testing"
 	"time"
 
 	"github.com/costinm/meshauth"
-	"github.com/costinm/ssh-mesh/nio"
-	"github.com/costinm/ugate"
+	"github.com/costinm/ugate/appinit"
+	"github.com/costinm/ugate/nio"
 	"github.com/costinm/ugate/pkg/echo"
 )
+
+func init() {
+	appinit.RegisterT("echo", &echo.EchoHandler{})
+}
 
 // Separate package to avoid recursive deps.
 // The ugated package depends on each protocol impl.
@@ -21,59 +24,38 @@ import (
 // Also an example on how to use without configs.
 
 // NewClientNode inits a test node from a config dir, with no default listeners.
-func NewClientNode(maCfg *meshauth.MeshCfg, cfg *ugate.MeshSettings) (*ugate.UGate, error) {
-	ma := meshauth.NewMeshAuth(maCfg)
+func NewClientNode(base string) (*meshauth.Mesh, error) {
+	ma := meshauth.New()
 
-	// This is a base gate - without any special protocol (from ugated).
-	ug := ugate.New(ma, cfg)
-	ug.ListenerProto["echo"] = echo.EchoPortHandler
-
-	err := ug.Start()
-	return ug, err
+	return ma, nil
 }
 
 // NewTestNode creates a node with the given config.
-func NewTestNode(acfg *meshauth.MeshCfg, cfg *ugate.MeshSettings) *ugate.UGate {
-	basePort := cfg.BasePort
+func NewTestNode(base string) *meshauth.Mesh {
 
-	a := meshauth.NewMeshAuth(acfg)
-	if a.Priv == "" {
-		a.InitSelfSigned("")
-	}
-	ug := ugate.New(a, cfg)
+	//acfg.Modules = append(acfg.Modules, &meshauth.Module{
+	//	Address:  fmt.Sprintf("0.0.0.0:%d", basePort+11),
+	//	Name: "echo", // TLS ?
+	//})
+	//acfg.Modules = append(acfg.Modules, &meshauth.Module{
+	//	Address:  fmt.Sprintf("0.0.0.0:%d", basePort+12),
+	//	Name: "echo-2",
+	//})
+	a := meshauth.New()
+	ug := a
 
 	ech := &echo.EchoHandler{UGate: ug}
 	ug.Mux.Handle("/debug/echo/", ech)
 
-	ug.ListenerProto["echo"] = echo.EchoPortHandler
-
-	// Echo - TCP
-	ug.StartListener(&meshauth.PortListener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+11),
-		Protocol: "echo", // TLS ?
-	})
-	ug.StartListener(&meshauth.PortListener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", basePort+12),
-		Protocol: "echo",
-	})
 
 	return ug
 }
 
-func InitEcho(port int) *ugate.UGate {
-	//cs := meshauth.NewConf()
-	ug := ugate.New(nil, &ugate.MeshSettings{
-		BasePort: port,
-	})
+func InitEcho(port int) *meshauth.Mesh {
+	ug := meshauth.New()
 
 	// Echo - TCP
 
-	ug.ListenerProto["echo"] = echo.EchoPortHandler
-
-	ug.StartListener(&meshauth.PortListener{
-		Address:  fmt.Sprintf("0.0.0.0:%d", port+12),
-		Protocol: "echo",
-	})
 	return ug
 }
 
@@ -146,7 +128,7 @@ func CheckEcho(in io.Reader, out io.Writer) (string, error) {
 			return "", err
 		}
 	*/
-	if cw, ok := out.(nio.CloseWriter); ok {
+	if cw, ok := out.(nio2.CloseWriter); ok {
 		cw.CloseWrite()
 	} else {
 		out.(io.Closer).Close()
@@ -162,50 +144,50 @@ func CheckEcho(in io.Reader, out io.Writer) (string, error) {
 	return js, nil
 }
 
-var AliceMeshAuthCfg = &meshauth.MeshCfg{
-	Name: "alice",
-	Domain: "test.m.internal",
-	Priv: `
------BEGIN EC PRIVATE KEY-----
-MHcCAQEEIOa4YuOsiCIqcFqqknjeTaPCwVEuF/X9YJMdf77V09HyoAoGCCqGSM49
-AwEHoUQDQgAE1ac88a5eI83WDHmtOJmce4HhRO3s9iObYKnP9QkpZPMRYwJcvi0i
-N9miG3v5LoooDq6r9Nt2e/koHw6E1SvmlQ==
------END EC PRIVATE KEY-----
-`,
-	CertBytes: `
------BEGIN CERTIFICATE-----
-MIIBeDCCAR+gAwIBAgIQUzvKlOHbjBotS03Lku+pBTAKBggqhkjOPQQDAjAXMQkw
-BwYDVQQKEwAxCjAIBgNVBAMTAS4wHhcNMjQwMTA1MTg0NDMyWhcNMjUwMTA0MTg0
-NDMyWjAXMQkwBwYDVQQKEwAxCjAIBgNVBAMTAS4wWTATBgcqhkjOPQIBBggqhkjO
-PQMBBwNCAATVpzzxrl4jzdYMea04mZx7geFE7ez2I5tgqc/1CSlk8xFjAly+LSI3
-2aIbe/kuiigOrqv023Z7+SgfDoTVK+aVo00wSzAOBgNVHQ8BAf8EBAMCBaAwHQYD
-VR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMAwGA1UdEwEB/wQCMAAwDAYDVR0R
-BAUwA4IBLjAKBggqhkjOPQQDAgNHADBEAiAGfrW7fgnGYV0AHPhc2sgymzpuy0DS
-T8kswXTqlc/b2gIgUNTQoHbS9R/VTrxIbHCQeL5TZE4XCGq3DQ9lHgAld4E=
------END CERTIFICATE-----
-`,
-}
-
-var BobMeshAuthCfg = &meshauth.MeshCfg{
-	Name: "bob",
-	Domain: "test.m.internal",
-	Priv: `-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIG0y/ACuY0grzpMCZRWs/mUCgXY/vaMFN5MZOY+X901IoAoGCCqGSM49
-AwEHoUQDQgAE51wdYyA7nhXKgUzvruRo4ZchJLNgJTlSkKRLpNYHhLrBjHivC4A4
-HgysDlU4frwsTSg6qPOiXkTkA8VZJzdHMg==
------END EC PRIVATE KEY-----`,
-	CertBytes: `-----BEGIN CERTIFICATE-----
-MIIBejCCASCgAwIBAgIRAK9oRInSJbAZDLpCWQX/UN8wCgYIKoZIzj0EAwIwFzEJ
-MAcGA1UEChMAMQowCAYDVQQDEwEuMB4XDTIyMTEwNDE0MjgxMFoXDTIzMTEwNDE0
-MjgxMFowFzEJMAcGA1UEChMAMQowCAYDVQQDEwEuMFkwEwYHKoZIzj0CAQYIKoZI
-zj0DAQcDQgAE51wdYyA7nhXKgUzvruRo4ZchJLNgJTlSkKRLpNYHhLrBjHivC4A4
-HgysDlU4frwsTSg6qPOiXkTkA8VZJzdHMqNNMEswDgYDVR0PAQH/BAQDAgWgMB0G
-A1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAMBgNVHRMBAf8EAjAAMAwGA1Ud
-EQQFMAOCAS4wCgYIKoZIzj0EAwIDSAAwRQIhALQoenr80BTUkIeFKyqOJTQM75sx
-31/cQyVaS0hZfTRsAiBPnuyNeeLFuQ7+2ogMB2FQsg8oIjFEcd781XFEjJWMDg==
------END CERTIFICATE-----
-`,
-}
+//var AliceMeshAuthCfg = &meshauth.MeshCfg{
+//	Name:   "alice",
+//	Domain: "test.m.internal",
+//	Priv: `
+//-----BEGIN EC PRIVATE KEY-----
+//MHcCAQEEIOa4YuOsiCIqcFqqknjeTaPCwVEuF/X9YJMdf77V09HyoAoGCCqGSM49
+//AwEHoUQDQgAE1ac88a5eI83WDHmtOJmce4HhRO3s9iObYKnP9QkpZPMRYwJcvi0i
+//N9miG3v5LoooDq6r9Nt2e/koHw6E1SvmlQ==
+//-----END EC PRIVATE KEY-----
+//`,
+//	CertBytes: `
+//-----BEGIN CERTIFICATE-----
+//MIIBeDCCAR+gAwIBAgIQUzvKlOHbjBotS03Lku+pBTAKBggqhkjOPQQDAjAXMQkw
+//BwYDVQQKEwAxCjAIBgNVBAMTAS4wHhcNMjQwMTA1MTg0NDMyWhcNMjUwMTA0MTg0
+//NDMyWjAXMQkwBwYDVQQKEwAxCjAIBgNVBAMTAS4wWTATBgcqhkjOPQIBBggqhkjO
+//PQMBBwNCAATVpzzxrl4jzdYMea04mZx7geFE7ez2I5tgqc/1CSlk8xFjAly+LSI3
+//2aIbe/kuiigOrqv023Z7+SgfDoTVK+aVo00wSzAOBgNVHQ8BAf8EBAMCBaAwHQYD
+//VR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMAwGA1UdEwEB/wQCMAAwDAYDVR0R
+//BAUwA4IBLjAKBggqhkjOPQQDAgNHADBEAiAGfrW7fgnGYV0AHPhc2sgymzpuy0DS
+//T8kswXTqlc/b2gIgUNTQoHbS9R/VTrxIbHCQeL5TZE4XCGq3DQ9lHgAld4E=
+//-----END CERTIFICATE-----
+//`,
+//}
+//
+//var BobMeshAuthCfg = &meshauth.MeshCfg{
+//	Name:   "bob",
+//	Domain: "test.m.internal",
+//	Priv: `-----BEGIN EC PRIVATE KEY-----
+//MHcCAQEEIG0y/ACuY0grzpMCZRWs/mUCgXY/vaMFN5MZOY+X901IoAoGCCqGSM49
+//AwEHoUQDQgAE51wdYyA7nhXKgUzvruRo4ZchJLNgJTlSkKRLpNYHhLrBjHivC4A4
+//HgysDlU4frwsTSg6qPOiXkTkA8VZJzdHMg==
+//-----END EC PRIVATE KEY-----`,
+//	CertBytes: `-----BEGIN CERTIFICATE-----
+//MIIBejCCASCgAwIBAgIRAK9oRInSJbAZDLpCWQX/UN8wCgYIKoZIzj0EAwIwFzEJ
+//MAcGA1UEChMAMQowCAYDVQQDEwEuMB4XDTIyMTEwNDE0MjgxMFoXDTIzMTEwNDE0
+//MjgxMFowFzEJMAcGA1UEChMAMQowCAYDVQQDEwEuMFkwEwYHKoZIzj0CAQYIKoZI
+//zj0DAQcDQgAE51wdYyA7nhXKgUzvruRo4ZchJLNgJTlSkKRLpNYHhLrBjHivC4A4
+//HgysDlU4frwsTSg6qPOiXkTkA8VZJzdHMqNNMEswDgYDVR0PAQH/BAQDAgWgMB0G
+//A1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAMBgNVHRMBAf8EAjAAMAwGA1Ud
+//EQQFMAOCAS4wCgYIKoZIzj0EAwIDSAAwRQIhALQoenr80BTUkIeFKyqOJTQM75sx
+//31/cQyVaS0hZfTRsAiBPnuyNeeLFuQ7+2ogMB2FQsg8oIjFEcd781XFEjJWMDg==
+//-----END CERTIFICATE-----
+//`,
+//}
 
 // Helpers for setting up a ugate test env.
 

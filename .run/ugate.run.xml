@@ -1,15 +1,3 @@
 <component name="ProjectRunConfigurationManager">
   <configuration />
-  <configuration default="false" name="ugate" type="GoApplicationRunConfiguration" factoryName="Go Application">
-    <module name="ugate-ws" />
-    <working_directory value="$PROJECT_DIR$/ugate/cmd/ugated" />
-    <envs>
-      <env name="XGODEBUG" value="http2debug=2" />
-    </envs>
-    <kind value="PACKAGE" />
-    <package value="github.com/costinm/ugate/cmd/ugated" />
-    <directory value="github.com/costinm/ugate/cmd/ugated" />
-    <filePath value="$PROJECT_DIR$/cmd/ugate/ugate.go" />
-    <method v="2" />
-  </configuration>
 </component>

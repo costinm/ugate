@@ -16,7 +16,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/costinm/ssh-mesh/nio"
+	"github.com/costinm/ugate/nio2"
 	"golang.org/x/sys/unix"
 )
 
@@ -38,7 +38,7 @@ type packetInfo struct {
 }
 
 type receivedPacket struct {
-	buffer *nio.Buffer
+	buffer *nio2.Buffer
 
 	remoteAddr net.Addr
 	rcvTime    time.Time
@@ -175,7 +175,7 @@ func newConn(c OOBCapablePacketConn) (*oobConn, error) {
 }
 
 func (c *oobConn) ReadPacket() (*receivedPacket, error) {
-	buffer := nio.GetBuffer(0, MaxPacketBufferSize)
+	buffer := nio2.GetBuffer(0, MaxPacketBufferSize)
 	// The packet size should not exceed protocol.MaxPacketBufferSize bytes
 	// If it does, we only read a truncated packet, which will then end up undecryptable
 	//buffer = buffer[:MaxPacketBufferSize]

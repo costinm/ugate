@@ -3,18 +3,19 @@ package dns
 import (
 	"context"
 	"encoding/binary"
+	"expvar"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/miekg/dns"
+
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -37,6 +38,12 @@ var (
 	}}
 )
 
+func init() {
+	// Implements: ServeHTTP - as handler supports DOH
+	//
+	expvar.Publish("modules.dns", expvar.Func(func() any { return New() }))
+}
+
 // UdpWriter is the interface implemented by the TunTransport, to send
 // packets back to the virtual interface
 // Set by TProxy and TUN capture. If missing, a regular UDP will be used,
@@ -56,13 +63,12 @@ type DmDns struct {
 	// This is typically a netstack or TProxy
 	UDPWriter UdpWriter
 
-	// Client used for communicating with the gateway - should be capable of H2, and have
-	// all authetication set up.
+	// Client used for DNS-over-HTTPS requests.
 	H2 *http.Client
 
 	// Address and port for the DNS-over-https gateway. If empty, direct calls
 	// using dnsUDPClient.
-	BaseUrl string
+	BaseUrl string `json:"dohURL,omitempty"`
 
 	// Local DNS server, respond with local entries or forwards.
 	dnsServer *dns.Server
@@ -71,16 +77,26 @@ type DmDns struct {
 	// TODO: periodic cleanup by ts
 	dnsByAddr map[string]*DnsEntry
 
+	// dnsByName - loaded during provision from config(s) or dynamically added.
+	// Files and resource store can also hold on-demand records.
 	dnsByName map[string]*DnsEntry
+
+	Records map[string]*Record
 
 	// local DNS entries. Both server and 'client'
 	dnsEntries map[string]map[uint16]dns.RR
 
 	// Nameservers to use for direct calls, without a VPN.
 	// Overriden from "DNS" env variable.
-	nameservers []string
+	Nameservers []string
 	Port        int
+
+	Mux *http.ServeMux
+
+	Capture bool
 }
+
+type Record map[string][]string
 
 // Info and stats about a DNS entry.
 type DnsEntry struct {
@@ -101,15 +117,97 @@ type DnsEntry struct {
 	Lat time.Duration
 }
 
-// Blocking
-func (s *DmDns) Serve() {
-	s.dnsServer.ActivateAndServe()
+func New() *DmDns {
+	return &DmDns{
+		dnsUDPclient: &dns.Client{},
+		dnsEntries:   map[string]map[uint16]dns.RR{},
+		dnsByAddr:    make(map[string]*DnsEntry),
+		dnsByName:    make(map[string]*DnsEntry),
+	}
 }
 
-func (s *DmDns) Start(mux *http.ServeMux) {
-	net.DefaultResolver.PreferGo = true
-	net.DefaultResolver.Dial = DNSDialer(s.Port)
-	go s.Serve()
+func (d *DmDns) Provision(ctx context.Context) error {
+	if d.Nameservers == nil {
+		d.Nameservers = []string{
+			"1.1.1.1:53", // cloudflare
+			//"209.244.0.3:53", // level3
+			//"74.82.42.42:53", // HE
+			//"8.8.8.8:53",     //google
+			//"208.67.222.222:53", // opendns
+		}
+	}
+	port := d.Port
+	if port == 0 {
+		port = 15053
+	}
+
+	addr := ":" + strconv.Itoa(port)
+	d.dnsServer = &dns.Server{
+		Addr:         addr,
+		Net:          "udp",
+		WriteTimeout: 3 * time.Second,
+		ReadTimeout:  15 * time.Minute}
+
+	// Can also set Handler instead of using ServerMux
+	dns.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
+		m := d.Do(req)
+		writeMsg(w, m)
+	})
+
+	a, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return err
+	}
+	l, err := net.ListenUDP("udp", a)
+	if err != nil {
+		return err
+	}
+
+	d.UDPConn = l
+	err6 := ipv6.NewPacketConn(l).SetControlMessage(ipv6.FlagDst|ipv6.FlagInterface, true)
+	err4 := ipv4.NewPacketConn(l).SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
+	if err6 != nil && err4 != nil {
+		return err4
+	}
+	d.dnsServer.PacketConn = l
+
+	// if d.Mux != nil {
+	// 	d.Mux.Handle("/dns/", d)
+	// }
+
+	// TODO: also on TCP
+
+	return nil
+}
+
+func (s *DmDns) Start(ctx context.Context) error {
+	// MAYBE: separate dns client ?
+	// Base is x/net/dns - but without generic lookups.
+	// Root is /etc/resolv.conf
+
+	// Replacing the golang DNS resolver can be useful - but I think it increases
+	// complexity and risks. Some code will not be go and use the /etc/resolv.conf
+	// directly or via some other library.
+
+	// Best option remains to set it to a per-host resolver on :53, with each VM
+	// on the host pointing to it. Interception is not such a good idea, but works
+	// as a backup (UDP and TCP).
+	if s.Capture {
+		// For Dial(), use this resolver.
+		net.DefaultResolver.PreferGo = true
+		// Install a dialer that connects to DmDns as resolver.
+		// If it implements PacketConn, UDP will be used.
+		// Otherwise it is used as DOT.
+		//
+		net.DefaultResolver.Dial = DNSDialer(s.Port)
+	}
+
+	if s.Port > 0 {
+		// Will use PacketConn if not nil - and set the socket options.
+		// Will also serve on the Listener as DOT.
+		go s.dnsServer.ActivateAndServe()
+	}
+	return nil
 }
 
 // Given an IPv4 or IPv6 address, return the name if DNS was used.
@@ -139,68 +237,6 @@ func (s *DmDns) IPResolve(ip string) string {
 		return ""
 	}
 	return de.Name
-}
-
-// New DNS server, listening on port.
-func NewDmDns(port int) (*DmDns, error) {
-	d := &DmDns{
-		Port:         port,
-		dnsUDPclient: &dns.Client{},
-		dnsEntries:   map[string]map[uint16]dns.RR{},
-		dnsByAddr:    make(map[string]*DnsEntry),
-		dnsByName:    make(map[string]*DnsEntry),
-		nameservers: []string{
-			"1.1.1.1:53", // cloudflare
-			//"209.244.0.3:53", // level3
-			//"74.82.42.42:53", // HE
-			//"8.8.8.8:53",     //google
-			//"208.67.222.222:53", // opendns
-		},
-	}
-
-	dnsOverride := os.Getenv("DNS")
-	if dnsOverride != "" {
-		d.nameservers = strings.Split(dnsOverride, ",")
-	}
-
-	if port != -1 {
-		addr := ":" + strconv.Itoa(port)
-		d.dnsServer = &dns.Server{
-			Addr:         addr,
-			Net:          "udp",
-			WriteTimeout: 3 * time.Second,
-			ReadTimeout:  15 * time.Minute}
-
-		dns.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
-			m := d.Process(req)
-			writeMsg(w, m)
-		})
-
-		a, err := net.ResolveUDPAddr("udp", addr)
-		if err != nil {
-			return d, err
-		}
-		l, err := net.ListenUDP("udp", a)
-		if err != nil {
-			return d, err
-		}
-
-		log.Println("Starting DNS server ", port)
-
-		d.UDPConn = l
-		err6 := ipv6.NewPacketConn(l).SetControlMessage(ipv6.FlagDst|ipv6.FlagInterface, true)
-		err4 := ipv4.NewPacketConn(l).SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
-		if err6 != nil && err4 != nil {
-			return d, err4
-		}
-		d.dnsServer.PacketConn = l
-
-		go d.dnsServer.ActivateAndServe()
-
-		// TODO: also on TCP
-
-	}
-	return d, nil
 }
 
 // DNSOverTCP implements DNS over TCP protocol. Used in TCP capture, for port 53.
@@ -259,7 +295,7 @@ func (s *DmDns) DNSOverTCP(in io.ReadCloser, out io.Writer) error {
 		err = req.Unpack(buf[2 : 2+packetLen])
 
 		// TODO: in a go routine, to not block
-		res := s.Process(req)
+		res := s.Do(req)
 
 		resBB, _ := res.PackBuffer(resB[2:])
 		binary.BigEndian.PutUint16(resB[0:], uint16(len(resBB)))
@@ -286,14 +322,29 @@ func (s *DmDns) DNSOverTCP(in io.ReadCloser, out io.Writer) error {
 	return err
 }
 
-// Process resolves a query by forwarding to a recursive nameserver or handling it locally.
+/*
+
+CoreDNS:
+- plugin.Register("name", func(caddy.Controller)error)) // forked caddy
+- needs a Name() method
+- plugin.Handler - ServeDNS takes a dns.ResponseWriter
+
+*/
+
+func (s *DmDns) ServeDNS(req *dns.Msg, w dns.ResponseWriter) (int, error) {
+	res := s.Do(req)
+	err := w.WriteMsg(res)
+	return 0, err
+}
+
+// Do resolves a query by forwarding to a recursive nameserver or handling it locally.
 // This is the main function - can be called from:
 // - the real local UDP DNS (mike's)
 // - DNS-over-TCP or TLS server
 // - captured UDP:53 from TUN
 //
 // Wrapps the real process method with stats gathering and builds a reverse map of IP to names
-func (s *DmDns) Process(req *dns.Msg) *dns.Msg {
+func (s *DmDns) Do(req *dns.Msg) *dns.Msg {
 	//ClientMetrics.Total.StartListener(1)
 	if len(req.Question) == 0 {
 		m := new(dns.Msg)
@@ -445,7 +496,7 @@ func (s *DmDns) ForwardRealDNS(req *dns.Msg) (*dns.Msg, error) {
 	var r *dns.Msg
 	var err error
 
-	nservers := s.nameservers
+	nservers := s.Nameservers
 
 	// Send to all nameservers, find the fastest
 	if dnsTest {
@@ -568,6 +619,11 @@ func (s *DmDns) localQuery(m *dns.Msg) bool {
 	return needsFwd
 }
 
+// DNSDialer will return a dialer function that ignores network and address and
+// instead connects to the fixed address.
+//
+// Apps may still use custom resolvers (including secure resolvers) so this does not
+// work very well - setting resolv.conf or interception still better.
 func DNSDialer(port int) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		d := net.Dialer{}
@@ -576,27 +632,14 @@ func DNSDialer(port int) func(ctx context.Context, network, address string) (net
 	}
 }
 
-// HttpDebugDNS dumps DNS cache (dnsByName)
-func (s *DmDns) HttpDebugDNS(w http.ResponseWriter, r *http.Request) {
-	s.dnsLock.RLock()
-	defer s.dnsLock.RUnlock()
-	w.Header().Add("Content-type", "text/plain")
-	for _, d := range s.dnsByName {
-		if d.IP != nil {
-			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%v\n", d.IP.String(), d.Name, d.Count, d.RCount, d.Lat)
-		} else {
-			fmt.Fprintf(w, "-\t%s\t%d\n", d.Name, d.Count)
-		}
-	}
-	//json.NewEncoder(w).Encode(p.DnsByAddr)
-}
-
-// Special capture for DNS. Will use the DNS VPN or direct calls.
-func (gw *DmDns) HandleUdp(dstAddr net.IP, dstPort uint16, localAddr net.IP, localPort uint16, data []byte) {
+// Special capture for DNS with TUN or TPROXY. Will use the DNS VPN or direct calls.
+func (gw *DmDns) HandleUdp(dstAddr net.IP, dstPort uint16,
+	localAddr net.IP, localPort uint16,
+	data []byte) {
 	req := new(dns.Msg)
 	req.Unpack(data)
 
-	res := gw.Process(req)
+	res := gw.Do(req)
 
 	data1, _ := res.Pack()
 	src := &net.UDPAddr{Port: int(localPort), IP: localAddr}

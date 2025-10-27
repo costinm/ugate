@@ -1,0 +1,21 @@
+# Modules requiring running as root - DHCP, NFT
+
+# Name is based on the hostname
+name: root
+namespace: istio-system
+
+# can also be detected from the hostname.
+domain: test.m.internal
+
+
+# Using Istio port range and HBONE/capture ports.
+# This is a test file, all ports offset by 200 (alice is offset by 100, gate by 300)
+moduels:
+
+  # SSH-secured inbound connections
+  # Will forward to local ports just like HBone.
+  - name: dhcp
+
+  - name: nft
+
+  - name: dns

@@ -1,17 +1,14 @@
-apiVersion: autoscaling/v2beta1
+apiVersion: autoscaling/v1
 kind: HorizontalPodAutoscaler
 metadata:
-  name: ugate
-  namespace: ugate
-  labels:
-    release: ugate
+  name: {{ .Release.Name }}
 spec:
-  maxReplicas: 1
+  maxReplicas: 3
   minReplicas: 1
   scaleTargetRef:
     apiVersion: apps/v1
-    kind: Deployment
-    name: ugate
+    kind: StatefulSet
+    name: {{ .Release.Name }}
   metrics:
     - type: Resource
       resource:

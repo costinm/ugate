@@ -19,7 +19,15 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}
+      annotations:
+          sidecar.istio.io/inject: "false"
+          {{ if .Values.gcpbucket}}
+          gke-gcsfuse/volumes: "true"
+          gke-gcsfuse/ephemeral-storage-limit: "50Gi"
+          {{ end }}
     spec:
+      # nodeSelector:
+      #   cloud.google.com/gke-ephemeral-storage-local-ssd: "true"
       serviceAccountName: default
       containers:
         - name: app
@@ -130,7 +138,18 @@ spec:
         runAsGroup: 5228
 
       volumes:
-
+        {{ if .Values.gcpbucket}}
+        - name: gcp
+          csi:
+            driver: gcsfuse.csi.storage.gke.io
+            readOnly: true
+            volumeAttributes:
+              # According to the docs: _ will mount all buckets the SA has access to
+              bucketName: {{ .Values.gcpbucket }}
+              mountOptions: "implicit-dirs"
+              gcsfuseLoggingSeverity: warning
+              fileCacheCapacity: "10Gi"
+        {{ end }}
         # /var/run/secrets/istio-dns - DNS certs (istiod-gen)
         # Istiod writes to this file, used is GW is along istiod
         - emptyDir:

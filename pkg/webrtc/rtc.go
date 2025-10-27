@@ -97,7 +97,7 @@ func InitTURN(publicIP string) error {
 //// Blocking server.
 //// Issue: NetConn for a server needs to 'latch' to a port, to emulate a connection. Yet we want to use
 //// the same port on server side.
-//func (r *RTC) InitSCTPS(port int) error {
+//func (r *RTConn) InitSCTPS(port int) error {
 //	addr := net.UDPAddr{
 //		IP:   net.IPv4(0, 0, 0, 0),
 //		Port: port,
@@ -127,7 +127,7 @@ func InitTURN(publicIP string) error {
 //	return nil
 //}
 //
-//func (r *RTC) InitSCTP(addr string) error {
+//func (r *RTConn) InitSCTP(addr string) error {
 //	conn, err := net.RoundTripStart("udp", "127.0.0.1:5678")
 //	if err != nil {
 //		log.Panic(err)

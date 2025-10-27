@@ -12,7 +12,6 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-
 // ConnectionGater implementation
 // WIP - will implement a policy to allow/deny based on RBAC
 
@@ -20,7 +19,6 @@ func (p2p *IPFS) InterceptPeerDial(p peer.ID) (allow bool) {
 	log.Println("IPFS: peerDial", p)
 	return true
 }
-
 
 func (p2p *IPFS) InterceptAddrDial(id peer.ID, m multiaddr.Multiaddr) (allow bool) {
 	log.Println("IPFS: addrDial", id, m)
@@ -34,7 +32,6 @@ func (p2p *IPFS) InterceptAccept(multiaddrs network.ConnMultiaddrs) (allow bool)
 	return true
 }
 
-
 func (p2p *IPFS) InterceptSecured(direction network.Direction, id peer.ID, multiaddrs network.ConnMultiaddrs) (allow bool) {
 	t, _ := multiaddrs.RemoteMultiaddr().MarshalText()
 	log.Println("IPFS: secured", direction, id, string(t), dialCnt, peerDialCnt)
@@ -45,7 +42,7 @@ func (p2p *IPFS) InterceptUpgraded(conn network.Conn) (allow bool, reason contro
 	t, _ := conn.RemoteMultiaddr().MarshalText()
 	rmt, _ := conn.RemoteMultiaddr().MarshalText()
 	log.Println("IPFS: upgraded", conn.RemotePeer(), string(t),
-			string(rmt), conn.ID())
+		string(rmt), conn.ID())
 	return true, 0
 }
 
@@ -59,32 +56,32 @@ func InitEvent(h host.Host) {
 		log.Println(err)
 	}
 
-	connChgCnt :=0
+	connChgCnt := 0
 
 	go func() {
 		defer sub.Close()
 		for e := range sub.Out() {
 			switch v := e.(type) {
 			case peer.ID:
-				log.Println("IPFS Peer ", v)
+				log.Println("IPFS PeerID ", v)
 
 			case event.EvtLocalAddressesUpdated:
-				log.Println("IPFS local ", v)
+				log.Println("IPFS LocalAddressUpdated ", v)
 
 			case event.EvtLocalReachabilityChanged:
-				log.Println("IPFS reach ", v)
+				log.Println("IPFS ReachabilityChanged ", v)
 
-				case event.EvtPeerProtocolsUpdated:
-					if len(v.Added) > 0 || len(v.Removed) > 0 {
-						log.Println("IPFS PeerProto ", v, v.Added, v.Removed)
-					}
+			case event.EvtPeerProtocolsUpdated:
+				if len(v.Added) > 0 || len(v.Removed) > 0 {
+					log.Println("IPFS PeerProto ", v, v.Added, v.Removed)
+				}
 			case event.EvtPeerIdentificationFailed:
 				//log.Println("IPFS Peer ", v)
 			case event.EvtPeerIdentificationCompleted:
 				//log.Println("IPFS Peer ", v)
 			case event.EvtPeerConnectednessChanged:
 				connChgCnt++
-				if connChgCnt % 50 == 0 {
+				if connChgCnt%50 == 0 {
 					log.Println("PeerConnectednesChanged 50", v)
 				}
 			default:
@@ -96,4 +93,3 @@ func InitEvent(h host.Host) {
 
 	//_, ch,routing.RegisterForQueryEvents(context.Background())
 }
-

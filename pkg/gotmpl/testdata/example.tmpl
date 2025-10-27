@@ -1,0 +1,97 @@
+---
+{{ define "a" }}{ "foo": "{{ . }}"  }{{ end }}
+example: value
+---
+
+Template is a keyword and will render the template - but can't be used as pipeline
+
+{{ template "a" "param" }}
+
+Doesn't work:
+{ $v := template "a" "param" }
+
+Converting a template to json - template can be safely executed in parallel.
+
+{{ $v := include "a" "param<"  }}
+{{ $vj := fromJson $v }}
+
+Text value: {{- $v -}}
+
+Json value: {{ toJson $vj }}
+
+Eval: {{ $vj.foo }}
+
+
+## Sprig library
+
+"must" prefix - error if not valid.
+
+fromJson, toJson, toPrettyJson, mustFromJson, ...
+toRawJson - don't escape html chars
+
+{{ b64enc "hello" }}
+{{ b32dec (b32enc "123") }}
+
+{{ $v = list 1 2 3 }}
+
+first: {{ first $v }}
+rest: {{ rest $v }}
+last: {{ last $v }}
+
+
+{{ $v = append $v 3 }}
+append: {{ $v }}
+prepend: {{ prepend $v 0 }}
+concat: {{ concat $v (list 8 9) }}
+reverse {{ reverse $v }}
+uniq: {{ uniq $v }}
+without 3: {{ without $v 3 }}
+chunk 2: {{ chunk 2 $v }}
+slice 3 4: {{ slice $v 3 4 }}
+
+
+{{ $v = dict "a" 1 "b" 2 }}
+dict: {{ $v }}
+keys: {{ keys $v }}
+values: {{ values $v }}
+hasKey: {{ hasKey $v "a" }}
+get: {{ get $v "a" }}
+set: {{ set $v "c" 3 }}
+unset: {{ unset $v "c" }}
+merge: missing { merge $dest $v (dict "d" 4) }
+
+url: {{ urlParse "http://example.com" }}
+
+getHostByName: {{ getHostByName "google.com" }}
+
+## CEL
+
+
+## REST
+
+Intellij defines a [rest syntax](https://www.jetbrains.com/help/idea/http-client-in-product-code-editor.html) - mappable to curl.
+
+This is usually a '.http' or '.rest' file, looking like:
+
+
+```
+###
+# comment after separator
+# Can also add HTTP/2 and 'HTTP/2 (Prior knowledge)'
+# Autoconvert curl comments
+# Can also be created from OpenAPI specs or proto (GRPC method, grpcs url)
+# Can do WEBSOCKET ws:..., send messages via === separator, === wait-for-server
+# Supports javascript via > {% %} blocks
+# Uses 'request' object for < {% %} blocks
+GET http://example.com
+Accept: application/json
+
+<> file.json
+<> file2.json
+
+```
+
+{{ $res := post "https://httpbin.org/response-headers" "" "test" "header" }}
+{{ $resJS := read $res.Body | toString | fromJson  }}
+{{ $resJS }}
+{{ get $resJS "Content-Type" }}

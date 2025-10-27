@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -11,13 +12,14 @@ import (
 	"time"
 
 	"github.com/costinm/meshauth"
-	"github.com/costinm/ssh-mesh/nio"
-	"github.com/costinm/ugate"
+	"github.com/costinm/meshauth/pkg/certs"
+	"github.com/costinm/ssh-mesh/pkg/h2"
+	"github.com/costinm/ugate/nio2"
 )
 
 // Control handler, also used for testing
 type EchoHandler struct {
-	UGate *ugate.UGate
+	UGate *meshauth.Mesh
 
 	Debug       bool
 	ServerFirst bool
@@ -28,16 +30,6 @@ type EchoHandler struct {
 
 var DebugEcho = false
 
-func EchoPortHandler(ug *ugate.UGate, ph *meshauth.PortListener) error {
-	e := &EchoHandler{}
-	nio.ListenAndServe(ph.Address, func(conn net.Conn) {
-		if e.Debug {
-			log.Println("Echo ", e.ServerFirst, conn.RemoteAddr())
-		}
-		e.handleStreams(conn, conn)
-	})
-	return nil
-}
 
 func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if eh.Debug {
@@ -55,10 +47,39 @@ func (eh *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.(http.Flusher).Flush()
 	//// Wrap w.Body into Stream which does this automatically
-	str := nio.NewStreamServerRequest(r, w)
+	str := h2.NewStreamServerRequest(r, w)
 	//
 	eh.handle(str, false)
 }
+
+func (eh *EchoHandler) EchoHTTP(writer http.ResponseWriter, request *http.Request) {
+	host := request.Host
+	fmt.Fprintf(writer, "host: %s, req: %s, headers: %v", host, request.RequestURI, request.Header)
+	b := make([]byte, 1024)
+	for {
+		n, err := request.Body.Read(b)
+		if err != nil {
+			fmt.Fprintf(writer, "Err %v", err)
+			return
+		}
+		log.Println(b[0:n])
+		writer.Write(b[0:n])
+	}
+}
+
+
+func (eh *EchoHandler) Wait(writer http.ResponseWriter, request *http.Request) {
+	host := request.Host
+	fmt.Fprintf(writer, "host: %s, req: %s, headers: %v", host, request.RequestURI, request.Header)
+	time.Sleep(60 * time.Second)
+
+}
+
+func (eh *EchoHandler) RegisterMux(mux *http.ServeMux)  {
+		mux.HandleFunc("/echo/", eh.EchoHTTP)
+		mux.HandleFunc("/wait/", eh.Wait)
+}
+
 
 // StreamInfo tracks information about one stream.
 type StreamInfo struct {
@@ -81,7 +102,7 @@ func GetStreamInfo(str net.Conn) *StreamInfo {
 		LocalAddr:  str.LocalAddr(),
 		RemoteAddr: str.RemoteAddr(),
 	}
-	if s, ok := str.(nio.StreamMeta); ok {
+	if s, ok := str.(nio2.StreamMeta); ok {
 		si.Meta = s.RequestHeader()
 		// TODO: extract identity - including UDS
 		if tc := s.TLSConnectionState(); tc != nil {
@@ -121,7 +142,7 @@ func (e *EchoHandler) handleStreams(in io.Reader, out io.Writer) {
 			if err == io.EOF && e.ServerFirst {
 				binary.BigEndian.PutUint32(d, uint32(n))
 				out.Write(d[0:4])
-				if cw, ok := out.(nio.CloseWriter); ok {
+				if cw, ok := out.(nio2.CloseWriter); ok {
 					cw.CloseWrite()
 				}
 			} else {
@@ -137,7 +158,7 @@ func (e *EchoHandler) handleStreams(in io.Reader, out io.Writer) {
 
 		// Client requests server graceful close
 		if d[0] == 0 {
-			if wc, ok := out.(nio.CloseWriter); ok {
+			if wc, ok := out.(nio2.CloseWriter); ok {
 				wc.CloseWrite()
 				writeClosed = true
 				// Continue to read ! The test can check the read byte counts
@@ -157,11 +178,28 @@ func (e *EchoHandler) handleStreams(in io.Reader, out io.Writer) {
 	}
 }
 
-func (e *EchoHandler) handle(str nio.Stream, serverFirst bool) error {
+// RemoteID returns the node WorkloadID based on authentication.
+func RemoteID(s nio2.Stream) string {
+	tls := s.TLSConnectionState()
+	if tls != nil {
+		if len(tls.PeerCertificates) == 0 {
+			return ""
+		}
+		pk, err := certs.VerifyChain(tls.PeerCertificates)
+		if err != nil {
+			return ""
+		}
+
+		return certs.PublicKeyBase32SHA(pk)
+	}
+	return ""
+}
+
+func (e *EchoHandler) handle(str net.Conn, serverFirst bool) error {
 	d := make([]byte, 2048)
 
 	si := GetStreamInfo(str)
-	si.RemoteID = e.UGate.RemoteID(str)
+	//si.RemoteID = RemoteID(str)
 
 	b1, _ := json.Marshal(si)
 	b := &bytes.Buffer{}
@@ -177,9 +215,9 @@ func (e *EchoHandler) handle(str nio.Stream, serverFirst bool) error {
 	if err != nil {
 		return err
 	}
-	if DebugEcho {
-		log.Println("ECHO rcv", n, "strid", str.State().StreamId)
-	}
+	//if DebugEcho {
+	//	log.Println("ECHO rcv", n, "strid", str.State().StreamId)
+	//}
 	if !serverFirst {
 		str.Write(b.Bytes())
 	}
@@ -195,15 +233,25 @@ func (eh *EchoHandler) String() string {
 	return "Echo"
 }
 func (eh *EchoHandler) HandleConn(conn net.Conn) error {
-	s := conn.(nio.Stream)
+	s := conn.(nio2.Stream)
 	return eh.Handle(s)
 }
 
-func (eh *EchoHandler) Handle(ac nio.Stream) error {
+func (eh *EchoHandler) Handle(ac nio2.Stream) error {
 	if DebugEcho {
 		log.Println("ECHOS ", ac)
 	}
 	defer ac.Close()
 	return eh.handle(ac, false)
+}
+
+
+func (e *EchoHandler) ServeTCP(conn net.Conn) error {
+	if e.Debug {
+		log.Println("Echo ", e.ServerFirst, conn.RemoteAddr())
+	}
+	e.handleStreams(conn, conn)
+
+	return nil
 }
 

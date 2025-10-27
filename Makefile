@@ -1,59 +1,45 @@
-ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-OUT=${ROOT_DIR}/../out/ugate
+BIN=ugated
 
-#IMAGE ?= gcr.io/dmeshgate/ugate
-REPO ?= ghcr.io/costinm/ugate
-IMAGE ?= ${REPO}/ugate
-KO_DOCKER_REPO ?= gcr.io/dmeshgate/ugate
-#KO_DOCKER_REPO ?= costinm/ugate
-export KO_DOCKER_REPO
+-include ${HOME}/.env.mk
+include tools/common.mk
 
-all/cr: docker/dev push/dev push/ko  run/cloudrun
+REGION?=us-central1
 
-deploy: deploy/cloudrun deploy/helm
-
-deploy/cloudrun: docker push/ugate run/cloudrun
+IMAGE ?= ${DOCKER_REPO}/${BIN}
+WORKLOAD_NAMESPACE?=default
 
 
-deploy/helm: docker push/ugate run/helm
+all: build/static build/cgo _push
 
-docker:
-	docker build -t ${IMAGE}:latest .
+ugated: build/static _push
 
-docker/dev:
-	docker build -t ${IMAGE}-dev:latest -f tools/dev/Dockerfile.devbase \
-		tools/dev
+build: build/static build/cgo
 
-docker/dev-istio:
-	#docker pull gcr.io/istio-testing/build-tools:master-latest
-	docker build -t ${IMAGE}-dev-istio:latest -f tools/dev/Dockerfile.istio-dev \
-		tools/dev
-	docker push ${IMAGE}-dev-istio:latest
+build/statuc: BIN=sshm
+build/static: _build
 
-push/dev:
-	docker push ${IMAGE}-dev:latest
 
-run/dev:
-	 docker run -it --entrypoint /bin/bash gcr.io/dmeshgate/ugate-dev:latest
+push/ugated:
+	$(MAKE) _push BIN=ugated
 
-docker/devui:
-	#docker pull golang:latest
-	docker build -t ${IMAGE}-dev:cinamon-latest -f tools/dev/Dockerfile.cinamon tools/dev
+update:
+	go get -u
 
-push/devui:
-	docker push ${IMAGE}-dev:cinamon-latest
 
-run/devui:
-	 docker run -it \
- 		--entrypoint /bin/bash \
- 		--rm --name dev \
-             -p 18080:8080 -p 32000:22000 -p 8444:8444 \
-             -v /x/sync/dmesh-src/ugate-ws:/work \
- 		${IMAGE}-dev:cinamon-latest
+
+#all/fortio: BIN=sshm
+#all/fortio: DOCKER_IMAGE=fortio-sshm
+#all/fortio:
+#	#$(MAKE) _push BASE_IMAGE=fortio/fortio:latest BIN=sshc
+#	docker build -t costinm/fortio-sshm:latest -f manifests/Dockerfile.fortio manifests/
+#	docker push costinm/fortio-sshm:latest
+
+build/cgo:
+	$(MAKE) _buildcgo  DIR=./cmd/ugated GO_TAGS="lwip" BIN=ugated-cgo
 
 run/docker-image:
 	docker run -P -v /ws/dmesh-src/work/s1:/var/lib/istio \
-		-v ${ROOT_DIR}:/ws \
+		-v ${BASE}:/ws \
 		--name ugate \
 		--cap-add NET_ADMIN \
 		-p 443:9999 \
@@ -63,44 +49,12 @@ run/docker-test:
 	docker stop ugate || true
 	docker rm ugate || true
 	docker run -P -v /ws/dmesh-src/work/s1:/var/lib/istio \
-		-v ${ROOT_DIR}:/ws \
+		-v ${BASE}:/ws \
 		--name ugate \
 		--cap-add NET_ADMIN \
 		-p 443:9999 \
 	   ${IMAGE}:latest \
 	   /ws/build/run.sh
-
-
-push/docker.ugate: docker push/ugate
-
-push/ugate:
-	docker push ${IMAGE}:latest
-
-cm-install:
-	kubectl apply --validate=false -f https://github.com/jetstack/cert-manager/releases/download/v1.8.0/cert-manager.yaml
-	#kubectl -n istio-system apply -f manifests/istio-issuer.yaml
-
-deploy/kiali:
-	helm install \
-  --namespace istio-system \
-  --set auth.strategy="anonymous" \
-  --repo https://kiali.org/helm-charts \
-  kiali-server \
-  kiali-server
-
-fw/kiali:
-	kubectl port-forward svc/kiali 20001:20001 -n istio-system&
-
-# Using Intellij plugin: missing manifest features
-# Build with buildpack: 30 sec to deploy
-# Build with docker: 26 sec
-# Both use skaffold
-# Faster than docker.
-#push/ko:
-#	(cd  cmd/ugate && ko publish . --bare)
-#
-#deps/ko:
-#	go install github.com/google/ko@latest
 
 # Run ugate in cloudrun.
 # Storage: Env variables, GCP resources (buckets,secrets,k8s)
@@ -111,7 +65,7 @@ run/cloudrun: #push/docker.ugate
 	gcloud run services update-traffic ugate --to-latest --platform managed --project dmeshgate --region us-central1
 
 run/cloudrun2: #push/docker.ugate
-	gcloud beta run services replace manifests/knative-ugate.yaml --platform managed --project dmeshgate --region us-central1
+	gcloud run services replace manifests/knative-ugate.yaml --platform managed --project dmeshgate --region us-central1
 	gcloud run services update-traffic ugate --to-latest --platform managed --project dmeshgate --region us-central1
 
 run/cloudrun3:
@@ -123,16 +77,11 @@ run/sshcr:
  		root@ugate-yydsuf6tpq-uc.a.run.app:443
 
 run/helm:
-	helm upgrade --install --create-namespace ugate \
-		--namespace ugate manifests/charts/ugate/
-
-run/helm-istio-system:
-	helm upgrade --install --create-namespace ugate-istio-system \
-		--namespace istio-system manifests/charts/ugate/
+	helm upgrade --install --create-namespace ugate --namespace ugate manifests/charts/ugate/
 
 test/run-iptables:
 	docker run -P  \
-		-v ${ROOT_DIR}:/ws \
+		-v ${BASE}:/ws \
 		--rm \
 		-w /ws \
 		--entrypoint /bin/sh \
@@ -169,47 +118,157 @@ run/home:
 run/c1:
 	HOST=v $(MAKE) remote/_run
 
-build:
-	(cd ./cmd/ugate; CGO_ENABLED=0 go build -o ${OUT}/ugate .)
-
 # Must have a $HOME/ugate dir
 remote/_run: build
 	ssh ${HOST} pkill ugate || true
 	scp ${OUT}/ugate ${HOST}:/x/ugate
 	ssh  ${HOST} "cd /x/ugate; HOME=/x/ugate /x/ugate/ugate"
 
-update:
-#	yq -j < cmd/ugate/testdata/ugate.yaml > cmd/ugate/testdata/ugate.json
+
+# Replace the CR service
+cr/replace:
+	cat manifests/cloudrun.yaml | \
+	DEPLOY="$(shell date +%H%M)" IMG="$(shell cat ${OUT}/.image)" envsubst | \
+     gcloud alpha run --project ${PROJECT_ID} services replace -
+
+cr/fortio:
+	cat manifests/cloudrun-fortio.yaml | \
+	DEPLOY="$(shell date +%H%M)" IMG="$(shell cat ${OUT}/.image)" envsubst | \
+     gcloud alpha run --project ${PROJECT_ID} services replace -
+
+proxy/fortio:
+	gcloud run services proxy costin-fortio --region us-central1 --port 8082
+
+crbindings: REGION=us-central1
+crbindings:
+	gcloud run services add-iam-policy-binding  --project ${PROJECT_ID} --region ${REGION} sshc  \
+      --member="serviceAccount:k8s-default@${PROJECT_ID}.iam.gserviceaccount.com" \
+      --role='roles/run.invoker'
+
+crauth:
+	gcloud run services add-iam-policy-binding  --project ${PROJECT_ID} --region ${REGION} sshc  \
+      --member="user:${GCLOUD_USER}" \
+      --role='roles/run.invoker'
+
+crauth/all: REGION=us-central1
+crauth/all:
+	gcloud run services add-iam-policy-binding   --project ${PROJECT_ID} --region ${REGION} sshc  \
+      --member="allUsers" \
+      --role='roles/run.invoker'
+
+iam-gcs:
+	gcloud projects add-iam-policy-binding costin-asm1  --member serviceAccount:costin-asm1.svc.id.goog[dns-system/default] --role "roles/storage.objectUser"
+
+# gcloud projects add-iam-policy-binding costin-asm1  --member group:costin-asm1.svc.id.goog:/allAuthenticatedUsers/ --role "roles/storage.objectUser"
+
+    # group:costin-asm1.svc.id.goog:/allAuthenticatedUsers/
+
+# SSH via a local jumphost
+jssh:
+	ssh -o StrictHostKeyChecking=no  -J localhost:15022 sshc.${SSHD} -v
 
 
-deps:
-	go install github.com/bufbuild/buf/cmd/buf@latest
-	go install istio.io/tools/cmd/protoc-gen-docs@latest
-	go install istio.io/tools/cmd/protoc-gen-crds@latest
+# SSH to a CR service using a h2 tunnel.
+# Works if sshd is handling the h2 port, may forward to the app.
+# Useful if scaled to zero, doesn't require maintaining an open connection (but random clone)
+cr/h2ssh: CR_URL?=$(shell gcloud run services --project ${PROJECT_ID} --region ${REGION} describe ${SERVICE} --format="value(status.address.url)")
+cr/h2ssh:
+	ssh -o ProxyCommand="${HOME}/go/bin/h2t ${CR_URL}_ssh/tun" \
+        -o StrictHostKeyChecking=no \
+        -o "SetEnv a=b" \
+         sshc.${SSHD} -v
 
-	go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-	go install github.com/bufbuild/connect-go/cmd/protoc-gen-connect-go@latest
-	go install github.com/mikefarah/yq/v4@latest
+# Using the test certs:
+#		-o "UserKnownHostsFile ssh/testdata/known-hosts" \
+#		-i ssh/testdata/id_ecdsa \
 
-	# debug tool for std grpc - need http/tcp equivalent
-	go install -v github.com/grpc-ecosystem/grpcdebug@latest
-	# Test tool
-	go install github.com/bojand/ghz/cmd/ghz@latest
-	curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
-	chmod +x ./kubectl
-	mv ./kubectl /usr/local/bin
-
-	go install github.com/knusbaum/go9p/cmd/mount9p@latest
-	go install github.com/knusbaum/go9p/cmd/export9p@latest
-	go install github.com/knusbaum/go9p/cmd/import9p@latest
+ssh:
+	 ssh -o StrictHostKeyChecking=no  -J localhost:2222 sshc.${SSHD} -v
 
 
+ssh/keygen:
+	rm -rf testdata/keygen
+	mkdir -p testdata/keygen
+	ssh-keygen -t ecdsa   -f testdata/keygen/id_ecdsa -N ""
 
-proto-gen: PATH:=${HOME}/go/bin:${PATH}
-proto-gen:
-	cd proto && buf generate
+ssh/getcert: CRT=$(shell cat testdata/keygen/id_ecdsa.pub)
+ssh/getcert:
+	echo {\"public\":\"${CRT}\"} | \
+ 		grpcurl -plaintext  -d @   [::1]:8080 ssh.SSHCertificateService/CreateCertificate | \
+ 		jq -r .user > testdata/keygen/id_ecdsa-cert.pub
+
+	echo {\"public\":\"${CRT}\"} | \
+ 		grpcurl -plaintext  -d @   [::1]:8080 ssh.SSHCertificateService/CreateCertificate
 
 
-# Other options:
-# GOEXPERIMENT=boringcrypto and "-tags boringcrypto"
+
+
+gcp/setup:
+	gcloud --project ${PROJECT_ID} iam service-accounts create k8s-${WORKLOAD_NAMESPACE} \
+	  --display-name "Service account with access to ${WORKLOAD_NAMESPACE} k8s namespace" || true
+
+	# Grant the GSA running the workload permission to connect to the config clusters in the config project.
+	# Will use the 'SetQuotaProject' - otherwise the GKE API must be enabled in the workload project.
+	gcloud --project ${CONFIG_PROJECT_ID} projects add-iam-policy-binding \
+			${CONFIG_PROJECT_ID} \
+			--member="serviceAccount:k8s-${WORKLOAD_NAMESPACE}@${PROJECT_ID}.iam.gserviceaccount.com" \
+			--role="roles/container.clusterViewer"
+	# This allows the GSA to use the GKE and other APIs in the 'config cluster' project.
+	gcloud --project ${CONFIG_PROJECT_ID} projects add-iam-policy-binding \
+			${CONFIG_PROJECT_ID} \
+			--member="serviceAccount:k8s-${WORKLOAD_NAMESPACE}@${PROJECT_ID}.iam.gserviceaccount.com" \
+			--role="roles/serviceusage.serviceUsageConsumer"
+
+	# Also allow the use of TD
+	gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+	  --member serviceAccount:k8s-${WORKLOAD_NAMESPACE}@${PROJECT_ID}.iam.gserviceaccount.com \
+	   --role roles/trafficdirector.client
+
+	gcloud secrets add-iam-policy-binding mesh \
+        --member=serviceAccount:k8s-${WORKLOAD_NAMESPACE}@${PROJECT_ID}.iam.gserviceaccount.com \
+        --role="roles/secretmanager.secretAccessor"
+
+# 6 free versions, 10k ops
+gcp/secret:
+	gcloud secrets create mesh --replication-policy="automatic"
+	gcloud secrets versions add mesh --data-file="/path/to/file.txt"
+
+# Helper to create a secret for the debug endpoint.
+init-keys:
+	mkdir -p ${OUT}/ssh
+	(cd ${OUT}/ssh; ssh-keygen -t ecdsa -f id_ecdsa -N "")
+	cp ${HOME}/.ssh/id_ecdsa.pub ${OUT}/ssh/authorized_keys
+
+
+k8s/secret: init-keys
+	kubectl -n ${WORKLOAD_NAMESPACE} delete secret sshdebug || true
+	kubectl -n ${WORKLOAD_NAMESPACE} create secret generic \
+ 		sshdebug \
+ 		--from-file=authorized_key=${OUT}/ssh/authorized_keys \
+ 		--from-file=cmd=cmd.json \
+ 		--from-file=ssd_config=sshd_config \
+ 		--from-file=id_ecdsa=${OUT}/ssh/id_ecdsa \
+ 		--from-file=id_ecdsa.pub=${OUT}/ssh/id_ecdsa.pub
+	rm -rf ${OUT}/ssh
+
+
+perf-test-setup:
+    # Using goben instead of iperf3
+	goben -defaultPort :5201 &
+
+perf-test:
+	# -passiveClient -passiveServer
+	goben -hosts localhost:15201  -tls=false -totalDuration 3s
+
+perf-test-setup-iperf:
+    # Using goben instead of iperf3
+	iperf3 -s -d &
+
+
+wasm/meshauth:
+	mkdir -p /tmp/tinygo
+	docker run --rm -v $(shell pwd)/..:/src  -u $(shell id -u) \
+      -v ${BUILD_DIR}/tinygo:/home/tinygo \
+      -e HOME=/home/tinygo \
+      -w /src/meshauth tinygo/tinygo:0.26.0 tinygo build -o /home/tinygo/wasm.wasm -target=wasm ./wasm/
+

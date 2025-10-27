@@ -1,0 +1,40 @@
+
+
+name: c
+# Namespace is also used for the default GSA
+namespace: fortio
+domain: test.m.internal
+
+modules:
+  - name: otel
+  - name: k8s
+
+  # GCP also loads K8S
+  - name: gcp
+    # IF set and not on GCP, an emulated MDS server will be started.
+    address: "localhost:15021"
+
+  - name: ssh
+    address: ":2201"
+
+  - name: h2c
+    address: ":8081"
+
+#  - name: mqtt
+#    address: ":2301"
+
+#  - name: xds
+#    address: ":2301"
+
+#  - name: dns
+
+  #- name: googledns
+
+#  - name: gcpdump
+
+#  - name: dnsdump
+
+  #- name: dnssync1
+
+  - name: admin
+    address: "127.0.0.1:15010"

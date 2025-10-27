@@ -1,0 +1,104 @@
+
+# discovery:
+# clusters:
+# egeress:
+# out:
+# mesh:
+dst:
+  # Key is used a FQDN, if not explicitly configured
+  # If VIP is missing - it can be resolved via DNS.
+
+  # A service.
+  echo.svc.mymesh.internal:
+    vip:
+      - "10.1.1.10"
+
+  # A host
+  echo.w.mymesh.internal:
+    addr: "127.0.0.1" # :14010
+
+  # Special cluster name used for XDS config.
+  # If set XDS will be used. If not set, but if a default k8s cluster is found
+  # a request for istio-system/mesh-env config map is made to get the address
+  # and istiod certificate, as well as additional settings for GCP.
+  # This can include a cacert - but if certs are provisioned, the workload identity root
+  # will be used.
+  #  istiod.istio-system.svc:12012:
+  #    addr: 34.69.72.163:12012
+  #    tokenSource: istio-ca
+  #
+
+  GJU4ACOW36Q3IBL45T2TRQ63M6FNQYEJMLPJNDJETIOVIEFD7MGQ:
+    addr: 127.0.0.1:6007
+    labels:
+      h2r: "1"
+
+  example_dest:
+    addr: https://example.com/foo
+    protocol: ssh
+    dns_san:
+      - sni.example.com
+    trust: {}
+    sni: www.example.com
+    alpn:
+      - h4
+    location: home
+    # ca_cert: ""
+    labels:
+      a: b
+    tokens: gcp
+    insecure: true
+    l4secure: true
+
+  #    endpoints:
+  #      - address: 127.0.0.1:5201
+  #        hboneaddress: 127.0.0.1:15208
+  #
+
+  bob.bob.svc:5201:
+    addr: 127.0.0.1:5201
+    endpoints:
+      - address: 127.0.0.1:5201
+        hboneaddress: 127.0.0.1:15208
+
+  ldev:
+    id: Z3IDCBZEMR5T3TYMFS7YXCMV4WZVUPZVZINQQFZ3QRE74YVTFILQ
+
+  bob.bob.svc:5202:
+    addr: 127.0.0.1:5202
+    id: NF2UGZAZTEH2K4WQDJCSJBTKTAUMZDZP4P3664TK2SKZ3NSAOD3Q
+    endpoints:
+      - address: 127.0.0.1:5201
+        hboneaddress: 127.0.0.1:15209
+        secure: true
+
+  istiod.istio-system.svc:15012:
+    addr: "-"
+
+  # If not set, will be loaded from mesh-env in default k8s cluster
+  # The addr should be a gateway address with SNI routing support or hbone
+  xistiod.istio-system.svc:15012:
+    #addr: "-"
+    addr: 34.69.72.163:15012
+    SNI: istiod.istio-system.svc
+
+  h2r:
+    addr: 127.0.0.1:15441
+
+  example.test.svc:8080:
+    id: example.test.svc:8080
+    addr: 1.2.3.4:8080
+
+  # Alternative way to configure K8S GKE clusters.
+# By default .kube/config and KUBECONFIG will be used to create k8s clusters.
+# A cluster named "k8s" will be set as the default cluster and used for k8s tokens.
+#  gke_PROJECTID_LOCATION_CLUSTER:
+#    # certificate-authority-data:
+#    cacert: |
+#      -----BEGIN CERTIFICATE-----
+#      MII...
+#      -----END CERTIFICATE-----
+#    addr: ...
+#    # Extracted from the Secret.
+#    token: Bearer ....
+

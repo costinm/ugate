@@ -2,40 +2,37 @@ package quic
 
 import (
 	"context"
-	"log"
-	"strconv"
 	"testing"
 	"time"
 
-	"github.com/costinm/meshauth"
-	"github.com/costinm/ugate"
 	"github.com/costinm/ugate/pkg/test"
 )
 
 func BenchmarkUGateQUIC(b *testing.B) {
 	// Fixed key, config from filesystem. Base is 14000
-	alice := test.NewTestNode(test.AliceMeshAuthCfg, &ugate.MeshSettings{BasePort: 6300})
-	New(alice, &meshauth.PortListener{Address: ":6301"})
+	ctx := context.Background()
+
+	//alice := test.NewTestNode(test.AliceMeshAuthCfg,6300)
+
+	qa := New()
+	qa.Address = ":6402"
+	qa.Provision(ctx)
 
 	// In memory config store. All options
-	bob := test.NewTestNode(test.BobMeshAuthCfg, &ugate.MeshSettings{BasePort: 6400})
-	qb := New(bob, &meshauth.PortListener{Address: ":6401"})
-	qb.Start()
-	log.Println(bob.Auth.VIP6)
+	qb := New()
+	qb.Address = ":6401"
+	qb.Provision(ctx)
+	qb.Start(ctx)
 
-	bobAddr := "localhost:" + strconv.Itoa(bob.BasePort+7)
+	//log.Println(bob.Mesh.VIP6)
 
-	// Alice dials a MUX to bob
-	bobNode, _ := alice.Cluster(nil, bob.Auth.ID)
-	bobNode.Addr = bobAddr
-	_, err := alice.DialMUX(context.Background(), "quic", bobNode, nil)
-	if err != nil {
-		b.Fatal("Error dialing mux", err)
-	}
+	bobAddr := "localhost:6401"
+	aliceAddr := "localhost:6402"
+
 
 	b.Run("forward", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			con, err := alice.DialContext(context.Background(), "tcp", bob.Auth.ID+":6412")
+			con, err := qa.DialContext(context.Background(), "tcp", bobAddr)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -47,7 +44,7 @@ func BenchmarkUGateQUIC(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			//ctx, cf := context.WithTimeout(context.Background(), 5 * time.Second)
 			//defer cf()
-			con, err := bob.DialContext(context.Background(), "tcp", alice.Auth.ID+":6412")
+			con, err := qb.DialContext(context.Background(), "tcp", aliceAddr)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -60,35 +57,27 @@ func BenchmarkUGateQUIC(b *testing.B) {
 }
 
 func TestQuic(t *testing.T) {
-
-	// Fixed key, config from filesystem. Base is 14000
-	alice := test.NewTestNode(test.AliceMeshAuthCfg, &ugate.MeshSettings{BasePort: 6300})
-	New(alice, &meshauth.PortListener{Address: ":6307"})
+	ctx := context.Background()
+	qa := New()
+	qa.Address = ":6402"
+	qa.Provision(ctx)
 
 	// In memory config store. All options
-	bob := test.NewTestNode(test.BobMeshAuthCfg, &ugate.MeshSettings{BasePort: 6400})
-	qb := New(bob, &meshauth.PortListener{Address: ":6407"})
-	bob.Start()
-	qb.Start()
+	qb := New()
+	qb.Address = ":6401"
+	qb.Provision(ctx)
+	qb.Start(ctx)
 
+	//log.Println(bob.Mesh.VIP6)
+	bobAddr := "localhost:6401"
+	aliceAddr := "localhost:6402"
 
-	bobAddr := "localhost:" + strconv.Itoa(bob.BasePort+7)
-
-	// Add a cluster to alice with bob's ID, address and protocol
-	bobNode, _ := alice.Cluster(nil, bob.Auth.ID)
-	bobNode.Addr = bobAddr
-	bobNode.Proto = "quic"
-
-	//_, err := alice.DialMUX(context.Background(), "quic", bobNode, nil)
-	//if err != nil {
-	//	t.Fatal("Error dialing mux", err)
-	//}
 
 	// Alice -> QUIC -> Bob -> Echo
 	t.Run("egress", func(t *testing.T) {
 		// Using DialContext interface - mesh address will use the node.
 		// The port is the echo port on Bob.
-		con, err := alice.DialContext(context.Background(), "tcp", bob.Auth.ID+":6412")
+		con, err := qa.DialContext(context.Background(), "tcp", bobAddr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +119,7 @@ func TestQuic(t *testing.T) {
 		// Using DialContext interface - mesh address will use the node.
 		ctx, cf := context.WithTimeout(context.Background(), 5000*time.Second)
 		defer cf()
-		con, err := bob.DialContext(ctx, "tcp", alice.Auth.ID+":6412")
+		con, err := qb.DialContext(ctx, "tcp", aliceAddr)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -48,6 +48,23 @@ function setup_dirs() {
     chmod 775 /var/dmesh
 }
 
+k8s_swaggger() {
+  # URL
+  #
+
+  docker run \
+      --rm \
+      -p 80:8080 \
+      -e URL=file:///k8s-swagger.json \
+      -v $(pwd)/k8s-swagger.json:/k8s-swagger.json \
+        swaggerapi/swagger-ui
+}
+
+gencue() {
+  cue def $1_go_gen.cue -o openapi+yaml:api.$1.yaml
+}
+
+
 CMD=$1
 shift
 $CMD $*

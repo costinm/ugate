@@ -31,9 +31,6 @@ var (
 // Response: json,
 // Status, Answer [ { name, type, data, ttl} ]
 
-// example:
-//
-
 func sendRes(w http.ResponseWriter, res *dns.Msg, r *http.Request, m []byte) {
 	if debugHttp {
 		log.Printf("DNS-HTTP-Res: %v %s %d", r.RemoteAddr, res.Question[0].Name, len(res.Answer))
@@ -88,7 +85,7 @@ func (s *DmDns) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	req.Id = dns.Id()
 
-	res := s.Process(req)
+	res := s.Do(req)
 
 	sendRes(w, res, r, m)
 	if len(res.Answer) > 0 {
@@ -102,12 +99,15 @@ func (s *DmDns) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Using GET method - see https://developers.cloudflare.com/1.1.1.1/dns-over-https/wireformat/
 // and https://cloudflare-dns.com/dns-query
 // Appears to be supported on 1.1.1.1 ( also supports DNS-TLS)
+//
+// Using DNS over http has hight overhead and doesn't make so much sense in a mesh
+// where DOT can be used instead, with secure L4, or UDP with DNSSEC.
 func (s *DmDns) ForwardHttp(req *dns.Msg) (*dns.Msg, error) {
 	id := req.Id
 	req.Id = 0
 
 	if len(req.Question) == 0 {
-		return nil, errors.New("Empty request")
+		return nil, errors.New("empty request")
 	}
 
 	m := bufferPoolHttp.Get().([]byte) // make([]byte, int(4096))

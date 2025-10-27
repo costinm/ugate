@@ -3,6 +3,17 @@ on: [push]
 env:
   GO111MODULE: on
 
+# ACTIONS_ID_TOKEN_REQUEST_TOKEN
+# ACTIONS_ID_TOKEN_REQUEST_URL
+
+# https://docs.github.com/en/actions/security-guides/automatic-token-authentication
+# GITHUB_TOKEN secret auto-created (24h)
+#
+
+permissions:
+  contents: write
+  id-token: write # This is required for requesting the JWT
+
 jobs:
   build-docker:
     name: Build-in-docker
@@ -60,6 +71,9 @@ jobs:
 
     - name: Build
       run: |
+        env
+        echo GIT TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
         cd cmd/ugate && go build -o ../../ugate -v .
 
     - name: Upload ugate

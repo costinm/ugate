@@ -1,0 +1,54 @@
+# Example go-sync configuration file.
+# Will use the in-memory DNS provider, with a set of sources.
+
+metricsAddress: ":15020"
+
+
+sync:
+  se:
+    policy: create-only
+    #address: "http://127.0.0.1:4431/google"
+    txtPrefix: "sync_"
+    txtOwnerID: "dnssync"
+    sources:
+      - name: istio-se
+
+  svc:
+    policy: create-only
+    #address: "http://127.0.0.1:4431/google"
+    txtPrefix: "sync_"
+    txtOwnerID: "dnssync"
+    sources:
+      - name: mesh-service
+
+#  mem:
+#    domain: "test"
+#    txtPrefix: "sync_"
+#    txtOwnerID: "dnssync"
+#    sources:
+#      - name: k8s
+##      - name: istio-se
+#        suffix: ".nodes.cluster-example.mesh.internal"
+##      - name: service
+##        fqdnTemplate: ".services.cluster-example.mesh.internal"
+##      - name: pod
+##        fqdnTemplate: ".pods.cluster-example.mesh.internal"
+#      - name: gateway
+#      - name: istio-gateway
+#      - name: crd
+
+#  egress:
+#    domain: ""
+#    protocol: "inmemory"
+#    txtPrefix: "sync_"
+#    txtOwnerID: "dnssync"
+#    sources:
+#      - name: istio-se
+
+#  istio_service:
+#    domain: "example.com"
+#    protocol: "webhook"
+#    address: "http://localhost:8082"
+#    sources:
+#      - k8s
+#      - istio-serviceentry

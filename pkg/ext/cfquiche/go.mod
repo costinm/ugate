@@ -1,6 +1,6 @@
 module github.com/costinm/ugate/ugatex/pkg/cfquiche
 
-go 1.16
+go 1.21
 
 replace github.com/costinm/ugate => ./../../..
 

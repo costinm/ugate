@@ -1,51 +1,83 @@
 package dns
 
 import (
+	"context"
 	"log"
+	"net"
 	"testing"
 
 	"github.com/miekg/dns"
 )
 
 func TestLocal(t *testing.T) {
-	s, _ := NewDmDns(5354)
+	ctx := context.Background()
 
-	//h2, _ := transport.NewH2("")
-	//h2.InitMTLSServer(5355, s)
+	s := New()
+	s.Port = 5354
+	err := s.Provision((ctx))
+	if err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
 
 	// client
-	sc, err := NewDmDns(5356)
+	sc := New()
+	sc.Port = 5356
+	sc.Capture = true
+	defer func() {
+		net.DefaultResolver.PreferGo = false
+		net.DefaultResolver.Dial = nil
+	}()
+	err = sc.Provision((ctx))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Provision failed: %v", err)
 	}
-//	h2c, _ := transport.NewH2("")
 
-//	sc.H2 = h2c.HttpsClient
-//	sc.BaseUrl = "https://localhost:5355/dns?dns="
+	s.AddRecord("a.dm.", dns.TypeA,
+		&dns.A{
+			Hdr: dns.RR_Header{Name: "a.dm.", Rrtype: dns.TypeA, Ttl: 100, Class: dns.ClassINET},
+			A:   []byte{1, 2, 3, 4},
+		})
 
-	s.AddRecord("a.dm.", dns.TypeA, &dns.A{
-		Hdr: dns.RR_Header{Name: "a.dm.", Rrtype: dns.TypeA, Ttl: 100, Class: dns.ClassINET},
-		A:   []byte{1, 2, 3, 4},
-	})
-
-	go s.Serve()
+	err = s.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 
 	q := dns.Question{Name: dns.Fqdn("home.webinf.info."), Qclass: dns.ClassINET, Qtype: dns.TypeA}
+
 	m := new(dns.Msg)
 	m.Id = dns.Id()
 	m.RecursionDesired = true
 	m.Question = []dns.Question{q}
 
-	// Process a real request, using the process method
-	t.Run("real", func(t *testing.T) {
-		res := s.Process(m)
-		log.Print(res)
+	t.Run("netdns", func(t *testing.T) {
+		// Has trace support (if ctx has nettrace.TraceKey{})
+		// There is a hook to allow replacing the function for 'tests' - the
+		// override is the LookupIP - the one return []IPAddr
+		meshr := &net.Resolver{
+			PreferGo: true,
+			Dial:     DNSDialer(s.Port),
+		}
+		// addrs, err := net.LookupHost("a.dm.")
+		// t.Log(addrs)
+		// if err != nil {
+		// 	t.Fatalf("LookupHost failed: %v", err)
+		// }
+		addrs, err := meshr.LookupHost(ctx, "a.dm.")
+		t.Log(addrs)
+		if err != nil {
+			t.Fatalf("LookupHost failed: %v", err)
+		}
+
+		meshr.LookupIPAddr(ctx, "10.0.0.1")
+		meshr.LookupIP(ctx, "ip6", "10.0.0.1")
+
 	})
 
 	t.Run("local", func(t *testing.T) {
 		m = &dns.Msg{}
 		m.SetQuestion("a.dm.", 1)
-		res := s.Process(m)
+		res := s.Do(m)
 		log.Print(res)
 	})
 
@@ -61,49 +93,6 @@ func TestLocal(t *testing.T) {
 		log.Print(res, rtt, err)
 	})
 
-	//t.Run("httpproxy", func(t *testing.T) {
-	//
-	//	res, err := sc.ForwardHttp(m)
-	//	log.Print(res, err)
-	//	//res, rtt, err := s.dnsUDPclient.Exchange(m, "localhost:5356")
-	//	//log.Print(res, rtt, err)
-	//
-	//})
-
-	t.Run("httpproxy1", func(t *testing.T) {
-		sc.BaseUrl = "https://10.1.10.1:5228/dns?dns="
-		res := sc.Process(m)
-		log.Print(res)
-		//res, rtt, err := s.dnsUDPclient.Exchange(m, "localhost:5356")
-		//log.Print(res, rtt, err)
-
-	})
-
-	t.Run("httpproxy2", func(t *testing.T) {
-		//sc.BaseUrl = "https://10.1.10.204:5228/dns?dns="
-		sc.BaseUrl = "https://h.webinf.info:5228/dns?dns="
-		res := sc.Process(m)
-		log.Print(res)
-		//res, rtt, err := s.dnsUDPclient.Exchange(m, "localhost:5356")
-		//log.Print(res, rtt, err)
-
-	})
-
-	t.Run("ip6", func(t *testing.T) {
-		sc.BaseUrl = "https://10.1.10.204:5228/dns?dns="
-		q := dns.Question{Name: dns.Fqdn("www.google.com."), Qclass: dns.ClassINET, Qtype: dns.TypeAAAA}
-		m := new(dns.Msg)
-		m.Id = dns.Id()
-		m.RecursionDesired = true
-		m.Question = []dns.Question{q}
-
-		//sc.BaseUrl = "https://h.webinf.info:5228/dns?dns="
-		res := sc.Process(m)
-		log.Print(res)
-		//res, rtt, err := s.dnsUDPclient.Exchange(m, "localhost:5356")
-		//log.Print(res, rtt, err)
-
-	})
 	// Life of a message:
 	// - server.serveUdp() - readUDP
 	// - server.serve(addr, h, byte, udpcon,..)
@@ -114,5 +103,3 @@ func TestLocal(t *testing.T) {
 	//
 	// FlagDst and FlagInterface are set on the PacketConn
 }
-
-// Not using mikedns for TCP, only UDP

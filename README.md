@@ -1,13 +1,58 @@
 # ugate
 
-Minimal TCP/UDP gateway, optimized for capturing outbound connections using 
-few common protocols (iptables, SOCKS,
+Originally, this was a minimal TCP/UDP gateway, optimized for capturing outbound connections using few common protocols (iptables, SOCKS,
 CONNECT), detecting traffic type and extracting metadata, and forwarding to a destination. 
-TUN supported using LWIP in the costinm/tungate, used for android.
 
-# Design
+It first started as 'mesh for android' - with gvisor and LWIP to integrate with the stack.
 
-The uGate can be used in few roles:
+It evolved as a 'modular monolith' integrating many protocols as a way to experiment and
+adapt different components without the overhead of all boilerplate.
+
+## Modules
+
+This is using meshauth/ package for the core interfaces, auth, bootstraping and base config. 
+
+The module is defined there - just a basic interface{} that may implement various go interfaces, as well as the most common config - Address, Destination, a HttpMux, etc.
+
+Unlike other module abstractions (Caddy is a very good one), the actual module config is 
+not embedded in the module definition. Each module is expecting to retrieve its configs,
+based on the module name (and possibly the 'tenant' ID) from a config store. 
+
+The config stores are also modules - meshauth/ defines file and env variables - with K8S or databases as other options. File is quite powerful by itself - adapters as rclone can be used along with the file adapter, it doesn't need to be a local file.
+
+
+## Multi-tenant modular monolith
+
+In a server like PostgresQL, you can run multiple databases for different users - with internal permissions and (some) isolation. Isolation is not perfect, so running separate
+servers - on different containers/pods or nodes is needed in some cases.
+
+There is an operational tradeoff that needs to be made by admin based on the needs of each user/tenant - including the budget/cost and expected usage. 
+
+For uGate, the 'module' is a standalone component, implementing some Go interfaces, perhaps
+few HTTP handlers - and having its own config.  Modules may find other modules by name or use HTTP in case the module is remote. 
+
+The main requirement for tenancy is that each module allows multiple instances at the 
+same time. Not all modules can do this - a HTTP listener module on port 8080 can't be 
+multi-tenant, but it can dispatch to many 'routing' modules based on hostname. 
+
+## CLI 
+
+I believe a server should not have a CLI - it should be managed by a control plane or use a config store, with dynamic updates when possible. As such, the main() for the server 
+does not depends on or use Cobra.
+
+It is also useful to have real CLI to use on the client side - and Cobra seems the most common standard. It would be ideal to auto-generate the Cobra bindings from the 
+config structs, but for now manual is fine. The 'ucli' package is also loading the 
+module definitions and adds the cobra wrappers.
+
+Some modules may be intended for CLI - but they should also be usable in the server,
+with a HTTP API that creates the config. 
+
+# Gateway Design
+
+The uGate started as a mesh gateway for Android and VMs, so many modules are focused on 
+this function.
+
+For example:
 
 1. Egress sidecar - captures outbound traffic, using SOCKS, iptables or TUN
 2. Ingress sidecar - forwards 'mesh' traffic to local app
@@ -16,22 +61,20 @@ The uGate can be used in few roles:
 5. Legacy egress - forwards mesh traffic to local non-mesh devices.
 6. Message gate - can proxy WebPush messages, typically for control plane.
 
-It is intended for small devices - android, OpenWRT-like routers, very small
-containers, so dependencies are minimized. 
-
-It is also optimized for battery operation - control plane 
-interacts with the gate via encrypted Webpush or GCM messages. 
+This is also optimized for battery operation - control planes should
+interact with the gate via encrypted Webpush messages instead of expecting long-lived
+connections. 
 
 ## Mesh protocols
 
-Sidecars send and receive mesh traffic using HTTP/2 or WebRTC.
-For HTTP/2, a custom SNI header is used. 
+While Istio uses HTTP/2 CONNECT, and uGate is attempting to support it for interop - the goal is to create a gateway between many protocols. 
 
-Gateways use SNI to route, using splice after the header is parsed.
+The original protocol - which is still the 'main' one - is SSH, with a focus on interop and compatibility with standard SSH clients and servers, so any device having a ssh implementation can participate in the mesh. 
 
-Since uGate is optimized for devices which may be in home nets or in 
-p2p ad-hoc networks, inside the mesh it will support WebRTC communication.
-This is the main external dependency, used in the webrtc/ module.
+In addition, browsers were a target, so protocols like WebRTC data channels are supported.
+
+Besides 'H2', 'SSH', 'WebRTC' - other protocols like IPFS/LibP2P, QUIC and others can be integrated.
+
 
 
 ## ReadFrom/splice
@@ -72,5 +115,4 @@ auto-detecting TLS.
 - P3: Cert signing, using Istio and/or simplified API (json-grpc?)
 - P0: mangled hostname: KEYID.namespace.TRUST_DOMAIN in certs and SNI routes. Use pod ID as SAN, Istio Spiffe based on
   SA from JWT + namespace
-- P2: OIDC auth (to support certs), VAPID extensions for OIDC compat (send cert)
 

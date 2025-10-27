@@ -1,0 +1,41 @@
+### GET request to example server
+# Comments start with #, the 3# is start of a request body (section separator like --- in yaml)
+GET http://localhost:8080/gcpdiag
+
+> {%
+    // javascript
+%}
+
+
+
+###
+
+# can convert curl requests - and back
+# can impport 'postman' (json)
+# can generate from OpenAPI files or the 'Tools->endpoints'
+
+#import example.http
+
+### Request with Include Support, run all requests from file
+#run example.http
+
+### Request with Include Support by request name and override
+#run #GET request (@status = 200)
+
+#### Request with body
+#GRPC grpcs://examples.http-client.intellij.net/hello.HelloService/SayHello
+#
+#{
+#  "greeting": "HTTP Client with gRPC"
+#}
+#
+#### Server streaming
+#GRPC grpcs://examples.http-client.intellij.net/hello.HelloService/LotsOfReplies
+#
+#{
+#  "greeting": "HTTP Client with gRPC many times"
+#}
+#
+#### Request with metadata
+#GRPC grpcs://examples.http-client.intellij.net/grpcbin.GRPCBin/HeadersUnary
+#X-My-Metadata: Request from HTTP Client

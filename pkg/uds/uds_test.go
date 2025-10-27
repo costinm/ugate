@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	msgs "github.com/costinm/ugate/webpush"
+	msgs "github.com/costinm/ugate/pkg/webpush"
 )
 
 func TestUDS(t *testing.T) {

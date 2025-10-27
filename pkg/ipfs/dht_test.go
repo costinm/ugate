@@ -335,7 +335,7 @@ func TestP2P(t *testing.T) {
 
 func newHostMin(port string, mc *meshauth.MeshCfg) (host.Host, multiaddr.Multiaddr, error)  {
 	//// This is in the libp2p format (protobuf).
-	ma := meshauth.NewMeshAuth(mc)
+	ma := meshauth.New()
 
 	//key, _ := os.ReadFile("testdata/s1/key")
 	//kb, _ := base64.URLEncoding.DecodeString(string(key))
@@ -366,7 +366,7 @@ func newHostMin(port string, mc *meshauth.MeshCfg) (host.Host, multiaddr.Multiad
 
 
 func newBlankHost(port string, mc *meshauth.MeshCfg) (host.Host, multiaddr.Multiaddr, error) {
-	ma := meshauth.NewMeshAuth(mc)
+	ma := meshauth.New()
 
 	//// This is in the libp2p format (protobuf).
 	//key, _ := os.ReadFile("testdata/s1/key")

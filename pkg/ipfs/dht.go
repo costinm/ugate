@@ -22,6 +22,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/control"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/routing"
@@ -30,8 +31,6 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/multiformats/go-multihash"
-
-	"github.com/libp2p/go-libp2p/core/host"
 )
 
 // Support a libp2p DHT proxy, using http API.
@@ -45,7 +44,7 @@ type IPFSDiscovery struct {
 	Host host.Host
 
 	Port int
-	Auth *meshauth.MeshAuth
+	Auth *meshauth.Mesh
 
 	// gorilla mux with /routing path - not well integrated with http mux
 	routingHandler http.Handler
@@ -74,8 +73,18 @@ var (
 	upgradedCnt = 0
 )
 
+func NewDht(module *meshauth.Module) error {
+	ipfsdisc, err := NewDHT(context.Background(), module.Mesh, 11014)
+	if err != nil {
+		return err
+	}
+
+	module.Mesh.Mux.Handle("/dht/", ipfsdisc)
+	return nil
+}
+
 // NewDHT creates a DHT client for the public infra.
-func NewDHT(ctx context.Context, auth *meshauth.MeshAuth, p2pport int) (*IPFSDiscovery, error) {
+func NewDHT(ctx context.Context, auth *meshauth.Mesh, p2pport int) (*IPFSDiscovery, error) {
 	i := &IPFSDiscovery{Auth: auth, Port: p2pport,
 		Bootstrap: dht.DefaultBootstrapPeers,
 		Domain : "",
@@ -95,6 +104,7 @@ func (l localValidator) Validate(key string, value []byte) error {
 func (l localValidator) Select(key string, values [][]byte) (int, error) {
 	return 0, nil
 }
+
 
 // NewDHT creates a host using DHT and router server.
 func (ipfsd *IPFSDiscovery) Init(ctx context.Context) (error) {
@@ -660,3 +670,4 @@ func (p2p *IPFSDiscovery) InterceptUpgraded(conn network.Conn) (allow bool, reas
 	//}
 	return true, 0
 }
+

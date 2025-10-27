@@ -3,7 +3,6 @@ package quic
 import (
 	"context"
 
-	"github.com/costinm/ugate"
 	"github.com/quic-go/quic-go"
 
 	//"io"
@@ -14,13 +13,13 @@ import (
 // QuicMUX is a mux to a specific node. May be accepted or dialed.
 // Equivalent with quic/h3/client.go ( when dialing ), and Quic server when accepting.
 type QuicMUX struct {
-	// Remote - has an WorkloadID and Addr. Set for client connections.
-	n *ugate.MeshCluster
-	client   bool
+
+	Dialer ContextDialer
+	client bool
 
 	// Can be accepted or dialed - the protocol is symmetric.
-	s quic.EarlyConnection
-
+	s    quic.EarlyConnection
+	Addr string
 }
 
 const errorNoError = 0x100
@@ -28,7 +27,7 @@ var Debug = false
 
 func (ugs *QuicMUX) Close() error {
 	if Debug {
-		log.Println("H3: MUX close ", ugs.n.ID)
+		log.Println("H3: MUX close ", ugs.Addr)
 	}
 	return ugs.s.CloseWithError(0, "")
 }

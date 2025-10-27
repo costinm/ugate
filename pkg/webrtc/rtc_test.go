@@ -1,30 +1,33 @@
 package webrtc
 
 import (
+	"context"
+	"log"
 	"testing"
 	"time"
-
-	"github.com/costinm/ugate"
-	"github.com/costinm/ugate/pkg/test"
 )
 
 func TestRTC(t *testing.T) {
+	ctx := context.Background()
 
-	alice := test.NewTestNode(test.AliceMeshAuthCfg, &ugate.MeshSettings{
-		BasePort: 5700,
-	})
-	// Enable RTC for alice
-	pc1, off1, err := InitWebRTCS(alice, alice.Auth)
+	alice := &RTConn{Name: "alice", Client: true}
+
+	err := alice.Dial()
+	// Enable RTConn for alice
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bob := test.NewTestNode(test.BobMeshAuthCfg, &ugate.MeshSettings{
-		BasePort: 5800,
-	})
-	InitWebRTCS(bob, bob.Auth)
+	// Server side takes the client 'invite' - including cert sha.
+	bob := &WebRTC{Name: "bob"}
+	err = bob.Provision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	res, err := DialWebRTC(off1)
+	// Normally the 'client hello' is sent using HTTP or other channel, server response
+	// is set back on the client.
+	bobSessionDesc, err := bob.AcceptPeering(alice.offer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,10 +37,15 @@ func TestRTC(t *testing.T) {
 	//Decode(res, &answer)
 
 	// Set the remote SessionDescription
-	err = pc1.SetRemoteDescription(*res)
+	err = alice.pc1.SetRemoteDescription(*bobSessionDesc)
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
+	log.Println("Bob:", bobSessionDesc)
+
+	//alice.DataChannel("ch2")
+
+	// At this point alice and bob should be able to communicate
 
 	time.Sleep(10 * time.Second)
 }

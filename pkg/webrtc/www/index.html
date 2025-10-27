@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <link rel="shortcut icon" href="/favicon.ico"/>
+    <link rel="stylesheet" href="/css/bootstrap.css"/>
+
+    <script type="text/javascript" src="/js/jquery-3.2.1.min.js"></script>
+    <script type="text/javascript" src="/js/bootstrap.bundle.min.js"></script>
+
+    <script type="text/javascript" src="/js/index.js"></script>
+</head>
+<body>
+
+<div class="container-fluid">
+    <nav class="navbar navbar-expand-md navbar-light bg-light">
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarSupportedContent"
+                aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarSupportedContent">
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item"><a class="nav-link" href="info">Info</a></li>
+                <li class="nav-item active"><a class="nav-link" href="status">Status</a></li>
+                <li class="nav-item"><a class="nav-link" href="events">Events</a></li>
+                <li class="nav-item"><a class="nav-link" href="wifi">Wifi</a></li>
+                <li class="nav-item"><a class="nav-link" href="active">Active</a></li>
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button"
+                       data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                        Net
+                    </a>
+                    <div class="dropdown-menu" aria-labelledby="navbarDropdown">
+
+                        <a class="dropdown-item" href="dmesh/ll/if">LL Interfaces</a>
+                        <div class="dropdown-divider"></div>
+
+                        <a class="nav-link" href="dmesh/ip6">Peers</a>
+                        <a class="nav-link" href="dmesh/dns">DNS</a>
+                        <a class="nav-link" href="xtcp">TCP stats</a>
+                        <a class="nav-link" href="dmesh/udp">UDP stats</a>
+
+                        <a class="nav-link" href="dmesh/tcpa">Active TCP</a>
+                        <a class="nav-link" href="dmesh/udpa">Active UDP</a>
+                    </div>
+                </li>
+                <li class="nav-item"><a class="nav-link" href="dmesh/rd">Sync</a></li>
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button"
+                       data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                        Wifi
+                    </a>
+                    <div class="dropdown-menu" aria-labelledby="navbarDropdown">
+
+                        <a class="dropdown-item" href="debug/p2p?s=1">Last P2P discovery</a>
+                        <a class="dropdown-item" href="debug/scan?s=1">Last Wifi scan</a>
+                        <div class="dropdown-divider"></div>
+
+                    </div>
+                </li>
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button"
+                       data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                        Debug
+                    </a>
+                    <div class="dropdown-menu" aria-labelledby="navbarDropdown">
+
+                        <a class="dropdown-item" href="debug/vars">Vars</a>
+                        <a class="dropdown-item" href="debug/pprof">PProf</a>
+                        <a class="dropdown-item" href="debug/pprof/goroutine?debug=1">GoRoutines</a>
+                        <div class="dropdown-divider"></div>
+                        <a class="dropdown-item" href="debug/echo/">Echo</a>
+                        <a class="dropdown-item" href="dmesh/tcpa">Connections</a>
+                        <a class="dropdown-item" href="dmesh/rd">Nodes</a>
+                    </div>
+                </li>
+            </ul>
+            <form class="form-inline my-2 my-lg-0 align-content-end">
+                <input class="form-control mr-sm-2" type="search" placeholder="Search" aria-label="Search">
+                <button class="btn btn-outline-success my-2 my-sm-0" type="submit">Search</button>
+            </form>
+        </div>
+    </nav>
+</div>
+
+<div class='container-fluid'>
+    <div class="row">
+        <table class="table" id="tcptable">
+            <thead>
+            <thead>
+            <th>Remote</th>
+            <th>Cnt</th>
+            <th>Sent</th>
+            <th>Rcv</th>
+            <th>Last close</th>
+            <th>Last len</th>
+            <th>Last bps</th>
+            </thead>
+            <tbody>
+            </tbody>
+        </table>
+        </p>
+    </div>
+</div>
+
+    <div class="row">
+    <table id="evtable" class="table table-striped table-bordered table-hover table-sm">
+        <thead>
+        <th>Time</th>
+        <th>Uri</th>
+        </thead>
+        <tbody>
+        </tbody>
+    </table>
+</div>
+
+
+</body>
+</html>

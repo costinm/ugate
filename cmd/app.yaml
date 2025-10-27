@@ -1,0 +1,68 @@
+services:
+  - mdsd
+  - h2cd
+  - ssh
+  - k8s
+
+# FS has 'files' that are pre-loaded - but not initialized until use.
+# The resource store will also check for files when 'Get' is called - this
+# is equivalent, for convenience.
+fs:
+  ssh:
+    addr: ":10022"
+
+  # This wraps http.Transport
+  # Options: Addr, DisableKeepAlives, DisableCompression,
+  # MaxIdleConns, etc.  
+  h2c/default:
+    http2: 
+      MaxConcurrentStreams: 1000
+
+  # Wraps http.Server  
+  h2cd:
+    addr: ":10080"
+    # Key is a pattern supported by http.Mux.
+    # Value is the name of a handler, registered and implementing
+    # one of the http methods. 
+    routes:
+      "/example/": "example"
+      # Defined in ssh/pkg/h2.InitMux
+      # TUN is used for SSH only, can't forward to other destinations
+      "/tun/": "ssh"
+      "/": "proxy1/8080"
+
+  proxy1/8080:
+    url: "http://127.0.0.1:8080"
+
+  # Initialize certificates (if not found, create them)
+  certs/default:
+    base: "../testdata/alice"
+
+  # Initialize a second private key, as a standalone CA
+  certs/ca:
+    base: "../testdata/ca"
+    fqdn: cluster.local
+
+    # Detect in-cluster or 'kube proxy'
+    # May also use explicit config
+  k8s:
+    namespace: istio-system
+    ksa: istiod
+
+  mds:
+        addr: "127.0.0.1:15021"
+
+  mdsd:
+    refs:
+      TokenProviderRef: k8s
+
+    addr: "127.0.0.1:15021"
+    # This can be a copy of a response from a real machine
+    #
+    metadata:
+      instance:
+        serviceAccounts:
+          default:
+            Email: k8s-default@costin-asm1.iam.gserviceaccount.com
+
+

@@ -1,4 +1,10 @@
-This module implements a bi-directional connection using HTTP/2.
+# Remote listeners for HTTP/2.
+
+This module implements a bi-directional connection using HTTP/2, similar 
+to SSH (where each peer can open a stream), and the equivalent of 'ssh -R'
+for a HTTP server behind a firewall.
+
+
 
 # Client to server (normal H2)
 

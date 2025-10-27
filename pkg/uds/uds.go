@@ -15,7 +15,7 @@ import (
 	"sync"
 	"syscall"
 
-	msgs "github.com/costinm/ugate/webpush"
+	msgs "github.com/costinm/ugate/pkg/webpush"
 	"golang.org/x/exp/slog"
 )
 
@@ -287,7 +287,7 @@ func (conn *UdsConn) streamCommon() {
 		}
 
 		// Don't forward messages from the UDS.
-		conn.mux.HandleMessageForNode(msg)
+		conn.Mesh.Mux.HandleMessageForNode(msg)
 	}
 }
 
